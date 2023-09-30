@@ -1,0 +1,25 @@
+[package]
+name = "nusb"
+version = "0.1.0"
+description = "Low-level access to USB devices in pure Rust"
+authors = ["Kevin Mehall <km@kevinmehall.net>"]
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+atomic-waker = "1.1.2"
+futures-lite = "1.13.0"
+log = "0.4.20"
+once_cell = "1.18.0"
+slab = "0.4.9"
+
+[dev-dependencies]
+env_logger = "0.10.0"
+
+[target.'cfg(target_os="linux")'.dependencies]
+rustix = { version = "0.38.15", features = ["fs", "event"] }
+
+[patch.crates-io]
+rustix = { path = "../rustix" }
+
+
