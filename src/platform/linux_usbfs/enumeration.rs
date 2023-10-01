@@ -81,7 +81,3 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
         path: path,
     })
 }
-/// Returns the path of a device in usbfs
-fn usb_devfs_path(busnum: u8, devnum: u8) -> PathBuf {
-    PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"))
-}

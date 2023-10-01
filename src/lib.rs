@@ -1,16 +1,20 @@
-use std::{fmt::Display, io, str::FromStr};
+use std::io;
 
 pub mod platform;
-
-use device::Device;
 pub use platform::list_devices;
+
+mod control;
+pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
 
 mod enumeration;
 pub use enumeration::{DeviceInfo, Speed, UnknownValue};
 
 mod device;
+use device::Device;
 
 mod transfer;
-pub use transfer::{Completion, Transfer, TransferStatus};
+pub use transfer::{Completion, EndpointType, TransferFuture, TransferStatus};
+
+mod transfer_internal;
 
 pub type Error = io::Error;

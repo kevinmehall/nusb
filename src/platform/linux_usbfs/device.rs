@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{ffi::c_void, path::PathBuf, sync::Arc};
 
 use log::{debug, error};
 use rustix::{
@@ -7,11 +7,11 @@ use rustix::{
     io::Errno,
 };
 
-use super::{events, usbfs};
-use crate::{
-    platform::linux_usbfs::transfer::{Transfer, TransferInner},
-    DeviceInfo, Error,
+use super::{
+    events,
+    usbfs::{self, Urb},
 };
+use crate::{transfer_internal, DeviceInfo, Error};
 
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
@@ -53,14 +53,17 @@ impl LinuxDevice {
         debug!("Handling events for device {}", self.events_id);
         match usbfs::reap_urb_ndelay(&self.fd) {
             Ok(urb_ptr) => {
-                {
+                let user_data = {
                     let urb = unsafe { &*urb_ptr };
                     debug!(
                         "URB {:?} for ep {:x} completed, status={} actual_length={}",
                         urb_ptr, urb.endpoint, urb.status, urb.actual_length
                     );
-                }
-                unsafe { Transfer::notify_completion(urb_ptr as *mut TransferInner) }
+                    urb.usercontext
+                };
+
+                // SAFETY: pointer came from submit via kernel an we're now done with it
+                unsafe { transfer_internal::notify_completion::<LinuxInterface>(user_data) }
             }
             Err(Errno::AGAIN) => {}
             Err(Errno::NODEV) => {
@@ -117,8 +120,7 @@ pub(crate) struct LinuxInterface {
 }
 
 impl LinuxInterface {
-    pub(crate) unsafe fn submit_transfer(&self, transfer: *mut TransferInner) {
-        let urb = transfer as *mut usbfs::Urb;
+    pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
         let ep = unsafe { (&mut *urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.device.fd, urb) {
             // SAFETY: Transfer was not submitted. We still own the transfer
@@ -130,16 +132,15 @@ impl LinuxInterface {
                     u.actual_length = 0;
                     u.status = e.raw_os_error();
                 }
-                Transfer::notify_completion(transfer)
+                transfer_internal::notify_completion::<LinuxInterface>(urb as *mut c_void)
             }
         } else {
             debug!("Submitted URB {urb:?} on ep {ep:x}");
         }
     }
 
-    pub(crate) unsafe fn cancel_transfer(&self, transfer: *mut TransferInner) {
+    pub(crate) unsafe fn cancel_urb(&self, urb: *mut Urb) {
         unsafe {
-            let urb = transfer as *mut usbfs::Urb;
             if let Err(e) = usbfs::discard_urb(&self.device.fd, urb) {
                 debug!("Failed to cancel URB {urb:?}: {e}");
             }

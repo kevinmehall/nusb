@@ -1,0 +1,35 @@
+use futures_lite::future::block_on;
+use nusb::{ControlIn, ControlOut, ControlType, Recipient};
+
+fn main() {
+    env_logger::init();
+    let di = nusb::list_devices()
+        .unwrap()
+        .find(|d| d.vendor_id() == 0x59e3 && d.product_id() == 0x0a23)
+        .expect("device should be connected");
+
+    println!("Device info: {di:?}");
+
+    let device = di.open().unwrap();
+    let interface = device.claim_interface(0).unwrap();
+
+    let result = block_on(interface.control_transfer_out(ControlOut {
+        control_type: ControlType::Vendor,
+        recipient: Recipient::Device,
+        request: 0x81,
+        value: 0x9999,
+        index: 0x9999,
+        data: &[1, 2, 3, 4],
+    }));
+    println!("{result:?}");
+
+    let result = block_on(interface.control_transfer_in(ControlIn {
+        control_type: ControlType::Vendor,
+        recipient: Recipient::Device,
+        request: 0x81,
+        value: 0x9999,
+        index: 0x9999,
+        length: 256,
+    }));
+    println!("{result:?}");
+}

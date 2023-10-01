@@ -1,11 +1,19 @@
-pub use crate::platform::Transfer;
+use crate::{
+    platform,
+    transfer_internal::{PlatformSubmit, TransferHandle, TransferRequest},
+};
+use std::{
+    future::Future,
+    marker::PhantomData,
+    task::{Context, Poll},
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum EndpointType {
-    Control,
-    Interrupt,
-    Bulk,
-    Isochronous,
+    Control = 0,
+    Isochronous = 1,
+    Bulk = 2,
+    Interrupt = 3,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -19,7 +27,33 @@ pub enum TransferStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct Completion {
-    pub data: Vec<u8>,
+pub struct Completion<T> {
+    pub data: T,
     pub status: TransferStatus,
+}
+
+pub struct TransferFuture<D: TransferRequest> {
+    transfer: TransferHandle<platform::Interface>,
+    ty: PhantomData<D::Response>,
+}
+
+impl<D: TransferRequest> TransferFuture<D> {
+    pub(crate) fn new(transfer: TransferHandle<platform::Interface>) -> TransferFuture<D> {
+        TransferFuture {
+            transfer,
+            ty: PhantomData,
+        }
+    }
+}
+
+impl<D: TransferRequest> Future for TransferFuture<D>
+where
+    platform::Interface: PlatformSubmit<D>,
+    D::Response: Unpin,
+{
+    type Output = Completion<D::Response>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.as_mut().transfer.poll_completion::<D>(cx)
+    }
 }

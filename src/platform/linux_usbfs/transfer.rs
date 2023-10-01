@@ -1,109 +1,77 @@
 use std::{
-    cell::UnsafeCell,
-    future::Future,
+    ffi::c_void,
     mem::{self, ManuallyDrop},
-    ptr::{null_mut, NonNull},
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
+    ptr::null_mut,
 };
 
-use atomic_waker::AtomicWaker;
 use rustix::io::Errno;
 
-use crate::{transfer::EndpointType, Completion, TransferStatus};
-
-use super::{
-    usbfs::{
-        Urb, USBDEVFS_URB_TYPE_BULK, USBDEVFS_URB_TYPE_CONTROL, USBDEVFS_URB_TYPE_INTERRUPT,
-        USBDEVFS_URB_TYPE_ISO,
-    },
-    Interface,
+use crate::{
+    control::{ControlIn, ControlOut, SETUP_PACKET_SIZE},
+    transfer_internal, Completion, EndpointType, TransferStatus,
 };
 
+use super::usbfs::{
+    Urb, USBDEVFS_URB_TYPE_BULK, USBDEVFS_URB_TYPE_CONTROL, USBDEVFS_URB_TYPE_INTERRUPT,
+    USBDEVFS_URB_TYPE_ISO,
+};
+
+/// Linux-specific transfer state.
+///
+/// This logically contains a `Vec` with urb.buffer and capacity.
+/// It also owns the `urb` allocation itself, which is stored out-of-line
+/// to avoid violating noalias when submitting the transfer while holding
+/// `&mut TransferData`.
 #[repr(C)]
-pub(crate) struct TransferInner {
-    urb: UnsafeCell<Urb>,
-    state: AtomicU8,
-    waker: AtomicWaker,
-    interface: Arc<Interface>,
+pub(crate) struct TransferData {
+    urb: *mut Urb,
+    capacity: usize,
 }
 
-impl TransferInner {
-    /// Transfer ownership of `buf` into the transfer's `urb`.
-    /// SAFETY: requires that there is no concurrent access to  `urb`
-    unsafe fn put_buffer(&self, buf: Vec<u8>) {
-        unsafe {
-            let mut buf = ManuallyDrop::new(buf);
-            let urb = &mut *self.urb.get();
-            urb.buffer = buf.as_mut_ptr();
-            assert!(buf.len() < i32::MAX as usize, "Buffer too large");
-            urb.actual_length = buf.len() as i32;
-            assert!(buf.capacity() < i32::MAX as usize, "Buffer too large");
-            urb.buffer_length = buf.capacity() as i32;
-        }
+unsafe impl Send for TransferData {}
+
+impl TransferData {
+    fn urb_mut(&mut self) -> &mut Urb {
+        // SAFETY: if we have `&mut`, the transfer is not pending
+        unsafe { &mut *self.urb }
     }
 
-    /// Transfer ownership of transfer's `urb` buffer back to a `Vec`.
-    /// SAFETY: requires that the the buffer is present and there is no concurrent
-    /// access to `urb`. Invalidates the buffer.
-    unsafe fn take_buffer(&self) -> Vec<u8> {
-        unsafe {
-            let urb = &mut *self.urb.get();
-            Vec::from_raw_parts(
-                mem::replace(&mut urb.buffer, null_mut()),
-                urb.actual_length as usize,
-                urb.buffer_length as usize,
-            )
-        }
+    fn fill(&mut self, v: Vec<u8>, len: usize, user_data: *mut c_void) {
+        let mut v = ManuallyDrop::new(v);
+        let urb = self.urb_mut();
+        urb.buffer = v.as_mut_ptr();
+        urb.buffer_length = len.try_into().expect("buffer size should fit in i32");
+        urb.usercontext = user_data;
+        urb.actual_length = 0;
+        self.capacity = v.capacity();
     }
 
-    /// Get the transfer status
-    /// SAFETY: requires that there is no concurrent access to  `urb`
-    unsafe fn status(&self) -> TransferStatus {
-        let status = unsafe { (&*self.urb.get()).status };
+    /// SAFETY: requires that the transfer has completed and `length` bytes are initialized
+    unsafe fn take_buf(&mut self, length: usize) -> Vec<u8> {
+        let urb = self.urb_mut();
+        assert!(!urb.buffer.is_null());
+        let ptr = mem::replace(&mut urb.buffer, null_mut());
+        let capacity = mem::replace(&mut self.capacity, 0);
+        assert!(length <= capacity);
+        Vec::from_raw_parts(ptr, length, capacity)
+    }
+}
 
-        if status == 0 {
-            return TransferStatus::Complete;
-        }
-
-        // It's sometimes positive, sometimes negative, but rustix panics if negative.
-        match Errno::from_raw_os_error(status.abs()) {
-            Errno::NODEV | Errno::SHUTDOWN => TransferStatus::Disconnected,
-            Errno::PIPE => TransferStatus::Stall,
-            Errno::NOENT | Errno::CONNRESET => TransferStatus::Cancelled,
-            Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
-                TransferStatus::Fault
+impl Drop for TransferData {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.urb_mut().buffer.is_null() {
+                drop(Vec::from_raw_parts(self.urb_mut().buffer, 0, self.capacity));
             }
-            _ => TransferStatus::UnknownError,
+            drop(Box::from_raw(self.urb));
         }
     }
 }
 
-pub struct Transfer {
-    ptr: NonNull<TransferInner>,
-}
+impl transfer_internal::Platform for super::Interface {
+    type TransferData = TransferData;
 
-/// The transfer has not been submitted. The buffer is not valid.
-const STATE_IDLE: u8 = 0;
-
-/// The transfer has been submitted to the kernel and completion has not yet
-/// been handled. The buffer points to valid memory but cannot be accessed by
-/// userspace. There is a future or queue waiting for it completion.
-const STATE_PENDING: u8 = 1;
-
-/// Like PENDING, but there is no one waiting for completion. The completion
-/// handler will drop the buffer and transfer.
-const STATE_ABANDONED: u8 = 3;
-
-/// The transfer completion has been handled. The buffer is valid and may
-/// be accessed.
-const STATE_COMPLETED: u8 = 3;
-
-impl Transfer {
-    pub(crate) fn new(interface: Arc<Interface>, endpoint: u8, ep_type: EndpointType) -> Transfer {
+    fn make_transfer_data(&self, endpoint: u8, ep_type: crate::EndpointType) -> TransferData {
         let ep_type = match ep_type {
             EndpointType::Control => USBDEVFS_URB_TYPE_CONTROL,
             EndpointType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
@@ -111,8 +79,8 @@ impl Transfer {
             EndpointType::Isochronous => USBDEVFS_URB_TYPE_ISO,
         };
 
-        let b = Box::new(TransferInner {
-            urb: UnsafeCell::new(Urb {
+        TransferData {
+            urb: Box::into_raw(Box::new(Urb {
                 ep_type,
                 endpoint,
                 status: 0,
@@ -125,118 +93,102 @@ impl Transfer {
                 error_count: 0,
                 signr: 0,
                 usercontext: null_mut(),
-            }),
-            state: AtomicU8::new(STATE_IDLE),
-            waker: AtomicWaker::new(),
-            interface,
-        });
-
-        Transfer {
-            ptr: Box::leak(b).into(),
+            })),
+            capacity: 0,
         }
     }
 
-    fn inner(&self) -> &TransferInner {
-        // Safety: while Transfer is alive, its TransferInner is alive
-        unsafe { self.ptr.as_ref() }
+    fn cancel(&self, data: &TransferData) {
+        unsafe {
+            self.cancel_urb(data.urb);
+        }
+    }
+}
+
+impl transfer_internal::PlatformSubmit<Vec<u8>> for super::Interface {
+    unsafe fn submit(&self, data: Vec<u8>, transfer: &mut TransferData, user_data: *mut c_void) {
+        let ep = transfer.urb_mut().endpoint;
+        let len = if ep & 0x80 == 0 {
+            data.len()
+        } else {
+            data.capacity()
+        };
+        transfer.fill(data, len, user_data);
+
+        // SAFETY: we just properly filled the buffer and it is not already pending
+        unsafe { self.submit_urb(transfer.urb) }
     }
 
-    /// Prepare the transfer for submission by filling the buffer fields
-    /// and setting the state to PENDING. Returns a `*mut TransferInner`
-    /// that must later be passed to `complete`.
-    ///
-    /// Panics if the transfer has already been submitted.
-    pub(crate) fn submit(&mut self, data: Vec<u8>) {
-        let inner = self.inner();
-        assert_eq!(
-            inner.state.load(Ordering::Acquire),
-            STATE_IDLE,
-            "Transfer should be idle when submitted"
+    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<Vec<u8>> {
+        let status = urb_status(transfer.urb_mut());
+        let len = transfer.urb_mut().actual_length as usize;
+
+        // SAFETY: transfer is completed (precondition) and `actual_length` bytes were initialized.
+        let data = unsafe { transfer.take_buf(len) };
+        Completion { data, status }
+    }
+}
+
+impl transfer_internal::PlatformSubmit<ControlIn> for super::Interface {
+    unsafe fn submit(&self, data: ControlIn, transfer: &mut TransferData, user_data: *mut c_void) {
+        let buf_len = SETUP_PACKET_SIZE + data.length as usize;
+        let mut buf = Vec::with_capacity(buf_len);
+        buf.extend_from_slice(&data.setup_packet());
+        transfer.fill(buf, buf_len, user_data);
+
+        // SAFETY: we just properly filled the buffer and it is not already pending
+        unsafe { self.submit_urb(transfer.urb) }
+    }
+
+    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<Vec<u8>> {
+        let status = urb_status(transfer.urb_mut());
+        let len = transfer.urb_mut().actual_length as usize;
+
+        // SAFETY: transfer is completed (precondition) and `actual_length`
+        // bytes were initialized with setup buf in front
+        let mut data = unsafe { transfer.take_buf(SETUP_PACKET_SIZE + len) };
+        data.splice(0..SETUP_PACKET_SIZE, []);
+        Completion { data, status }
+    }
+}
+
+impl transfer_internal::PlatformSubmit<ControlOut<'_>> for super::Interface {
+    unsafe fn submit(&self, data: ControlOut, transfer: &mut TransferData, user_data: *mut c_void) {
+        let buf_len = SETUP_PACKET_SIZE + data.data.len();
+        let mut buf = Vec::with_capacity(buf_len);
+        buf.extend_from_slice(
+            &data
+                .setup_packet()
+                .expect("data length should fit in setup packet's u16"),
         );
-        unsafe {
-            // SAFETY: invariants guaranteed by being in state IDLE
-            inner.put_buffer(data);
-        }
-        inner.state.store(STATE_PENDING, Ordering::Release);
-        unsafe {
-            inner.interface.submit_transfer(self.ptr.as_ptr());
-        }
+        buf.extend_from_slice(data.data);
+        transfer.fill(buf, buf_len, user_data);
+
+        // SAFETY: we just properly filled the buffer and it is not already pending
+        unsafe { self.submit_urb(transfer.urb) }
     }
 
-    pub(crate) fn cancel(&mut self) {
-        let inner = self.inner();
-        unsafe {
-            inner.interface.cancel_transfer(self.ptr.as_ptr());
-        }
-    }
-
-    pub fn poll_completion(&self, cx: &Context) -> Poll<Completion> {
-        let inner = self.inner();
-        inner.waker.register(cx.waker());
-        match inner.state.load(Ordering::Acquire) {
-            STATE_PENDING => Poll::Pending,
-            STATE_COMPLETED => {
-                // SAFETY: state means we have exclusive access
-                // and the buffer is valid.
-                inner.state.store(STATE_IDLE, Ordering::Relaxed);
-                unsafe {
-                    let data = inner.take_buffer();
-                    let status = inner.status();
-                    Poll::Ready(Completion { data, status })
-                }
-            }
-            s => panic!("Polling transfer in unexpected state {s}"),
-        }
-    }
-
-    pub(crate) unsafe fn notify_completion(transfer: *mut TransferInner) {
-        unsafe {
-            let waker = (*transfer).waker.take();
-            match (*transfer).state.swap(STATE_COMPLETED, Ordering::Release) {
-                STATE_PENDING => {
-                    if let Some(waker) = waker {
-                        waker.wake()
-                    }
-                }
-                STATE_ABANDONED => {
-                    let b = Box::from_raw(transfer);
-                    drop(b.take_buffer());
-                    drop(b);
-                }
-                s => panic!("Completing transfer in unexpected state {s}"),
-            }
-        }
+    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<usize> {
+        let status = urb_status(transfer.urb_mut());
+        let len = transfer.urb_mut().actual_length as usize;
+        drop(transfer.take_buf(0));
+        Completion { data: len, status }
     }
 }
 
-impl Drop for Transfer {
-    fn drop(&mut self) {
-        match self.inner().state.swap(STATE_ABANDONED, Ordering::Acquire) {
-            STATE_PENDING => {
-                self.cancel();
-                /* handler responsible for dropping */
-            }
-            STATE_IDLE => {
-                // SAFETY: state means there is no concurrent access
-                unsafe { drop(Box::from_raw(self.ptr.as_ptr())) }
-            }
-            STATE_COMPLETED => {
-                // SAFETY: state means buffer is valid and there is no concurrent access
-                unsafe {
-                    let b = Box::from_raw(self.ptr.as_ptr());
-                    drop(b.take_buffer());
-                    drop(b);
-                }
-            }
-            s => panic!("Dropping transfer in unexpected state {s}"),
-        }
+fn urb_status(urb: &Urb) -> TransferStatus {
+    if urb.status == 0 {
+        return TransferStatus::Complete;
     }
-}
 
-impl Future for Transfer {
-    type Output = Completion;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.as_mut().poll_completion(cx)
+    // It's sometimes positive, sometimes negative, but rustix panics if negative.
+    match Errno::from_raw_os_error(urb.status.abs()) {
+        Errno::NODEV | Errno::SHUTDOWN => TransferStatus::Disconnected,
+        Errno::PIPE => TransferStatus::Stall,
+        Errno::NOENT | Errno::CONNRESET => TransferStatus::Cancelled,
+        Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
+            TransferStatus::Fault
+        }
+        _ => TransferStatus::UnknownError,
     }
 }

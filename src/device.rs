@@ -1,6 +1,11 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-use crate::{transfer::EndpointType, Completion, DeviceInfo, Error, Transfer};
+use crate::{
+    control::{ControlIn, ControlOut},
+    platform,
+    transfer_internal::TransferHandle,
+    Completion, DeviceInfo, EndpointType, Error, TransferFuture,
+};
 
 type TransferError = Error;
 type Buffer = Vec<u8>;
@@ -39,22 +44,34 @@ impl Interface {
         todo!()
     }
 
-    pub fn bulk_transfer(&self, endpoint: u8, buf: Vec<u8>) -> Transfer {
-        let mut t = Transfer::new(self.backend.clone(), endpoint, EndpointType::Bulk);
-        t.submit(buf);
-        t
+    pub fn control_transfer_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
+        let mut t = TransferHandle::new(self.backend.clone(), 0, EndpointType::Control);
+        t.submit::<ControlIn>(data);
+        TransferFuture::new(t)
     }
 
-    pub fn interrupt_transfer(&self, endpoint: u8, buf: Vec<u8>) -> Transfer {
-        let mut t = Transfer::new(self.backend.clone(), endpoint, EndpointType::Interrupt);
+    pub fn control_transfer_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
+        let mut t = TransferHandle::new(self.backend.clone(), 0, EndpointType::Control);
+        t.submit::<ControlOut>(data);
+        TransferFuture::new(t)
+    }
+
+    pub fn bulk_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+        let mut t = TransferHandle::new(self.backend.clone(), endpoint, EndpointType::Bulk);
         t.submit(buf);
-        t
+        TransferFuture::new(t)
+    }
+
+    pub fn interrupt_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+        let mut t = TransferHandle::new(self.backend.clone(), endpoint, EndpointType::Interrupt);
+        t.submit(buf);
+        TransferFuture::new(t)
     }
 }
 
 struct Queue {
-    pending: VecDeque<Transfer>,
-    cached: Option<Transfer>,
+    pending: VecDeque<TransferHandle<platform::Interface>>,
+    cached: Option<TransferHandle<platform::Interface>>,
 }
 
 impl Queue {
@@ -79,7 +96,7 @@ impl Queue {
     ///
     /// For an OUT endpoint, the buffer is unmodified, but can be
     /// reused for another transfer.
-    pub fn complete(&mut self, timeout: Option<Duration>) -> Option<Completion> {
+    pub fn complete(&mut self, timeout: Option<Duration>) -> Option<Completion<Vec<u8>>> {
         todo!()
     }
 

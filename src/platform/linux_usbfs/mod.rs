@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-
 mod transfer;
 mod usbfs;
-pub use transfer::Transfer;
 
 mod enumeration;
 mod events;
