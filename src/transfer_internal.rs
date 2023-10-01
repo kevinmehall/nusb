@@ -60,7 +60,7 @@ struct TransferInner<P: Platform> {
     /// Platform-specific data.
     ///
     /// In an `UnsafeCell` because we provide `&mut` when the
-    /// state gurantees us exclusive access
+    /// state guarantees us exclusive access
     platform_data: UnsafeCell<P::TransferData>,
 
     /// One of the `STATE_*` constants below, used to synchronize

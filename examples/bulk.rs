@@ -13,8 +13,13 @@ fn main() {
     let device = di.open().unwrap();
     let interface = device.claim_interface(0).unwrap();
 
+    let mut queue = interface.bulk_queue(0x81);
+
     loop {
-        let result = block_on(interface.bulk_transfer(0x81, Vec::with_capacity(256)));
+        while queue.pending() < 8 {
+            queue.submit(Vec::with_capacity(256));
+        }
+        let result = block_on(queue.next_complete());
         println!("{result:?}");
         if result.status != TransferStatus::Complete {
             break;
