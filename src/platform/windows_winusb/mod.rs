@@ -7,3 +7,7 @@ pub(crate) use device::WindowsInterface as Interface;
 
 mod transfer;
 pub(crate) use transfer::TransferData;
+
+mod hub;
+mod setupapi;
+mod util;

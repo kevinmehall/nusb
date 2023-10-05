@@ -1,4 +1,8 @@
-use std::{fmt::Display, str::FromStr};
+use std::{
+    ffi::{OsStr, OsString},
+    fmt::Display,
+    str::FromStr,
+};
 
 use crate::{platform, Device, Error};
 
@@ -6,6 +10,18 @@ use crate::{platform, Device, Error};
 pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: crate::platform::SysfsPath,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) instance_id: OsString,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) parent_instance_id: OsString,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) port_number: u32,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) driver: Option<String>,
 
     pub(crate) bus_number: u8,
     pub(crate) device_address: u8,
@@ -18,7 +34,7 @@ pub struct DeviceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
 
-    pub(crate) speed: Speed,
+    pub(crate) speed: Option<Speed>,
 
     pub(crate) manufacturer_string: Option<String>,
     pub(crate) product_string: Option<String>,
@@ -29,6 +45,26 @@ impl DeviceInfo {
     #[cfg(target_os = "linux")]
     pub fn path(&self) -> &platform::SysfsPath {
         &self.path
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn instance_id(&self) -> &OsStr {
+        &self.instance_id
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn parent_instance_id(&self) -> &OsStr {
+        &self.parent_instance_id
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn port_number(&self) -> u32 {
+        self.port_number
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn driver(&self) -> Option<&str> {
+        self.driver.as_deref()
     }
 
     pub fn bus_number(&self) -> u8 {
@@ -59,7 +95,7 @@ impl DeviceInfo {
         self.protocol
     }
 
-    pub fn speed(&self) -> Speed {
+    pub fn speed(&self) -> Option<Speed> {
         self.speed
     }
 
