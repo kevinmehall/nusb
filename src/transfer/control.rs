@@ -1,3 +1,5 @@
+use super::{ResponseBuffer, TransferRequest};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Direction {
@@ -35,7 +37,7 @@ pub struct ControlOut<'a> {
     #[doc(alias = "bRequest")]
     pub request: u8,
 
-    #[doc(alias = "windex")]
+    #[doc(alias = "wValue")]
     pub value: u16,
 
     #[doc(alias = "wIndex")]
@@ -57,6 +59,10 @@ impl<'a> ControlOut<'a> {
             self.data.len().try_into().map_err(|_| ())?,
         ))
     }
+}
+
+impl TransferRequest for ControlOut<'_> {
+    type Response = ResponseBuffer;
 }
 
 pub struct ControlIn {
@@ -116,4 +122,8 @@ fn pack_setup(
         (length & 0xFF) as u8,
         (length >> 8) as u8,
     ]
+}
+
+impl TransferRequest for ControlIn {
+    type Response = Vec<u8>;
 }

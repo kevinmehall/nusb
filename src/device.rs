@@ -1,17 +1,18 @@
 use std::{
     collections::VecDeque,
     future::{poll_fn, Future},
+    marker::PhantomData,
     sync::Arc,
 };
 
 use crate::{
-    control::{ControlIn, ControlOut},
     platform,
-    transfer_internal::TransferHandle,
-    Completion, DeviceInfo, EndpointType, Error, TransferFuture,
+    transfer::{
+        Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit, RequestBuffer,
+        TransferFuture, TransferHandle, TransferRequest,
+    },
+    DeviceInfo, Error,
 };
-
-type Buffer = Vec<u8>;
 
 #[derive(Clone)]
 pub struct Device {
@@ -47,29 +48,39 @@ impl Interface {
         todo!()
     }
 
-    pub fn control_transfer_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
+    pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlIn>(data);
         TransferFuture::new(t)
     }
 
-    pub fn control_transfer_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
+    pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
 
-    pub fn bulk_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+    pub fn bulk_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
 
-    pub fn bulk_queue(&self, endpoint: u8) -> Queue {
+    pub fn bulk_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
+        t.submit(buf);
+        TransferFuture::new(t)
+    }
+
+    pub fn bulk_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
     }
 
-    pub fn interrupt_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+    pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
+        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+    }
+
+    pub fn interrupt_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self
             .backend
             .make_transfer(endpoint, EndpointType::Interrupt);
@@ -77,12 +88,24 @@ impl Interface {
         TransferFuture::new(t)
     }
 
-    pub fn interrupt_queue(&self, endpoint: u8) -> Queue {
+    pub fn interrupt_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
+        let mut t = self
+            .backend
+            .make_transfer(endpoint, EndpointType::Interrupt);
+        t.submit(buf);
+        TransferFuture::new(t)
+    }
+
+    pub fn interrupt_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
+        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+    }
+
+    pub fn interrupt_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
     }
 }
 
-pub struct Queue {
+pub struct Queue<R: TransferRequest> {
     interface: Arc<platform::Interface>,
     endpoint: u8,
     endpoint_type: EndpointType,
@@ -92,33 +115,32 @@ pub struct Queue {
 
     /// An idle transfer that recently completed for re-use. Limiting
     cached: Option<TransferHandle<platform::TransferData>>,
+
+    bufs: PhantomData<R>,
 }
 
-impl Queue {
+impl<R> Queue<R>
+where
+    R: TransferRequest,
+    platform::TransferData: PlatformSubmit<R>,
+{
     fn new(
         interface: Arc<platform::Interface>,
         endpoint: u8,
         endpoint_type: EndpointType,
-    ) -> Queue {
+    ) -> Queue<R> {
         Queue {
             interface,
             endpoint,
             endpoint_type,
             pending: VecDeque::new(),
             cached: None,
+            bufs: PhantomData,
         }
     }
 
     /// Submit a new transfer on the endpoint.
-    ///
-    /// For an IN endpoint, the transfer size is set by the *capacity* of
-    /// the buffer, and the length and current contents are ignored. The
-    /// buffer is returned from a later call to `complete` filled with
-    /// the data read from the endpoint.
-    ///
-    /// For an OUT endpoint, the contents of the buffer are written to
-    /// the endpoint.
-    pub fn submit(&mut self, data: Buffer) {
+    pub fn submit(&mut self, data: R) {
         let mut transfer = self.cached.take().unwrap_or_else(|| {
             self.interface
                 .make_transfer(self.endpoint, self.endpoint_type)
@@ -130,20 +152,14 @@ impl Queue {
     /// Block waiting for the next pending transfer to complete, and return
     /// its buffer or an error status.
     ///
-    /// For an IN endpoint, the returned buffer contains the data
-    /// read from the device.
-    ///
-    /// For an OUT endpoint, the buffer is unmodified, but can be
-    /// reused for another transfer.
-    ///
     /// Panics if there are no transfers pending.
-    pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<Vec<u8>>> + 'a {
+    pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + 'a {
         poll_fn(|cx| {
             let res = self
                 .pending
                 .front_mut()
                 .expect("queue should have pending transfers when calling next_complete")
-                .poll_completion::<Vec<u8>>(cx);
+                .poll_completion::<R>(cx);
             if res.is_ready() {
                 self.cached = self.pending.pop_front();
             }
@@ -168,7 +184,7 @@ impl Queue {
     }
 }
 
-impl Drop for Queue {
+impl<R: TransferRequest> Drop for Queue<R> {
     fn drop(&mut self) {
         // Cancel transfers in reverse order to ensure subsequent transfers can't complete
         // out of order while we're going through them.

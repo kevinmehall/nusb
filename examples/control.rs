@@ -1,5 +1,5 @@
 use futures_lite::future::block_on;
-use nusb::{ControlIn, ControlOut, ControlType, Recipient};
+use nusb::transfer::{ControlIn, ControlOut, ControlType, Recipient};
 
 fn main() {
     env_logger::init();
@@ -13,7 +13,7 @@ fn main() {
     let device = di.open().unwrap();
     let interface = device.claim_interface(0).unwrap();
 
-    let result = block_on(interface.control_transfer_out(ControlOut {
+    let result = block_on(interface.control_out(ControlOut {
         control_type: ControlType::Vendor,
         recipient: Recipient::Device,
         request: 0x81,
@@ -23,7 +23,7 @@ fn main() {
     }));
     println!("{result:?}");
 
-    let result = block_on(interface.control_transfer_in(ControlIn {
+    let result = block_on(interface.control_in(ControlIn {
         control_type: ControlType::Vendor,
         recipient: Recipient::Device,
         request: 0x81,

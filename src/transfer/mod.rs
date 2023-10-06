@@ -1,11 +1,21 @@
-use crate::{
-    platform,
-    transfer_internal::{PlatformSubmit, TransferHandle, TransferRequest},
-};
 use std::{
     future::Future,
     marker::PhantomData,
     task::{Context, Poll},
+};
+
+use crate::platform;
+
+mod buffer;
+pub use buffer::{RequestBuffer, ResponseBuffer};
+
+mod control;
+pub(crate) use control::SETUP_PACKET_SIZE;
+pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
+
+mod internal;
+pub(crate) use internal::{
+    notify_completion, PlatformSubmit, PlatformTransfer, TransferHandle, TransferRequest,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

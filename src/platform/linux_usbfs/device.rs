@@ -12,8 +12,8 @@ use super::{
     usbfs::{self, Urb},
 };
 use crate::{
-    transfer_internal::{self, TransferHandle},
-    DeviceInfo, EndpointType, Error,
+    transfer::{notify_completion, EndpointType, TransferHandle},
+    DeviceInfo, Error,
 };
 
 pub(crate) struct LinuxDevice {
@@ -66,7 +66,7 @@ impl LinuxDevice {
                 };
 
                 // SAFETY: pointer came from submit via kernel an we're now done with it
-                unsafe { transfer_internal::notify_completion::<super::TransferData>(user_data) }
+                unsafe { notify_completion::<super::TransferData>(user_data) }
             }
             Err(Errno::AGAIN) => {}
             Err(Errno::NODEV) => {
@@ -143,7 +143,7 @@ impl LinuxInterface {
                     u.actual_length = 0;
                     u.status = e.raw_os_error();
                 }
-                transfer_internal::notify_completion::<super::TransferData>(urb as *mut c_void)
+                notify_completion::<super::TransferData>(urb as *mut c_void)
             }
         } else {
             debug!("Submitted URB {urb:?} on ep {ep:x}");

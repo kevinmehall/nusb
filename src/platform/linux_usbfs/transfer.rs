@@ -7,9 +7,9 @@ use std::{
 
 use rustix::io::Errno;
 
-use crate::{
-    control::{ControlIn, ControlOut, SETUP_PACKET_SIZE},
-    transfer_internal, Completion, EndpointType, TransferStatus,
+use crate::transfer::{
+    Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit, PlatformTransfer,
+    RequestBuffer, ResponseBuffer, TransferStatus, SETUP_PACKET_SIZE,
 };
 
 use super::usbfs::{
@@ -23,7 +23,7 @@ use super::usbfs::{
 /// It also owns the `urb` allocation itself, which is stored out-of-line
 /// to avoid violating noalias when submitting the transfer while holding
 /// `&mut TransferData`.
-pub(crate) struct TransferData {
+pub struct TransferData {
     urb: *mut Urb,
     capacity: usize,
     interface: Arc<super::Interface>,
@@ -35,7 +35,7 @@ impl TransferData {
     pub(super) fn new(
         interface: Arc<super::Interface>,
         endpoint: u8,
-        ep_type: crate::EndpointType,
+        ep_type: EndpointType,
     ) -> TransferData {
         let ep_type = match ep_type {
             EndpointType::Control => USBDEVFS_URB_TYPE_CONTROL,
@@ -101,7 +101,7 @@ impl Drop for TransferData {
     }
 }
 
-impl transfer_internal::PlatformTransfer for TransferData {
+impl PlatformTransfer for TransferData {
     fn cancel(&self) {
         unsafe {
             self.interface.cancel_urb(self.urb);
@@ -109,7 +109,7 @@ impl transfer_internal::PlatformTransfer for TransferData {
     }
 }
 
-impl transfer_internal::PlatformSubmit<Vec<u8>> for TransferData {
+impl PlatformSubmit<Vec<u8>> for TransferData {
     unsafe fn submit(&mut self, data: Vec<u8>, user_data: *mut c_void) {
         let ep = self.urb_mut().endpoint;
         let len = if ep & 0x80 == 0 {
@@ -117,6 +117,30 @@ impl transfer_internal::PlatformSubmit<Vec<u8>> for TransferData {
         } else {
             data.capacity()
         };
+        self.fill(data, len, user_data);
+
+        // SAFETY: we just properly filled the buffer and it is not already pending
+        unsafe { self.interface.submit_urb(self.urb) }
+    }
+
+    unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {
+        let status = urb_status(self.urb_mut());
+        let len = self.urb_mut().actual_length as usize;
+
+        // SAFETY: self is completed (precondition)
+        let data = ResponseBuffer::from_vec(self.take_buf(0), len);
+        Completion { data, status }
+    }
+}
+
+impl PlatformSubmit<RequestBuffer> for TransferData {
+    unsafe fn submit(&mut self, data: RequestBuffer, user_data: *mut c_void) {
+        let ep = self.urb_mut().endpoint;
+        let ty = self.urb_mut().ep_type;
+        assert!(ep & 0x80 == 0x80);
+        assert!(ty == USBDEVFS_URB_TYPE_BULK || ty == USBDEVFS_URB_TYPE_INTERRUPT);
+
+        let (data, len) = data.into_vec();
         self.fill(data, len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
@@ -133,7 +157,7 @@ impl transfer_internal::PlatformSubmit<Vec<u8>> for TransferData {
     }
 }
 
-impl transfer_internal::PlatformSubmit<ControlIn> for TransferData {
+impl PlatformSubmit<ControlIn> for TransferData {
     unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
         let buf_len = SETUP_PACKET_SIZE + data.length as usize;
         let mut buf = Vec::with_capacity(buf_len);
@@ -156,7 +180,7 @@ impl transfer_internal::PlatformSubmit<ControlIn> for TransferData {
     }
 }
 
-impl transfer_internal::PlatformSubmit<ControlOut<'_>> for TransferData {
+impl PlatformSubmit<ControlOut<'_>> for TransferData {
     unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
         let buf_len = SETUP_PACKET_SIZE + data.data.len();
         let mut buf = Vec::with_capacity(buf_len);
@@ -172,11 +196,11 @@ impl transfer_internal::PlatformSubmit<ControlOut<'_>> for TransferData {
         unsafe { self.interface.submit_urb(self.urb) }
     }
 
-    unsafe fn take_completed(&mut self) -> Completion<usize> {
+    unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {
         let status = urb_status(self.urb_mut());
         let len = self.urb_mut().actual_length as usize;
-        drop(self.take_buf(0));
-        Completion { data: len, status }
+        let data = ResponseBuffer::from_vec(self.take_buf(0), len);
+        Completion { data, status }
     }
 }
 

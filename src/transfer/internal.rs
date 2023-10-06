@@ -8,12 +8,9 @@ use std::{
 
 use atomic_waker::AtomicWaker;
 
-use crate::{
-    control::{ControlIn, ControlOut},
-    Completion,
-};
+use super::Completion;
 
-pub(crate) trait PlatformTransfer: Send {
+pub trait PlatformTransfer: Send {
     /// Request cancellation of a transfer that may or may not currently be
     /// pending.
     fn cancel(&self);
@@ -23,7 +20,7 @@ pub trait TransferRequest {
     type Response;
 }
 
-pub(crate) trait PlatformSubmit<D: TransferRequest>: PlatformTransfer {
+pub trait PlatformSubmit<D: TransferRequest>: PlatformTransfer {
     /// Fill the transfer with the data from `data` and submit it to the kernel.
     /// Arrange for `notify_completion(transfer)` to be called once the transfer
     /// has completed.
@@ -33,18 +30,6 @@ pub(crate) trait PlatformSubmit<D: TransferRequest>: PlatformTransfer {
 
     /// SAFETY(caller): `transfer` is in a completed state
     unsafe fn take_completed(&mut self) -> Completion<D::Response>;
-}
-
-impl TransferRequest for Vec<u8> {
-    type Response = Vec<u8>;
-}
-
-impl TransferRequest for ControlIn {
-    type Response = Vec<u8>;
-}
-
-impl TransferRequest for ControlOut<'_> {
-    type Response = usize;
 }
 
 struct TransferInner<P: PlatformTransfer> {

@@ -1,5 +1,5 @@
 use futures_lite::future::block_on;
-use nusb::TransferStatus;
+use nusb::transfer::{RequestBuffer, TransferStatus};
 
 fn main() {
     env_logger::init();
@@ -13,11 +13,11 @@ fn main() {
     let device = di.open().unwrap();
     let interface = device.claim_interface(0).unwrap();
 
-    let mut queue = interface.bulk_queue(0x81);
+    let mut queue = interface.bulk_in_queue(0x81);
 
     loop {
         while queue.pending() < 8 {
-            queue.submit(Vec::with_capacity(256));
+            queue.submit(RequestBuffer::new(256));
         }
         let result = block_on(queue.next_complete());
         println!("{result:?}");
