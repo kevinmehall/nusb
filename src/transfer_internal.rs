@@ -2,10 +2,7 @@ use std::{
     cell::UnsafeCell,
     ffi::c_void,
     ptr::NonNull,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU8, Ordering},
     task::{Context, Poll},
 };
 
@@ -13,35 +10,29 @@ use atomic_waker::AtomicWaker;
 
 use crate::{
     control::{ControlIn, ControlOut},
-    Completion, EndpointType,
+    Completion,
 };
 
-pub(crate) trait Platform {
-    /// Platform-specific per-transfer data.
-    type TransferData: Send;
-
-    /// Get a `TransferData`.
-    fn make_transfer_data(&self, endpoint: u8, ep_type: EndpointType) -> Self::TransferData;
-
+pub(crate) trait PlatformTransfer: Send {
     /// Request cancellation of a transfer that may or may not currently be
     /// pending.
-    fn cancel(&self, transfer: &Self::TransferData);
+    fn cancel(&self);
 }
 
 pub trait TransferRequest {
     type Response;
 }
 
-pub(crate) trait PlatformSubmit<D: TransferRequest>: Platform {
+pub(crate) trait PlatformSubmit<D: TransferRequest>: PlatformTransfer {
     /// Fill the transfer with the data from `data` and submit it to the kernel.
     /// Arrange for `notify_completion(transfer)` to be called once the transfer
     /// has completed.
     ///
     /// SAFETY(caller): transfer is in an idle state
-    unsafe fn submit(&self, data: D, platform: &mut Self::TransferData, transfer: *mut c_void);
+    unsafe fn submit(&mut self, data: D, transfer: *mut c_void);
 
     /// SAFETY(caller): `transfer` is in a completed state
-    unsafe fn take_completed(transfer: &mut Self::TransferData) -> Completion<D::Response>;
+    unsafe fn take_completed(&mut self) -> Completion<D::Response>;
 }
 
 impl TransferRequest for Vec<u8> {
@@ -56,12 +47,12 @@ impl TransferRequest for ControlOut<'_> {
     type Response = usize;
 }
 
-struct TransferInner<P: Platform> {
+struct TransferInner<P: PlatformTransfer> {
     /// Platform-specific data.
     ///
     /// In an `UnsafeCell` because we provide `&mut` when the
     /// state guarantees us exclusive access
-    platform_data: UnsafeCell<P::TransferData>,
+    platform_data: UnsafeCell<P>,
 
     /// One of the `STATE_*` constants below, used to synchronize
     /// the state.
@@ -69,21 +60,18 @@ struct TransferInner<P: Platform> {
 
     /// Waker that is notified when transfer completes.
     waker: AtomicWaker,
-
-    /// Platform
-    interface: Arc<P>,
 }
 
 /// Handle to a transfer.
 ///
 /// Cancels the transfer and arranges for memory to be freed
 /// when dropped.
-pub(crate) struct TransferHandle<P: Platform> {
+pub(crate) struct TransferHandle<P: PlatformTransfer> {
     ptr: NonNull<TransferInner<P>>,
 }
 
-unsafe impl<P: Platform> Send for TransferHandle<P> {}
-unsafe impl<P: Platform> Sync for TransferHandle<P> {}
+unsafe impl<P: PlatformTransfer> Send for TransferHandle<P> {}
+unsafe impl<P: PlatformTransfer> Sync for TransferHandle<P> {}
 
 /// The transfer has not been submitted. The buffer is not valid.
 const STATE_IDLE: u8 = 0;
@@ -102,14 +90,13 @@ const STATE_ABANDONED: u8 = 3;
 /// buffer is valid and may be accessed by the `TransferHandle`.
 const STATE_COMPLETED: u8 = 3;
 
-impl<P: Platform> TransferHandle<P> {
+impl<P: PlatformTransfer> TransferHandle<P> {
     /// Create a new transfer and get a handle.
-    pub(crate) fn new(interface: Arc<P>, endpoint: u8, ep_type: EndpointType) -> TransferHandle<P> {
+    pub(crate) fn new(inner: P) -> TransferHandle<P> {
         let b = Box::new(TransferInner {
-            platform_data: UnsafeCell::new(interface.make_transfer_data(endpoint, ep_type)),
+            platform_data: UnsafeCell::new(inner),
             state: AtomicU8::new(STATE_IDLE),
             waker: AtomicWaker::new(),
-            interface,
         });
 
         TransferHandle {
@@ -123,7 +110,7 @@ impl<P: Platform> TransferHandle<P> {
         unsafe { self.ptr.as_ref() }
     }
 
-    fn platform_data(&self) -> &P::TransferData {
+    fn platform_data(&self) -> &P {
         // SAFETY: while `TransferHandle` is alive, the only mutable access to `platform_data`
         // is via this `TransferHandle`.
         unsafe { &*self.inner().platform_data.get() }
@@ -144,19 +131,16 @@ impl<P: Platform> TransferHandle<P> {
         // SAFETY: while `TransferHandle` is alive, the only mutable access to `platform_data`
         // is via this `TransferHandle`. Verified that it is idle.
         unsafe {
-            inner.interface.submit(
-                data,
-                &mut *inner.platform_data.get(),
-                self.ptr.as_ptr() as *mut c_void,
-            );
+            let p = &mut *inner.platform_data.get();
+            p.submit(data, self.ptr.as_ptr() as *mut c_void);
         }
     }
 
     pub(crate) fn cancel(&mut self) {
-        self.inner().interface.cancel(self.platform_data());
+        self.platform_data().cancel();
     }
 
-    fn poll_completion_generic(&mut self, cx: &Context) -> Poll<&mut P::TransferData> {
+    fn poll_completion_generic(&mut self, cx: &Context) -> Poll<&mut P> {
         let inner = self.inner();
         inner.waker.register(cx.waker());
         match inner.state.load(Ordering::Acquire) {
@@ -184,11 +168,11 @@ impl<P: Platform> TransferHandle<P> {
     {
         // SAFETY: `poll_completion_generic` checks that it is completed
         self.poll_completion_generic(cx)
-            .map(|u| unsafe { P::take_completed(u) })
+            .map(|u| unsafe { u.take_completed() })
     }
 }
 
-impl<P: Platform> Drop for TransferHandle<P> {
+impl<P: PlatformTransfer> Drop for TransferHandle<P> {
     fn drop(&mut self) {
         match self.inner().state.swap(STATE_ABANDONED, Ordering::Acquire) {
             STATE_PENDING => {
@@ -208,7 +192,7 @@ impl<P: Platform> Drop for TransferHandle<P> {
 ///
 /// SAFETY: `transfer` must be a pointer previously passed to `submit`, and
 /// the caller / kernel must no longer dereference it or its buffer.
-pub(crate) unsafe fn notify_completion<P: Platform>(transfer: *mut c_void) {
+pub(crate) unsafe fn notify_completion<P: PlatformTransfer>(transfer: *mut c_void) {
     unsafe {
         let transfer = transfer as *mut TransferInner<P>;
         let waker = (*transfer).waker.take();

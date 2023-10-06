@@ -11,7 +11,6 @@ use crate::{
     Completion, DeviceInfo, EndpointType, Error, TransferFuture,
 };
 
-type TransferError = Error;
 type Buffer = Vec<u8>;
 
 #[derive(Clone)]
@@ -49,19 +48,19 @@ impl Interface {
     }
 
     pub fn control_transfer_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
-        let mut t = TransferHandle::new(self.backend.clone(), 0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlIn>(data);
         TransferFuture::new(t)
     }
 
     pub fn control_transfer_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
-        let mut t = TransferHandle::new(self.backend.clone(), 0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
 
     pub fn bulk_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
-        let mut t = TransferHandle::new(self.backend.clone(), endpoint, EndpointType::Bulk);
+        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -71,7 +70,9 @@ impl Interface {
     }
 
     pub fn interrupt_transfer(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
-        let mut t = TransferHandle::new(self.backend.clone(), endpoint, EndpointType::Interrupt);
+        let mut t = self
+            .backend
+            .make_transfer(endpoint, EndpointType::Interrupt);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -87,10 +88,10 @@ pub struct Queue {
     endpoint_type: EndpointType,
 
     /// A queue of pending transfers, expected to complete in order
-    pending: VecDeque<TransferHandle<platform::Interface>>,
+    pending: VecDeque<TransferHandle<platform::TransferData>>,
 
     /// An idle transfer that recently completed for re-use. Limiting
-    cached: Option<TransferHandle<platform::Interface>>,
+    cached: Option<TransferHandle<platform::TransferData>>,
 }
 
 impl Queue {
@@ -119,7 +120,8 @@ impl Queue {
     /// the endpoint.
     pub fn submit(&mut self, data: Buffer) {
         let mut transfer = self.cached.take().unwrap_or_else(|| {
-            TransferHandle::new(self.interface.clone(), self.endpoint, self.endpoint_type)
+            self.interface
+                .make_transfer(self.endpoint, self.endpoint_type)
         });
         transfer.submit(data);
         self.pending.push_back(transfer);

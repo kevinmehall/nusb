@@ -33,12 +33,12 @@ pub struct Completion<T> {
 }
 
 pub struct TransferFuture<D: TransferRequest> {
-    transfer: TransferHandle<platform::Interface>,
+    transfer: TransferHandle<platform::TransferData>,
     ty: PhantomData<D::Response>,
 }
 
 impl<D: TransferRequest> TransferFuture<D> {
-    pub(crate) fn new(transfer: TransferHandle<platform::Interface>) -> TransferFuture<D> {
+    pub(crate) fn new(transfer: TransferHandle<platform::TransferData>) -> TransferFuture<D> {
         TransferFuture {
             transfer,
             ty: PhantomData,
@@ -48,7 +48,7 @@ impl<D: TransferRequest> TransferFuture<D> {
 
 impl<D: TransferRequest> Future for TransferFuture<D>
 where
-    platform::Interface: PlatformSubmit<D>,
+    platform::TransferData: PlatformSubmit<D>,
     D::Response: Unpin,
 {
     type Output = Completion<D::Response>;

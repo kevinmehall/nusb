@@ -2,7 +2,7 @@
 //! [C structures and ioctl definitions][uapi].
 //! [usbfs]: https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#the-usb-character-device-nodes
 //! [uapi]: https://github.com/torvalds/linux/blob/master/tools/include/uapi/linux/usbdevice_fs.h
-
+#![allow(dead_code)]
 use std::{
     ffi::{c_int, c_uchar, c_uint, c_void},
     marker::PhantomData,

@@ -11,7 +11,10 @@ use super::{
     events,
     usbfs::{self, Urb},
 };
-use crate::{transfer_internal, DeviceInfo, Error};
+use crate::{
+    transfer_internal::{self, TransferHandle},
+    DeviceInfo, EndpointType, Error,
+};
 
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
@@ -63,7 +66,7 @@ impl LinuxDevice {
                 };
 
                 // SAFETY: pointer came from submit via kernel an we're now done with it
-                unsafe { transfer_internal::notify_completion::<LinuxInterface>(user_data) }
+                unsafe { transfer_internal::notify_completion::<super::TransferData>(user_data) }
             }
             Err(Errno::AGAIN) => {}
             Err(Errno::NODEV) => {
@@ -120,8 +123,16 @@ pub(crate) struct LinuxInterface {
 }
 
 impl LinuxInterface {
+    pub(crate) fn make_transfer(
+        self: &Arc<Self>,
+        endpoint: u8,
+        ep_type: EndpointType,
+    ) -> TransferHandle<super::TransferData> {
+        TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
+    }
+
     pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
-        let ep = unsafe { (&mut *urb).endpoint };
+        let ep = unsafe { (*urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.device.fd, urb) {
             // SAFETY: Transfer was not submitted. We still own the transfer
             // and can write to the URB and complete it in place of the handler.
@@ -132,7 +143,7 @@ impl LinuxInterface {
                     u.actual_length = 0;
                     u.status = e.raw_os_error();
                 }
-                transfer_internal::notify_completion::<LinuxInterface>(urb as *mut c_void)
+                transfer_internal::notify_completion::<super::TransferData>(urb as *mut c_void)
             }
         } else {
             debug!("Submitted URB {urb:?} on ep {ep:x}");

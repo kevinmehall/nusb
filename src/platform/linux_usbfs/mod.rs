@@ -1,4 +1,5 @@
 mod transfer;
+pub(crate) use transfer::TransferData;
 mod usbfs;
 
 mod enumeration;

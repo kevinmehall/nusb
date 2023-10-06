@@ -2,6 +2,7 @@ use std::{
     ffi::c_void,
     mem::{self, ManuallyDrop},
     ptr::null_mut,
+    sync::Arc,
 };
 
 use rustix::io::Errno;
@@ -22,15 +23,47 @@ use super::usbfs::{
 /// It also owns the `urb` allocation itself, which is stored out-of-line
 /// to avoid violating noalias when submitting the transfer while holding
 /// `&mut TransferData`.
-#[repr(C)]
 pub(crate) struct TransferData {
     urb: *mut Urb,
     capacity: usize,
+    interface: Arc<super::Interface>,
 }
 
 unsafe impl Send for TransferData {}
 
 impl TransferData {
+    pub(super) fn new(
+        interface: Arc<super::Interface>,
+        endpoint: u8,
+        ep_type: crate::EndpointType,
+    ) -> TransferData {
+        let ep_type = match ep_type {
+            EndpointType::Control => USBDEVFS_URB_TYPE_CONTROL,
+            EndpointType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
+            EndpointType::Bulk => USBDEVFS_URB_TYPE_BULK,
+            EndpointType::Isochronous => USBDEVFS_URB_TYPE_ISO,
+        };
+
+        TransferData {
+            urb: Box::into_raw(Box::new(Urb {
+                ep_type,
+                endpoint,
+                status: 0,
+                flags: 0,
+                buffer: null_mut(),
+                buffer_length: 0,
+                actual_length: 0,
+                start_frame: 0,
+                number_of_packets_or_stream_id: 0,
+                error_count: 0,
+                signr: 0,
+                usercontext: null_mut(),
+            })),
+            capacity: 0,
+            interface,
+        }
+    }
+
     fn urb_mut(&mut self) -> &mut Urb {
         // SAFETY: if we have `&mut`, the transfer is not pending
         unsafe { &mut *self.urb }
@@ -68,92 +101,63 @@ impl Drop for TransferData {
     }
 }
 
-impl transfer_internal::Platform for super::Interface {
-    type TransferData = TransferData;
-
-    fn make_transfer_data(&self, endpoint: u8, ep_type: crate::EndpointType) -> TransferData {
-        let ep_type = match ep_type {
-            EndpointType::Control => USBDEVFS_URB_TYPE_CONTROL,
-            EndpointType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
-            EndpointType::Bulk => USBDEVFS_URB_TYPE_BULK,
-            EndpointType::Isochronous => USBDEVFS_URB_TYPE_ISO,
-        };
-
-        TransferData {
-            urb: Box::into_raw(Box::new(Urb {
-                ep_type,
-                endpoint,
-                status: 0,
-                flags: 0,
-                buffer: null_mut(),
-                buffer_length: 0,
-                actual_length: 0,
-                start_frame: 0,
-                number_of_packets_or_stream_id: 0,
-                error_count: 0,
-                signr: 0,
-                usercontext: null_mut(),
-            })),
-            capacity: 0,
-        }
-    }
-
-    fn cancel(&self, data: &TransferData) {
+impl transfer_internal::PlatformTransfer for TransferData {
+    fn cancel(&self) {
         unsafe {
-            self.cancel_urb(data.urb);
+            self.interface.cancel_urb(self.urb);
         }
     }
 }
 
-impl transfer_internal::PlatformSubmit<Vec<u8>> for super::Interface {
-    unsafe fn submit(&self, data: Vec<u8>, transfer: &mut TransferData, user_data: *mut c_void) {
-        let ep = transfer.urb_mut().endpoint;
+impl transfer_internal::PlatformSubmit<Vec<u8>> for TransferData {
+    unsafe fn submit(&mut self, data: Vec<u8>, user_data: *mut c_void) {
+        let ep = self.urb_mut().endpoint;
         let len = if ep & 0x80 == 0 {
             data.len()
         } else {
             data.capacity()
         };
-        transfer.fill(data, len, user_data);
+        self.fill(data, len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.submit_urb(transfer.urb) }
+        unsafe { self.interface.submit_urb(self.urb) }
     }
 
-    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<Vec<u8>> {
-        let status = urb_status(transfer.urb_mut());
-        let len = transfer.urb_mut().actual_length as usize;
+    unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
+        let status = urb_status(self.urb_mut());
+        let len = self.urb_mut().actual_length as usize;
 
-        // SAFETY: transfer is completed (precondition) and `actual_length` bytes were initialized.
-        let data = unsafe { transfer.take_buf(len) };
+        // SAFETY: self is completed (precondition) and `actual_length` bytes were initialized.
+        let data = unsafe { self.take_buf(len) };
         Completion { data, status }
     }
 }
 
-impl transfer_internal::PlatformSubmit<ControlIn> for super::Interface {
-    unsafe fn submit(&self, data: ControlIn, transfer: &mut TransferData, user_data: *mut c_void) {
+impl transfer_internal::PlatformSubmit<ControlIn> for TransferData {
+    unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
         let buf_len = SETUP_PACKET_SIZE + data.length as usize;
         let mut buf = Vec::with_capacity(buf_len);
         buf.extend_from_slice(&data.setup_packet());
-        transfer.fill(buf, buf_len, user_data);
+        self.fill(buf, buf_len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.submit_urb(transfer.urb) }
+        unsafe { self.interface.submit_urb(self.urb) }
     }
 
-    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<Vec<u8>> {
-        let status = urb_status(transfer.urb_mut());
-        let len = transfer.urb_mut().actual_length as usize;
+    unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
+        let status = urb_status(self.urb_mut());
+        let len = self.urb_mut().actual_length as usize;
 
         // SAFETY: transfer is completed (precondition) and `actual_length`
         // bytes were initialized with setup buf in front
-        let mut data = unsafe { transfer.take_buf(SETUP_PACKET_SIZE + len) };
+        let mut data = unsafe { self.take_buf(SETUP_PACKET_SIZE + len) };
         data.splice(0..SETUP_PACKET_SIZE, []);
         Completion { data, status }
     }
 }
 
-impl transfer_internal::PlatformSubmit<ControlOut<'_>> for super::Interface {
-    unsafe fn submit(&self, data: ControlOut, transfer: &mut TransferData, user_data: *mut c_void) {
+impl transfer_internal::PlatformSubmit<ControlOut<'_>> for TransferData {
+    unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
         let buf_len = SETUP_PACKET_SIZE + data.data.len();
         let mut buf = Vec::with_capacity(buf_len);
         buf.extend_from_slice(
@@ -162,16 +166,16 @@ impl transfer_internal::PlatformSubmit<ControlOut<'_>> for super::Interface {
                 .expect("data length should fit in setup packet's u16"),
         );
         buf.extend_from_slice(data.data);
-        transfer.fill(buf, buf_len, user_data);
+        self.fill(buf, buf_len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.submit_urb(transfer.urb) }
+        unsafe { self.interface.submit_urb(self.urb) }
     }
 
-    unsafe fn take_completed(transfer: &mut TransferData) -> Completion<usize> {
-        let status = urb_status(transfer.urb_mut());
-        let len = transfer.urb_mut().actual_length as usize;
-        drop(transfer.take_buf(0));
+    unsafe fn take_completed(&mut self) -> Completion<usize> {
+        let status = urb_status(self.urb_mut());
+        let len = self.urb_mut().actual_length as usize;
+        drop(self.take_buf(0));
         Completion { data: len, status }
     }
 }

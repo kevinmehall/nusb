@@ -78,6 +78,6 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
         manufacturer_string: path.read_attr("manufacturer").ok(),
         product_string: path.read_attr("product").ok(),
         serial_number: path.read_attr("serial").ok(),
-        path: path,
+        path,
     })
 }
