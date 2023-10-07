@@ -8,6 +8,7 @@ use log::debug;
 
 use crate::DeviceInfo;
 use crate::Error;
+use crate::Speed;
 
 #[derive(Debug, Clone)]
 pub struct SysfsPath(PathBuf);
@@ -74,7 +75,11 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
         class: path.read_attr_hex("bDeviceClass")?,
         subclass: path.read_attr_hex("bDeviceSubClass")?,
         protocol: path.read_attr_hex("bDeviceProtocol")?,
-        speed: path.read_attr("speed").ok(),
+        speed: path
+            .read_attr::<String>("speed")
+            .ok()
+            .as_deref()
+            .and_then(Speed::from_str),
         manufacturer_string: path.read_attr("manufacturer").ok(),
         product_string: path.read_attr("product").ok(),
         serial_number: path.read_attr("serial").ok(),

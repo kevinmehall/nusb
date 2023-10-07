@@ -1,5 +1,6 @@
 use super::{ResponseBuffer, TransferRequest};
 
+/// Transfer direction
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Direction {
@@ -10,39 +11,62 @@ pub enum Direction {
     In = 1,
 }
 
+/// Specification defining the request.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ControlType {
+    /// Request defined by the USB standard.
     Standard = 0,
+
+    /// Request defined by the standard USB class specification.
     Class = 1,
+
+    /// Non-standard request.
     Vendor = 2,
 }
 
+/// Entity targeted by the request.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Recipient {
+    /// Request made to device as a whole.
     Device = 0,
+
+    /// Request made to specific interface.
     Interface = 1,
+
+    /// Request made to specific endpoint.
     Endpoint = 2,
+
+    /// Other request.
     Other = 3,
 }
 
+/// SETUP packet and associated data to make an **OUT** request on a control endpoint.
 pub struct ControlOut<'a> {
+    /// Request type used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
     pub control_type: ControlType,
 
+    /// Recipient used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
     pub recipient: Recipient,
 
+    /// `bRequest` field sent in the SETUP packet.
     #[doc(alias = "bRequest")]
     pub request: u8,
 
+    /// `wValue` field sent in the SETUP packet.
     #[doc(alias = "wValue")]
     pub value: u16,
 
+    /// `wIndex` field sent in the SETUP packet.
+    ///
+    /// For [`Recipient::Interface`] this is the interface number. For [`Recipient::Endpoint`] this is the endpoint number.
     #[doc(alias = "wIndex")]
     pub index: u16,
 
+    /// Data to be sent in the data stage.
     #[doc(alias = "wLength")]
     pub data: &'a [u8],
 }
@@ -61,6 +85,7 @@ impl<'a> ControlOut<'a> {
         ))
     }
 
+    #[allow(unused)]
     pub(crate) fn request_type(&self) -> u8 {
         request_type(Direction::Out, self.control_type, self.recipient)
     }
@@ -70,22 +95,31 @@ impl TransferRequest for ControlOut<'_> {
     type Response = ResponseBuffer;
 }
 
+/// SETUP packet to make an **IN** request on a control endpoint.
 pub struct ControlIn {
+    /// Request type used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
     pub control_type: ControlType,
 
+    /// Recipient used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
     pub recipient: Recipient,
 
+    /// `bRequest` field sent in the SETUP packet.
     #[doc(alias = "bRequest")]
     pub request: u8,
 
-    #[doc(alias = "windex")]
+    /// `wValue` field sent in the SETUP packet.
+    #[doc(alias = "wValue")]
     pub value: u16,
 
+    /// `wIndex` field sent in the SETUP packet.
+    ///
+    /// For [`Recipient::Interface`] this is the interface number. For [`Recipient::Endpoint`] this is the endpoint number.
     #[doc(alias = "wIndex")]
     pub index: u16,
 
+    /// Number of bytes to be read in the data stage.
     #[doc(alias = "wLength")]
     pub length: u16,
 }
@@ -104,6 +138,7 @@ impl ControlIn {
         )
     }
 
+    #[allow(unused)]
     pub(crate) fn request_type(&self) -> u8 {
         request_type(Direction::In, self.control_type, self.recipient)
     }

@@ -1,19 +1,21 @@
-use std::{
-    collections::VecDeque,
-    future::{poll_fn, Future},
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use crate::{
     platform,
-    transfer::{
-        Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit, RequestBuffer,
-        TransferFuture, TransferHandle, TransferRequest,
-    },
+    transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
     DeviceInfo, Error,
 };
 
+/// An opened USB device.
+///
+/// Obtain a `Device` by calling [`DeviceInfo::open`].
+/// 
+/// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
+/// use in multiple places in your program. The device is closed when all clones and all
+/// associated [`Interface`]s are dropped.
+///
+/// Use [`.claim_interface(i)`][`Device::claim_interface`] to open an interface to submit
+/// transfers.
 #[derive(Clone)]
 pub struct Device {
     backend: Arc<crate::platform::Device>,
@@ -25,61 +27,103 @@ impl Device {
         Ok(Device { backend })
     }
 
-    pub fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
-        self.backend.set_configuration(configuration)
-    }
-
-    pub fn reset(&self) -> Result<(), Error> {
-        self.backend.reset()
-    }
-
+    /// Open an interface of the device and claim it for exclusive use.
     pub fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
         let backend = self.backend.claim_interface(interface)?;
         Ok(Interface { backend })
     }
+
+    /// Set the device configuration.
+    ///
+    /// ### Platform-specific notes
+    /// * Not supported on Windows
+    pub fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
+        self.backend.set_configuration(configuration)
+    }
+
+    /// Reset the device, forcing it to re-enumerate.
+    ///
+    /// This `Device` will no longer be usable, and you should drop it and call
+    /// [`super::list_devices`] to find and re-open it again.
+    ///
+    /// ### Platform-specific notes
+    /// * Not supported on Windows
+    pub fn reset(&self) -> Result<(), Error> {
+        self.backend.reset()
+    }
 }
 
+/// An opened interface of a USB device.
+///
+/// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
+/// use in multiple places in your program. The interface is released when all clones, and all
+/// associated transfers ([`TransferFuture`]s and [`Queue`]s) are dropped.
+#[derive(Clone)]
 pub struct Interface {
     backend: Arc<platform::Interface>,
 }
 
 impl Interface {
-    pub fn set_alt_setting(&self) {
+    /// Select the alternate setting of an interface.
+    ///
+    /// An alternate setting is a mode of the interface that makes particular endpoints available
+    /// and may enable or disable functionality of the device. The OS resets the device to the default
+    /// alternate setting when the interface is released or the program exits.
+    pub fn set_alt_setting(&self, _alt_setting: u8) {
         todo!()
     }
 
+    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlIn>(data);
         TransferFuture::new(t)
     }
 
+    /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
 
+    /// Submit a single **IN (device-to-host)** transfer on the specified **bulk** endpoint.
+    ///
+    /// * The requested length must be a multiple of the endpoint's maximum packet size
+    /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
 
+    /// Submit a single **OUT (host-to-device)** transfer on the specified **bulk** endpoint.
+    ///
+    /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
         let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
 
+    /// Create a queue for managing multiple **IN (device-to-host)** transfers on a **bulk** endpoint.
+    ///
+    /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
     }
 
+    /// Create a queue for managing multiple **OUT (device-to-host)** transfers on a **bulk** endpoint.
+    ///
+    /// An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
     }
 
+    /// Submit a single **IN (device-to-host)** transfer on the specified **interrupt** endpoint.
+    ///
+    /// * The requested length must be a multiple of the endpoint's maximum packet size
+    /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn interrupt_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self
             .backend
@@ -88,6 +132,9 @@ impl Interface {
         TransferFuture::new(t)
     }
 
+    /// Submit a single **OUT (host-to-device)** transfer on the specified **interrupt** endpoint.
+    ///
+    /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn interrupt_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
         let mut t = self
             .backend
@@ -96,98 +143,24 @@ impl Interface {
         TransferFuture::new(t)
     }
 
+    /// Create a queue for managing multiple **IN (device-to-host)** transfers on an **interrupt** endpoint.
+    ///
+    /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn interrupt_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
     }
 
+    /// Create a queue for managing multiple **OUT (device-to-host)** transfers on an **interrupt** endpoint.
+    ///
+    /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn interrupt_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
     }
 }
 
-pub struct Queue<R: TransferRequest> {
-    interface: Arc<platform::Interface>,
-    endpoint: u8,
-    endpoint_type: EndpointType,
-
-    /// A queue of pending transfers, expected to complete in order
-    pending: VecDeque<TransferHandle<platform::TransferData>>,
-
-    /// An idle transfer that recently completed for re-use. Limiting
-    cached: Option<TransferHandle<platform::TransferData>>,
-
-    bufs: PhantomData<R>,
-}
-
-impl<R> Queue<R>
-where
-    R: TransferRequest,
-    platform::TransferData: PlatformSubmit<R>,
-{
-    fn new(
-        interface: Arc<platform::Interface>,
-        endpoint: u8,
-        endpoint_type: EndpointType,
-    ) -> Queue<R> {
-        Queue {
-            interface,
-            endpoint,
-            endpoint_type,
-            pending: VecDeque::new(),
-            cached: None,
-            bufs: PhantomData,
-        }
-    }
-
-    /// Submit a new transfer on the endpoint.
-    pub fn submit(&mut self, data: R) {
-        let mut transfer = self.cached.take().unwrap_or_else(|| {
-            self.interface
-                .make_transfer(self.endpoint, self.endpoint_type)
-        });
-        transfer.submit(data);
-        self.pending.push_back(transfer);
-    }
-
-    /// Block waiting for the next pending transfer to complete, and return
-    /// its buffer or an error status.
-    ///
-    /// Panics if there are no transfers pending.
-    pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + 'a {
-        poll_fn(|cx| {
-            let res = self
-                .pending
-                .front_mut()
-                .expect("queue should have pending transfers when calling next_complete")
-                .poll_completion::<R>(cx);
-            if res.is_ready() {
-                self.cached = self.pending.pop_front();
-            }
-            res
-        })
-    }
-
-    /// Get the number of transfers that have been submitted with
-    /// `submit` that have not yet been returned from `complete`.
-    pub fn pending(&self) -> usize {
-        self.pending.len()
-    }
-
-    /// Cancel all pending transfers. They will still be returned from `complete` so you can tell
-    /// which were completed, partially-completed, or cancelled.
-    pub fn cancel_all(&mut self) {
-        // Cancel transfers in reverse order to ensure subsequent transfers can't complete
-        // out of order while we're going through them.
-        for transfer in self.pending.iter_mut().rev() {
-            transfer.cancel();
-        }
-    }
-}
-
-impl<R: TransferRequest> Drop for Queue<R> {
-    fn drop(&mut self) {
-        // Cancel transfers in reverse order to ensure subsequent transfers can't complete
-        // out of order while we're going through them.
-        self.pending.drain(..).rev().for_each(drop)
-    }
+#[test]
+fn assert_send_sync() {
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<Interface>();
+    require_send_sync::<Device>();
 }
