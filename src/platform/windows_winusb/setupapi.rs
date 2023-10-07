@@ -4,13 +4,14 @@ use std::{
     alloc,
     alloc::Layout,
     ffi::{OsStr, OsString},
+    io::{self, ErrorKind},
     mem::{self, size_of},
-    os::windows::prelude::OsStrExt,
+    os::windows::prelude::{OsStrExt, OsStringExt},
     ptr::{addr_of_mut, null, null_mut},
     slice,
 };
 
-use log::{debug, error};
+use log::error;
 use windows_sys::{
     core::GUID,
     Win32::{
@@ -18,12 +19,20 @@ use windows_sys::{
             DeviceAndDriverInstallation::{
                 SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiEnumDeviceInterfaces,
                 SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW, SetupDiGetDevicePropertyW,
-                DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA,
+                SetupDiOpenDevRegKey, DICS_FLAG_GLOBAL, DIGCF_ALLCLASSES, DIGCF_DEVICEINTERFACE,
+                DIGCF_PRESENT, DIREG_DEV, SP_DEVICE_INTERFACE_DATA,
                 SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
             },
-            Properties::{DEVPROPKEY, DEVPROPTYPE, DEVPROP_TYPE_STRING, DEVPROP_TYPE_UINT32},
+            Properties::{
+                DEVPROPKEY, DEVPROPTYPE, DEVPROP_TYPE_STRING, DEVPROP_TYPE_STRING_LIST,
+                DEVPROP_TYPE_UINT32,
+            },
         },
-        Foundation::{GetLastError, FALSE, INVALID_HANDLE_VALUE, TRUE},
+        Foundation::{GetLastError, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE, S_OK, TRUE},
+        System::{
+            Com::IIDFromString,
+            Registry::{RegCloseKey, RegQueryValueExW, HKEY, KEY_READ, REG_MULTI_SZ, REG_SZ},
+        },
     },
 };
 
@@ -35,20 +44,26 @@ pub struct DeviceInfoSet {
 }
 
 impl DeviceInfoSet {
-    pub fn get_by_setup_class(guid: GUID, enumerator: Option<&OsStr>) -> Result<DeviceInfoSet, ()> {
+    pub fn get(
+        class: Option<GUID>,
+        enumerator: Option<&OsStr>,
+    ) -> Result<DeviceInfoSet, io::Error> {
         let enumerator: Option<Vec<u16>> =
             enumerator.map(|e| e.encode_wide().chain(Some(0)).collect());
         let handle = unsafe {
             SetupDiGetClassDevsW(
-                &guid,
+                class.as_ref().map_or(null(), |g| g as *const _),
                 enumerator.as_ref().map_or(null(), |s| s.as_ptr()),
                 0,
-                DIGCF_DEVICEINTERFACE | DIGCF_PRESENT,
+                if class.is_some() { 0 } else { DIGCF_ALLCLASSES }
+                    | DIGCF_DEVICEINTERFACE
+                    | DIGCF_PRESENT,
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            error!("SetupDiGetClassDevsW failed: {}", unsafe { GetLastError() });
-            Err(())
+            let err = io::Error::last_os_error();
+            error!("SetupDiGetClassDevsW failed: {}", err);
+            Err(err)
         } else {
             Ok(DeviceInfoSet { handle })
         }
@@ -137,6 +152,38 @@ impl<'a> DeviceInfo<'a> {
         }
     }
 
+    pub fn get_string_list_property(&self, pkey: DEVPROPKEY) -> Option<Vec<OsString>> {
+        let mut property_type: DEVPROPTYPE = unsafe { mem::zeroed() };
+        let mut buffer = [0u16; 4096];
+        let mut size: u32 = 0; // in bytes
+
+        let r = unsafe {
+            SetupDiGetDevicePropertyW(
+                self.set.handle,
+                &self.device_info,
+                &pkey,
+                &mut property_type,
+                buffer.as_mut_ptr() as *mut u8,
+                (buffer.len() * mem::size_of::<u16>()) as u32,
+                &mut size,
+                0,
+            )
+        };
+
+        if r == TRUE && property_type == DEVPROP_TYPE_STRING_LIST {
+            let buffer = &buffer[..(size as usize / mem::size_of::<u16>())];
+            Some(
+                buffer
+                    .split(|&c| c == 0)
+                    .filter(|e| e.len() > 0)
+                    .map(|s| OsString::from_wide(s))
+                    .collect(),
+            )
+        } else {
+            None
+        }
+    }
+
     pub fn get_u32_property(&self, pkey: DEVPROPKEY) -> Option<u32> {
         let mut property_type: DEVPROPTYPE = unsafe { mem::zeroed() };
         let mut buffer: u32 = 0;
@@ -154,10 +201,29 @@ impl<'a> DeviceInfo<'a> {
             )
         };
 
-        if r == 1 && property_type == DEVPROP_TYPE_UINT32 {
+        if r == TRUE && property_type == DEVPROP_TYPE_UINT32 {
             Some(buffer)
         } else {
             None
+        }
+    }
+
+    pub fn registry_key(&self) -> Result<RegKey, io::Error> {
+        unsafe {
+            let key = SetupDiOpenDevRegKey(
+                self.set.handle,
+                &self.device_info,
+                DICS_FLAG_GLOBAL,
+                0,
+                DIREG_DEV,
+                KEY_READ,
+            );
+
+            if key == INVALID_HANDLE_VALUE {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(RegKey(key))
+            }
         }
     }
 
@@ -266,6 +332,72 @@ impl<'a> InterfaceInfo<'a> {
             alloc::dealloc(buf.cast(), layout);
 
             val
+        }
+    }
+}
+
+pub struct RegKey(HKEY);
+
+impl RegKey {
+    pub fn query_value_guid(&self, value_name: &str) -> Result<GUID, io::Error> {
+        unsafe {
+            let value_name: Vec<u16> = OsStr::new(value_name)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let mut ty = 0;
+            let mut size = 0;
+
+            // get size
+            let r = RegQueryValueExW(
+                self.0,
+                value_name.as_ptr(),
+                null_mut(),
+                &mut ty,
+                null_mut(),
+                &mut size,
+            );
+
+            if r != ERROR_SUCCESS {
+                return Err(io::Error::from_raw_os_error(r as i32));
+            }
+
+            if ty != REG_MULTI_SZ && ty != REG_SZ {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "registry value type not string",
+                ));
+            }
+
+            let layout = Layout::from_size_align(size as usize, mem::align_of::<u16>()).unwrap();
+
+            let buf = alloc::alloc(layout);
+
+            let r = RegQueryValueExW(self.0, value_name.as_ptr(), null(), &mut ty, buf, &mut size);
+
+            if r != ERROR_SUCCESS {
+                alloc::dealloc(buf, layout);
+                return Err(io::Error::from_raw_os_error(r as i32));
+            }
+
+            let mut guid = GUID::from_u128(0);
+            let r = IIDFromString(buf as *mut u16, &mut guid);
+
+            alloc::dealloc(buf, layout);
+
+            if r == S_OK {
+                Ok(guid)
+            } else {
+                Err(io::Error::new(ErrorKind::InvalidData, "invalid UUID"))
+            }
+        }
+    }
+}
+
+impl Drop for RegKey {
+    fn drop(&mut self) {
+        unsafe {
+            RegCloseKey(self.0);
         }
     }
 }

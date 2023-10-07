@@ -1,5 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
+    io,
     os::windows::prelude::{
         AsHandle, AsRawHandle, HandleOrInvalid, OsStrExt, OsStringExt, OwnedHandle, RawHandle,
     },
@@ -7,19 +8,21 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{GetLastError, GENERIC_WRITE, HANDLE, WIN32_ERROR},
-    Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_WRITE, OPEN_EXISTING},
+    Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE},
+    Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    },
 };
 
 /// Wrapper around `CreateFile`
-pub fn create_file(path: &OsStr) -> Result<OwnedHandle, WIN32_ERROR> {
+pub fn create_file(path: &OsStr) -> Result<OwnedHandle, io::Error> {
     let wide_name: Vec<u16> = path.encode_wide().chain(Some(0)).collect();
 
     unsafe {
         let r = CreateFileW(
             wide_name.as_ptr(),
-            GENERIC_WRITE,
-            FILE_SHARE_WRITE,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
             null(),
             OPEN_EXISTING,
             FILE_FLAG_OVERLAPPED,
@@ -27,7 +30,7 @@ pub fn create_file(path: &OsStr) -> Result<OwnedHandle, WIN32_ERROR> {
         );
         HandleOrInvalid::from_raw_handle(r as RawHandle)
             .try_into()
-            .map_err(|_| GetLastError())
+            .map_err(|_| io::Error::last_os_error())
     }
 }
 

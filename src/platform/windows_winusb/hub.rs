@@ -5,7 +5,7 @@ use std::{
     ptr::null_mut,
 };
 
-use log::{debug, error};
+use log::error;
 use windows_sys::Win32::{
     Devices::Usb::{
         GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX,
@@ -25,8 +25,7 @@ pub struct HubHandle(OwnedHandle);
 
 impl HubHandle {
     pub fn by_instance_id(instance_id: &OsStr) -> Option<HubHandle> {
-        let devs =
-            DeviceInfoSet::get_by_setup_class(GUID_DEVINTERFACE_USB_HUB, Some(instance_id)).ok()?;
+        let devs = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_HUB), Some(instance_id)).ok()?;
         let Some(hub_interface) = devs.iter_interfaces(GUID_DEVINTERFACE_USB_HUB).next() else {
             error!("Failed to find hub interface");
             return None;

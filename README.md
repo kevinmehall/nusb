@@ -15,9 +15,10 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
   a specific interface, not a device as a whole. `nusb`'s API makes working with interfaces
   a required step so that it can map directly to Windows APIs.
 
-### Current status
+### :construction: Current status
 
-:construction: Control, bulk and interrupt transfers work on Linux, minimally tested
+* Linux:  Control, bulk and interrupt transfers work, minimally tested
+* Windows:  Control, bulk and interrupt transfers work, minimally tested
 
 ### License
 MIT or Apache 2.0, at your option

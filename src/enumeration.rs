@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::{OsStr, OsString},
     fmt::Display,
     str::FromStr,
@@ -22,6 +23,9 @@ pub struct DeviceInfo {
 
     #[cfg(target_os = "windows")]
     pub(crate) driver: Option<String>,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) interfaces: HashMap<u8, OsString>,
 
     pub(crate) bus_number: u8,
     pub(crate) device_address: u8,

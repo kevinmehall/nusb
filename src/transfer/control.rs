@@ -48,6 +48,7 @@ pub struct ControlOut<'a> {
 }
 
 impl<'a> ControlOut<'a> {
+    #[allow(unused)]
     pub(crate) fn setup_packet(&self) -> Result<[u8; SETUP_PACKET_SIZE], ()> {
         Ok(pack_setup(
             Direction::Out,
@@ -58,6 +59,10 @@ impl<'a> ControlOut<'a> {
             self.index,
             self.data.len().try_into().map_err(|_| ())?,
         ))
+    }
+
+    pub(crate) fn request_type(&self) -> u8 {
+        request_type(Direction::Out, self.control_type, self.recipient)
     }
 }
 
@@ -86,6 +91,7 @@ pub struct ControlIn {
 }
 
 impl ControlIn {
+    #[allow(unused)]
     pub(crate) fn setup_packet(&self) -> [u8; SETUP_PACKET_SIZE] {
         pack_setup(
             Direction::In,
@@ -96,6 +102,10 @@ impl ControlIn {
             self.index,
             self.length,
         )
+    }
+
+    pub(crate) fn request_type(&self) -> u8 {
+        request_type(Direction::In, self.control_type, self.recipient)
     }
 }
 
@@ -110,7 +120,7 @@ fn pack_setup(
     index: u16,
     length: u16,
 ) -> [u8; SETUP_PACKET_SIZE] {
-    let bmrequesttype = ((direction as u8) << 7) | ((control_type as u8) << 5) | (recipient as u8);
+    let bmrequesttype = request_type(direction, control_type, recipient);
 
     [
         bmrequesttype,
@@ -122,6 +132,10 @@ fn pack_setup(
         (length & 0xFF) as u8,
         (length >> 8) as u8,
     ]
+}
+
+fn request_type(direction: Direction, control_type: ControlType, recipient: Recipient) -> u8 {
+    ((direction as u8) << 7) | ((control_type as u8) << 5) | (recipient as u8)
 }
 
 impl TransferRequest for ControlIn {
