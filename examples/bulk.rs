@@ -1,5 +1,5 @@
 use futures_lite::future::block_on;
-use nusb::transfer::{RequestBuffer, TransferStatus};
+use nusb::transfer::RequestBuffer;
 
 fn main() {
     env_logger::init();
@@ -21,7 +21,7 @@ fn main() {
         }
         let result = block_on(queue.next_complete());
         println!("{result:?}");
-        if result.status != TransferStatus::Complete {
+        if result.status.is_err() {
             break;
         }
     }

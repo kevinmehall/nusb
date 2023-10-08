@@ -6,7 +6,7 @@
 use std::{
     future::Future,
     marker::PhantomData,
-    task::{Context, Poll},
+    task::{Context, Poll}, io, fmt::Display,
 };
 
 use crate::platform;
@@ -36,12 +36,9 @@ pub(crate) enum EndpointType {
     Interrupt = 3,
 }
 
-/// Transfer status.
+/// Transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum TransferStatus {
-    /// Transfer completed successfully.
-    Complete,
-
+pub enum TransferError {
     /// Transfer was cancelled.
     Cancelled,
 
@@ -55,20 +52,74 @@ pub enum TransferStatus {
     Fault,
 
     /// Unknown or OS-specific error.
-    UnknownError,
+    Unknown,
+}
+
+impl Display for TransferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransferError::Cancelled => write!(f, "transfer was cancelled"),
+            TransferError::Stall => write!(f, "endpoint STALL condition"),
+            TransferError::Disconnected => write!(f, "device disconnected"),
+            TransferError::Fault => write!(f, "hardware fault or protocol violation"),
+            TransferError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
+impl std::error::Error for TransferError {}
+
+impl From<TransferError> for io::Error {
+    fn from(value: TransferError) -> Self {
+        match value {
+            TransferError::Cancelled => io::Error::new(io::ErrorKind::Interrupted, value),
+            TransferError::Stall => io::Error::new(io::ErrorKind::ConnectionReset, value),
+            TransferError::Disconnected => io::Error::new(io::ErrorKind::ConnectionAborted, value),
+            TransferError::Fault => io::Error::new(io::ErrorKind::Other, value),
+            TransferError::Unknown => io::Error::new(io::ErrorKind::Other, value),
+        }
+    }
 }
 
 /// Status and data returned on transfer completion.
 ///
 /// A transfer can return partial data even in the case of failure or
-/// cancellation, thus this is a struct containing both rather than a `Result`.
+/// cancellation, thus this is a struct containing both `data` and `status`
+/// rather than a `Result`. Use [`into_result`][`Completion::into_result`] to
+/// ignore a partial transfer and get a `Result`.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct Completion<T> {
     /// Returned data or buffer to re-use.
     pub data: T,
 
     /// Indicates successful completion or error.
-    pub status: TransferStatus,
+    pub status: Result<(), TransferError>,
+}
+
+impl<T> Completion<T> {
+    /// Ignore any partial completion, turning `self` into a `Result` containing
+    /// either the completed buffer for a successful transfer or a
+    /// `TransferError`.
+    pub fn into_result(self) -> Result<T, TransferError> {
+        self.status.map(|()| self.data)
+    }
+}
+
+impl TryFrom<Completion<Vec<u8>>> for Vec<u8> {
+    type Error = TransferError;
+
+    fn try_from(c: Completion<Vec<u8>>) -> Result<Self, Self::Error> {
+        c.into_result()
+    }
+}
+
+impl TryFrom<Completion<ResponseBuffer>> for ResponseBuffer {
+    type Error = TransferError;
+
+    fn try_from(c: Completion<ResponseBuffer>) -> Result<Self, Self::Error> {
+        c.into_result()
+    }
 }
 
 /// [`Future`] used to await the completion of a transfer.

@@ -9,7 +9,7 @@ use rustix::io::Errno;
 
 use crate::transfer::{
     Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit, PlatformTransfer,
-    RequestBuffer, ResponseBuffer, TransferStatus, SETUP_PACKET_SIZE,
+    RequestBuffer, ResponseBuffer, TransferError, SETUP_PACKET_SIZE,
 };
 
 use super::usbfs::{
@@ -204,19 +204,19 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
     }
 }
 
-fn urb_status(urb: &Urb) -> TransferStatus {
+fn urb_status(urb: &Urb) -> Result<(), TransferError> {
     if urb.status == 0 {
-        return TransferStatus::Complete;
+        return Ok(());
     }
 
     // It's sometimes positive, sometimes negative, but rustix panics if negative.
-    match Errno::from_raw_os_error(urb.status.abs()) {
-        Errno::NODEV | Errno::SHUTDOWN => TransferStatus::Disconnected,
-        Errno::PIPE => TransferStatus::Stall,
-        Errno::NOENT | Errno::CONNRESET => TransferStatus::Cancelled,
+    Err(match Errno::from_raw_os_error(urb.status.abs()) {
+        Errno::NODEV | Errno::SHUTDOWN => TransferError::Disconnected,
+        Errno::PIPE => TransferError::Stall,
+        Errno::NOENT | Errno::CONNRESET => TransferError::Cancelled,
         Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
-            TransferStatus::Fault
+            TransferError::Fault
         }
-        _ => TransferStatus::UnknownError,
-    }
+        _ => TransferError::Unknown,
+    })
 }

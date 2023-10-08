@@ -41,7 +41,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// 
 /// ```no_run
 /// use futures_lite::future::block_on;
-/// use nusb::transfer::{ RequestBuffer, TransferStatus };
+/// use nusb::transfer::RequestBuffer;
 /// # let di = nusb::list_devices().unwrap().next().unwrap();
 /// # let device = di.open().unwrap();
 /// # let interface = device.claim_interface(0).unwrap();
@@ -59,7 +59,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 ///     let completion = block_on(queue.next_complete());
 ///     handle_data(&completion.data); // your function
 /// 
-///     if completion.status != TransferStatus::Complete {
+///     if completion.status.is_err() {
 ///         break;
 ///     }
 ///     
@@ -71,7 +71,6 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ```no_run
 /// use std::mem;
 /// use futures_lite::future::block_on;
-/// use nusb::transfer::{ RequestBuffer, TransferStatus };
 /// # let di = nusb::list_devices().unwrap().next().unwrap();
 /// # let device = di.open().unwrap();
 /// # let interface = device.claim_interface(0).unwrap();
@@ -94,7 +93,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 ///     data_confirmed_sent(completion.data.actual_length()); // your function
 ///     next_buf = completion.data.reuse();
 
-///     if completion.status != TransferStatus::Complete {
+///     if completion.status.is_err() {
 ///         break;
 ///     }
 /// }

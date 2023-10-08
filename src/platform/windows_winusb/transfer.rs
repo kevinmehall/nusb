@@ -22,7 +22,7 @@ use windows_sys::Win32::{
 
 use crate::transfer::{
     notify_completion, Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit,
-    PlatformTransfer, RequestBuffer, ResponseBuffer, TransferStatus,
+    PlatformTransfer, RequestBuffer, ResponseBuffer, TransferError,
 };
 
 use super::util::raw_handle;
@@ -92,13 +92,13 @@ impl TransferData {
     }
 
     /// SAFETY: transfer must be completed
-    unsafe fn get_status(&mut self) -> (usize, TransferStatus) {
+    unsafe fn get_status(&mut self) -> (usize, Result<(), TransferError>) {
         if let Some(err) = self.submit_error {
             debug!(
                 "Transfer {:?} on endpoint {:02x} failed on submit: {}",
                 self.event, self.endpoint, err
             );
-            return (0, map_error(err));
+            return (0, Err(map_error(err)));
         }
 
         let mut actual_len = 0;
@@ -114,14 +114,14 @@ impl TransferData {
                 "Transfer {:?} on endpoint {:02x} complete: {} bytes transferred",
                 self.event, self.endpoint, actual_len
             );
-            TransferStatus::Complete
+            Ok(())
         } else {
             let err = GetLastError();
             debug!(
                 "Transfer {:?} on endpoint {:02x} failed: {}, {} bytes transferred",
                 self.event, self.endpoint, err, actual_len
             );
-            map_error(err)
+            Err(map_error(err))
         };
 
         (actual_len as usize, status)
@@ -321,13 +321,13 @@ pub(super) fn handle_event(completion: *mut OVERLAPPED) {
     }
 }
 
-fn map_error(err: WIN32_ERROR) -> TransferStatus {
+fn map_error(err: WIN32_ERROR) -> TransferError {
     match err {
-        ERROR_GEN_FAILURE => TransferStatus::Stall,
-        ERROR_REQUEST_ABORTED => TransferStatus::Cancelled,
+        ERROR_GEN_FAILURE => TransferError::Stall,
+        ERROR_REQUEST_ABORTED => TransferError::Cancelled,
         ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
-            TransferStatus::Disconnected
+            TransferError::Disconnected
         }
-        _ => TransferStatus::UnknownError,
+        _ => TransferError::Unknown,
     }
 }
