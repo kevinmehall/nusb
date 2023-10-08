@@ -1,5 +1,6 @@
 //! Wrappers for the [usbfs] character device ioctls, translated from the
 //! [C structures and ioctl definitions][uapi].
+//!
 //! [usbfs]: https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#the-usb-character-device-nodes
 //! [uapi]: https://github.com/torvalds/linux/blob/master/tools/include/uapi/linux/usbdevice_fs.h
 #![allow(dead_code)]

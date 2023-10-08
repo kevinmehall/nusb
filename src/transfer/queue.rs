@@ -10,17 +10,17 @@ use crate::platform;
 use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRequest};
 
 /// Manages a stream of transfers on an endpoint.
-/// 
+///
 /// A `Queue` optimizes a common pattern when streaming data to or from a USB
 /// endpoint: To maximize throughput and minimize latency, the host controller
 /// needs to attempt a transfer in every possible frame. That requires always
 /// having a transfer request pending with the kernel by submitting multiple
 /// transfer requests and re-submitting them as they complete.
-/// 
+///
 /// When the `Queue` is dropped, all pending transfers are cancelled.
-/// 
-/// ### Why use a `Queue` instead of submitting multiple transfers individually
-/// with the methods on [`Interface`][`crate::Interface`]?
+///
+/// ### Why use a `Queue` instead of submitting multiple transfers individually with the methods on [`Interface`][`crate::Interface`]?
+///
 ///  * Individual transfers give you individual `Future`s, which you then have
 ///    to keep track of and poll using something like `FuturesUnordered`.
 ///  * A `Queue` provides better cancellation semantics than `Future`'s
@@ -36,9 +36,9 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 ///  * A queue caches the internal transfer data structures of the last
 ///    completed transfer, meaning that if you re-use the data buffer there is
 ///    no memory allocation involved in continued streaming.
-/// 
+///
 /// ### Example (read from an endpoint)
-/// 
+///
 /// ```no_run
 /// use futures_lite::future::block_on;
 /// use nusb::transfer::RequestBuffer;
@@ -47,18 +47,18 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// # let interface = device.claim_interface(0).unwrap();
 /// # fn handle_data(_: &[u8]) {}
 /// let mut queue = interface.bulk_in_queue(0x81);
-/// 
+///
 /// let n_transfers = 8;
 /// let transfer_size = 256;
 ///
 /// while queue.pending() < n_transfers {
 ///     queue.submit(RequestBuffer::new(transfer_size));
 /// }
-/// 
+///
 /// loop {
 ///     let completion = block_on(queue.next_complete());
 ///     handle_data(&completion.data); // your function
-/// 
+///
 ///     if completion.status.is_err() {
 ///         break;
 ///     }
@@ -66,7 +66,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 ///     queue.submit(RequestBuffer::reuse(completion.data, transfer_size))
 /// }
 /// ```
-/// 
+///
 /// ### Example (write to an endpoint)
 /// ```no_run
 /// use std::mem;
@@ -77,18 +77,18 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// # fn fill_data(_: &mut Vec<u8>) {}
 /// # fn data_confirmed_sent(_: usize) {}
 /// let mut queue = interface.bulk_out_queue(0x02);
-/// 
+///
 /// let n_transfers = 8;
 ///
 /// let mut next_buf = Vec::new();
-/// 
+///
 /// loop {
 ///     while queue.pending() < n_transfers {
 ///         let mut buf = mem::replace(&mut next_buf, Vec::new());
 ///         fill_data(&mut buf); // your function
 ///         queue.submit(buf);
 ///     }
-/// 
+///
 ///     let completion = block_on(queue.next_complete());
 ///     data_confirmed_sent(completion.data.actual_length()); // your function
 ///     next_buf = completion.data.reuse();
@@ -133,7 +133,7 @@ where
     }
 
     /// Submit a new transfer on the endpoint.
-    /// 
+    ///
     /// For an `IN` endpoint, pass a [`RequestBuffer`][`super::RequestBuffer`].\
     /// For an `OUT` endpoint, pass a [`Vec<u8>`].
     pub fn submit(&mut self, data: R) {
@@ -147,7 +147,7 @@ where
 
     /// Return a `Future` that waits for the next pending transfer to complete, and yields its
     /// buffer and status.
-    /// 
+    ///
     /// For an `IN` endpoint, the completion contains a [`Vec<u8>`].\
     /// For an `OUT` endpoint, the completion contains a [`ResponseBuffer`][`super::ResponseBuffer`].
     ///
@@ -173,7 +173,7 @@ where
     }
 
     /// Cancel all pending transfers.
-    /// 
+    ///
     /// They will still be returned from subsequent calls to `next_complete` so
     /// you can tell which were completed, partially-completed, or cancelled.
     pub fn cancel_all(&mut self) {

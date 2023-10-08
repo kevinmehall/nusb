@@ -32,10 +32,10 @@
 //! device. To open an interface, call [`Device::claim_interface`]. Only one
 //! program (or kernel driver) may claim an interface at a time.
 //!
-//! Use the resulting [`Interface`] struct to transfer data on the device's
-//! control, bulk or interrupt endpoints. Transfers are async by default, and
-//! can be awaited as individual `Future`s, or use a [`transfer::Queue`] to
-//! manage streams of data.
+//! Use the resulting [`Interface`] to transfer data on the device's control,
+//! bulk or interrupt endpoints. Transfers are async by default, and can be
+//! awaited as individual [`Future`][`transfer::TransferFuture`]s, or use a
+//! [`Queue`][`transfer::Queue`] to manage streams of data.
 //!
 //! *For more details on how USB works, [USB in a
 //! Nutshell](https://beyondlogic.org/usbnutshell/usb1.shtml) is a good
@@ -44,10 +44,14 @@
 //! ## Logging
 //!
 //! `nusb` uses the [`log`](https://docs.rs/log) crate to log debug and error
-//! information. When submitting a bug report, please include the logs: include
-//! a logging backend like [`env_logger`](https://docs.rs/env_logger) and
-//! configure it to enable log output for this crate (for `env_logger` set
-//! environment variable `RUST_LOG=nusb=debug`.)
+//! information.
+//!
+//! When [submitting a bug report][gh-issues], please include the logs: use a
+//! `log` backend like [`env_logger`](https://docs.rs/env_logger) and configure
+//! it to enable log output for this crate (for `env_logger` set environment
+//! variable `RUST_LOG=nusb=debug`.)
+//!
+//! [gh-issues]: https://github.com/kevinmehall/nusb/issues
 //!
 //! ## Platform support
 //!
@@ -78,7 +82,7 @@
 //!
 //! ### Windows
 //!
-//! `nusb` uses [SetupAPI] to find devices and [WinUSB] to access them.
+//! `nusb` uses [WinUSB] on Windows.
 //!
 //! On Windows, devices are associated with a particular driver, which persists
 //! across connections and reboots. Composite devices appear as multiple devices
@@ -86,11 +90,11 @@
 //! separate driver.
 //!
 //! To use `nusb`, your device or interface must be associated with the `WinUSB`
-//! driver. The recommended way to this if you control the device firmware is to
-//! use a [WCID] descriptor to tell Windows to install the WinUSB driver
-//! automatically when the device is first connected. Alternatively [Zadig]
-//! (GUI) or [libwdi] (CLI / C library) can be used to manually install the
-//! WinUSB driver for a device.
+//! driver. If you control the device firmware, the recommended way is to use a
+//! [WCID] descriptor to tell Windows to install the WinUSB driver automatically
+//! when the device is first connected. Alternatively [Zadig] (GUI) or [libwdi]
+//! (CLI / C library) can be used to manually install the WinUSB driver for a
+//! device.
 //!
 //! [SetupAPI]:
 //!     https://learn.microsoft.com/en-us/windows-hardware/drivers/install/setupapi

@@ -8,7 +8,17 @@ use crate::{
 
 /// An opened USB device.
 ///
-/// Obtain a `Device` by calling [`DeviceInfo::open`].
+/// Obtain a `Device` by calling [`DeviceInfo::open`]:
+///
+/// ```no_run
+/// use nusb;
+/// let device_info = nusb::list_devices().unwrap()
+///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
+///     .expect("device not connected");
+///
+/// let device = device_info.open().expect("failed to open device");
+/// let interface = device.claim_interface(0);
+/// ```
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
 /// use in multiple places in your program. The device is closed when all clones and all
@@ -74,6 +84,27 @@ impl Interface {
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().unwrap().next().unwrap();
+    /// # let device = di.open().unwrap();
+    /// # let interface = device.claim_interface(0).unwrap();
+    ///
+    /// let data: Vec<u8> = block_on(interface.control_in(ControlIn {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x30,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     length: 64,
+    /// })).into_result()?;
+    /// # Ok(()) }
+    /// ```
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlIn>(data);
@@ -81,6 +112,27 @@ impl Interface {
     }
 
     /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().unwrap().next().unwrap();
+    /// # let device = di.open().unwrap();
+    /// # let interface = device.claim_interface(0).unwrap();
+    ///
+    /// block_on(interface.control_out(ControlOut {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x32,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     data: &[0x01, 0x02, 0x03, 0x04],
+    /// })).into_result()?;
+    /// # Ok(()) }
+    /// ```
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlOut>(data);

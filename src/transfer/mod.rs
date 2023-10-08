@@ -1,12 +1,14 @@
 //! Transfer-related types.
-//! 
+//!
 //! Use the methods on an [`Interface`][`super::Interface`] to make individual
 //! transfers or obtain a [`Queue`] to manage multiple transfers.
 
 use std::{
+    fmt::Display,
     future::Future,
+    io,
     marker::PhantomData,
-    task::{Context, Poll}, io, fmt::Display,
+    task::{Context, Poll},
 };
 
 use crate::platform;

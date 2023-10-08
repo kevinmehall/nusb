@@ -8,7 +8,9 @@ use std::{
 
 use log::{debug, error};
 use windows_sys::Win32::{
-    Devices::Usb::{WinUsb_Free, WinUsb_Initialize, WINUSB_INTERFACE_HANDLE, WinUsb_SetCurrentAlternateSetting},
+    Devices::Usb::{
+        WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting, WINUSB_INTERFACE_HANDLE,
+    },
     Foundation::{FALSE, TRUE},
 };
 

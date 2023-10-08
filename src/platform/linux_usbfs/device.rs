@@ -132,7 +132,10 @@ impl LinuxInterface {
     }
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        debug!("Set interface {} alt setting to {alt_setting}", self.interface);
+        debug!(
+            "Set interface {} alt setting to {alt_setting}",
+            self.interface
+        );
         Ok(usbfs::set_interface(
             &self.device.fd,
             self.interface,
