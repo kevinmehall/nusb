@@ -14,11 +14,11 @@ use crate::{Device, Error};
 /// Found in the results of [`crate::list_devices`].
 ///
 /// ### Platform-specific notes
-/// 
+///
 /// * Some fields are platform-specific
 ///     * Linux: `path`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
@@ -162,6 +162,45 @@ impl DeviceInfo {
     /// Open the device
     pub fn open(&self) -> Result<Device, Error> {
         Device::open(self)
+    }
+}
+
+// Not derived so that we can format some fields in hex
+impl std::fmt::Debug for DeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("DeviceInfo");
+
+        s.field("bus_number", &self.bus_number)
+            .field("device_address", &self.device_address)
+            .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
+            .field("product_id", &format_args!("0x{:04X}", self.product_id))
+            .field(
+                "device_version",
+                &format_args!("0x{:04X}", self.device_version),
+            )
+            .field("class", &self.class)
+            .field("subclass", &self.subclass)
+            .field("protocol", &self.protocol)
+            .field("speed", &self.speed)
+            .field("manufacturer_string", &self.manufacturer_string)
+            .field("product_string", &self.product_string)
+            .field("serial_number", &self.serial_number);
+
+        #[cfg(target_os = "linux")]
+        {
+            s.field("path", &self.path);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            s.field("instance_id", &self.instance_id)
+                .field("parent_instance_id", &self.parent_instance_id)
+                .field("port_number", &self.port_number)
+                .field("driver", &self.driver)
+                .field("interfaces", &self.interfaces);
+        }
+
+        s.finish()
     }
 }
 
