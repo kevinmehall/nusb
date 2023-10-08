@@ -8,8 +8,8 @@ use std::{
 
 use log::{debug, error};
 use windows_sys::Win32::{
-    Devices::Usb::{WinUsb_Free, WinUsb_Initialize, WINUSB_INTERFACE_HANDLE},
-    Foundation::FALSE,
+    Devices::Usb::{WinUsb_Free, WinUsb_Initialize, WINUSB_INTERFACE_HANDLE, WinUsb_SetCurrentAlternateSetting},
+    Foundation::{FALSE, TRUE},
 };
 
 use crate::{
@@ -86,6 +86,17 @@ impl WindowsInterface {
         ep_type: EndpointType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
+    }
+
+    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+        unsafe {
+            let r = WinUsb_SetCurrentAlternateSetting(raw_handle(&self.handle), alt_setting.into());
+            if r == TRUE {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
     }
 }
 

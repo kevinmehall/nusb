@@ -131,6 +131,15 @@ impl LinuxInterface {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
     }
 
+    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+        debug!("Set interface {} alt setting to {alt_setting}", self.interface);
+        Ok(usbfs::set_interface(
+            &self.device.fd,
+            self.interface,
+            alt_setting,
+        )?)
+    }
+
     pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
         let ep = unsafe { (*urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.device.fd, urb) {

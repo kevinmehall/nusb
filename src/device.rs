@@ -9,7 +9,7 @@ use crate::{
 /// An opened USB device.
 ///
 /// Obtain a `Device` by calling [`DeviceInfo::open`].
-/// 
+///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
 /// use in multiple places in your program. The device is closed when all clones and all
 /// associated [`Interface`]s are dropped.
@@ -64,13 +64,13 @@ pub struct Interface {
 }
 
 impl Interface {
-    /// Select the alternate setting of an interface.
+    /// Select the alternate setting of this interface.
     ///
     /// An alternate setting is a mode of the interface that makes particular endpoints available
     /// and may enable or disable functionality of the device. The OS resets the device to the default
     /// alternate setting when the interface is released or the program exits.
-    pub fn set_alt_setting(&self, _alt_setting: u8) {
-        todo!()
+    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+        self.backend.set_alt_setting(alt_setting)
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.

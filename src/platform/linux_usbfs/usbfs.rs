@@ -38,6 +38,24 @@ pub fn release_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     }
 }
 
+#[repr(C)]
+struct SetAltSetting {
+    interface: c_int,
+    alt_setting: c_int,
+}
+
+pub fn set_interface<Fd: AsFd>(fd: Fd, interface: u8, alt_setting: u8) -> io::Result<()> {
+    unsafe {
+        let ctl = ioctl::Setter::<ioctl::ReadOpcode<b'U', 4, SetAltSetting>, SetAltSetting>::new(
+            SetAltSetting {
+                interface: interface.into(),
+                alt_setting: alt_setting.into(),
+            },
+        );
+        ioctl::ioctl(fd, ctl)
+    }
+}
+
 pub struct PassPtr<Opcode, Input> {
     input: *mut Input,
     _opcode: PhantomData<Opcode>,
