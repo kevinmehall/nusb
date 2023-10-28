@@ -1,0 +1,17 @@
+on:
+  pull_request:
+  merge_group:
+
+name: Fuzz
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: Fuzz
+        run: cargo fuzz run descriptors -- -max_len=4096 -max_total_time=30 -timeout=1

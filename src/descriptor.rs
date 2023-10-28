@@ -200,6 +200,12 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// make this function publicly accessible when fuzzing.
+#[cfg(fuzzing)]
+pub fn fuzz_parse_configurations(descriptors: &[u8]) {
+    let _ = parse_configurations(descriptors);
+}
+
 pub(crate) fn parse_configurations(
     descriptors: &[u8],
 ) -> Result<impl Iterator<Item = Configuration>, ParseError> {
