@@ -1,5 +1,6 @@
 use std::{collections::HashMap, ffi::OsString, io::ErrorKind};
 
+use super::util::{create_file, raw_handle};
 use log::{debug, error};
 use windows_sys::Win32::Devices::{
     Properties::{
@@ -7,10 +8,17 @@ use windows_sys::Win32::Devices::{
         DEVPKEY_Device_FriendlyName, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
         DEVPKEY_Device_Manufacturer, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
-    Usb::{GUID_DEVINTERFACE_USB_DEVICE, USB_DEVICE_SPEED},
+    Usb::{
+        WinUsb_Free, WinUsb_GetDescriptor, WinUsb_Initialize, GUID_DEVINTERFACE_USB_DEVICE,
+        USB_DEVICE_SPEED,
+    },
 };
+use windows_sys::Win32::Foundation::FALSE;
 
-use crate::{DeviceInfo, Error, Speed};
+use crate::{
+    descriptor::{self, Descriptor},
+    DeviceInfo, Error, Speed,
+};
 
 use super::{
     hub::HubHandle,
@@ -103,6 +111,74 @@ pub fn probe_device(dev: setupapi::DeviceInfo) -> Option<DeviceInfo> {
         product_string,
         serial_number,
     })
+}
+
+pub fn get_descriptors(device: &DeviceInfo) -> Result<Vec<u8>, Error> {
+    unsafe {
+        let Some(path) = device.interfaces.values().next() else {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "device is not using winusb",
+            ));
+        };
+
+        let handle = create_file(path)?;
+
+        let mut winusb_handle = 0;
+        if WinUsb_Initialize(raw_handle(&handle), &mut winusb_handle) == FALSE {
+            error!("WinUsb_Initialize failed: {:?}", Error::last_os_error());
+            return Err(Error::last_os_error());
+        }
+
+        let mut descriptors = vec![];
+
+        let mut buf = [0u8; 4096];
+        let buf_len = buf.len() as u32;
+        let mut buf_len_out = 0;
+
+        // get device descriptor
+        let ret = WinUsb_GetDescriptor(
+            winusb_handle,
+            descriptor::DESCRIPTOR_TYPE_DEVICE,
+            0,
+            0,
+            buf.as_mut_ptr(),
+            buf_len,
+            &mut buf_len_out,
+        );
+        if ret == FALSE {
+            error!("WinUsb_GetDescriptor failed: {:?}", Error::last_os_error());
+            return Err(Error::last_os_error());
+        }
+        descriptors.extend_from_slice(&buf[..buf_len_out as usize]);
+
+        // Parse device descriptor to find out how many configurations we have.
+        let device_descriptor =
+            descriptor::DeviceDescriptor::from_slice(&buf[..buf_len_out as usize])
+                .map_err(|_| Error::new(ErrorKind::Unsupported, "malformed device descriptor"))?;
+
+        // get all configuration descriptors
+        for c in 1..=device_descriptor.bNumConfigurations {
+            let ret = WinUsb_GetDescriptor(
+                winusb_handle,
+                descriptor::DESCRIPTOR_TYPE_CONFIGURATION,
+                c,
+                0,
+                buf.as_mut_ptr(),
+                buf_len,
+                &mut buf_len_out,
+            );
+            if ret == FALSE {
+                error!("WinUsb_GetDescriptor failed: {:?}", Error::last_os_error());
+                return Err(Error::last_os_error());
+            }
+            descriptors.extend_from_slice(&buf[..buf_len_out as usize]);
+        }
+
+        WinUsb_Free(winusb_handle);
+
+        Ok(descriptors)
+    }
 }
 
 fn probe_interface(c_id: OsString) -> Option<(u8, OsString)> {

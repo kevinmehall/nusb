@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 #[cfg(target_os = "windows")]
 use std::{
     collections::HashMap,
@@ -7,7 +8,7 @@ use std::{
 #[cfg(target_os = "linux")]
 use crate::platform::SysfsPath;
 
-use crate::{Device, Error};
+use crate::{descriptor, Device, Error};
 
 /// Information about a device that can be obtained without opening it.
 ///
@@ -157,6 +158,20 @@ impl DeviceInfo {
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
         self.serial_number.as_deref()
+    }
+
+    /// Returns the device's unparsed descriptors.
+    ///
+    /// To access parsed data, use [`configurations()`](Self::configurations).
+    pub fn descriptors(&self) -> Result<Vec<u8>, Error> {
+        crate::platform::get_descriptors(self)
+    }
+
+    /// Returns a collection of the device's configurations.
+    pub fn configurations(&self) -> Result<impl Iterator<Item = descriptor::Configuration>, Error> {
+        let descriptors = self.descriptors()?;
+        descriptor::parse_configurations(&descriptors)
+            .map_err(|_| Error::new(ErrorKind::Unsupported, "malformed descriptor"))
     }
 
     /// Open the device

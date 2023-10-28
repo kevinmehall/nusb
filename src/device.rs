@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::{
+    descriptor::EndpointType,
     platform,
-    transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
+    transfer::{ControlIn, ControlOut, Queue, RequestBuffer, TransferFuture},
     DeviceInfo, Error,
 };
 

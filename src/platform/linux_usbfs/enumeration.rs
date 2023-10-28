@@ -14,6 +14,13 @@ use crate::Speed;
 pub struct SysfsPath(PathBuf);
 
 impl SysfsPath {
+    fn read_attr_bytes(&self, attr: &str) -> Result<Vec<u8>, io::Error> {
+        let attr_path = self.0.join(attr);
+        let read_res = fs::read(&attr_path);
+        debug!("sysfs read {attr_path:?}: {read_res:?}");
+        read_res
+    }
+
     fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, io::Error>
     where
         T: FromStr,
@@ -85,4 +92,8 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
         serial_number: path.read_attr("serial").ok(),
         path,
     })
+}
+
+pub fn get_descriptors(device: &DeviceInfo) -> Result<Vec<u8>, Error> {
+    device.path.read_attr_bytes("descriptors")
 }
