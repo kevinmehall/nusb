@@ -13,6 +13,7 @@ repository = "https://github.com/kevinmehall/nusb"
 atomic-waker = "1.1.2"
 futures-lite = "1.13.0"
 log = "0.4.20"
+num_enum = "0.7.0"
 once_cell = "1.18.0"
 slab = "0.4.9"
 
