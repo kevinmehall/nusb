@@ -26,14 +26,19 @@ use super::usbfs::{
 pub struct TransferData {
     urb: *mut Urb,
     capacity: usize,
-    interface: Arc<super::Interface>,
+    device: Arc<super::Device>,
+
+    /// Not directly used, exists just to keep the interface from being released
+    /// while active.
+    _interface: Option<Arc<super::Interface>>,
 }
 
 unsafe impl Send for TransferData {}
 
 impl TransferData {
     pub(super) fn new(
-        interface: Arc<super::Interface>,
+        device: Arc<super::Device>,
+        interface: Option<Arc<super::Interface>>,
         endpoint: u8,
         ep_type: EndpointType,
     ) -> TransferData {
@@ -60,7 +65,8 @@ impl TransferData {
                 usercontext: null_mut(),
             })),
             capacity: 0,
-            interface,
+            device,
+            _interface: interface,
         }
     }
 
@@ -104,7 +110,7 @@ impl Drop for TransferData {
 impl PlatformTransfer for TransferData {
     fn cancel(&self) {
         unsafe {
-            self.interface.cancel_urb(self.urb);
+            self.device.cancel_urb(self.urb);
         }
     }
 }
@@ -120,7 +126,7 @@ impl PlatformSubmit<Vec<u8>> for TransferData {
         self.fill(data, len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.interface.submit_urb(self.urb) }
+        unsafe { self.device.submit_urb(self.urb) }
     }
 
     unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {
@@ -144,7 +150,7 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
         self.fill(data, len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.interface.submit_urb(self.urb) }
+        unsafe { self.device.submit_urb(self.urb) }
     }
 
     unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
@@ -165,7 +171,7 @@ impl PlatformSubmit<ControlIn> for TransferData {
         self.fill(buf, buf_len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.interface.submit_urb(self.urb) }
+        unsafe { self.device.submit_urb(self.urb) }
     }
 
     unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
@@ -193,7 +199,7 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
         self.fill(buf, buf_len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.interface.submit_urb(self.urb) }
+        unsafe { self.device.submit_urb(self.urb) }
     }
 
     unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {

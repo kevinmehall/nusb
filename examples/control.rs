@@ -11,6 +11,32 @@ fn main() {
     println!("Device info: {di:?}");
 
     let device = di.open().unwrap();
+
+    // Linux can make control transfers without claiming an interface
+    #[cfg(target_os = "linux")]
+    {
+        let result = block_on(device.control_out(ControlOut {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Device,
+            request: 0x81,
+            value: 0x9999,
+            index: 0x9999,
+            data: &[1, 2, 3, 4],
+        }));
+        println!("{result:?}");
+
+        let result = block_on(device.control_in(ControlIn {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Device,
+            request: 0x81,
+            value: 0x9999,
+            index: 0x9999,
+            length: 256,
+        }));
+        println!("{result:?}");
+    }
+
+    // but we also provide an API on the `Interface` to support Windows
     let interface = device.claim_interface(0).unwrap();
 
     let result = block_on(interface.control_out(ControlOut {
