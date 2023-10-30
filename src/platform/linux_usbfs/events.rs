@@ -53,13 +53,14 @@ fn event_loop() {
     let mut event_list = epoll::EventVec::with_capacity(4);
     loop {
         epoll::wait(epoll_fd, &mut event_list, -1).unwrap();
-        let devices = DEVICES.lock().unwrap();
         for event in &event_list {
             let key = event.data.u64() as usize;
-            let device = devices.get(key).and_then(|w| w.upgrade());
+            let device = DEVICES.lock().unwrap().get(key).and_then(|w| w.upgrade());
 
             if let Some(device) = device {
                 device.handle_events();
+                // `device` gets dropped here. if it was the last reference, the LinuxDevice will be dropped.
+                // That will unregister its fd, so it's important that DEVICES is unlocked here, or we'd deadlock.
             }
         }
     }
