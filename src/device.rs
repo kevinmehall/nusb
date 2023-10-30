@@ -61,6 +61,72 @@ impl Device {
     pub fn reset(&self) -> Result<(), Error> {
         self.backend.reset()
     }
+
+    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().unwrap().next().unwrap();
+    /// # let device = di.open().unwrap();
+    ///
+    /// let data: Vec<u8> = block_on(device.control_in(ControlIn {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x30,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     length: 64,
+    /// })).into_result()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    #[cfg(target_os = "linux")]
+    pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
+        let mut t = self.backend.make_control_transfer();
+        t.submit::<ControlIn>(data);
+        TransferFuture::new(t)
+    }
+
+    /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().unwrap().next().unwrap();
+    /// # let device = di.open().unwrap();
+    ///
+    /// block_on(device.control_out(ControlOut {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x32,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     data: &[0x01, 0x02, 0x03, 0x04],
+    /// })).into_result()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    #[cfg(target_os = "linux")]
+    pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
+        let mut t = self.backend.make_control_transfer();
+        t.submit::<ControlOut>(data);
+        TransferFuture::new(t)
+    }
 }
 
 /// An opened interface of a USB device.

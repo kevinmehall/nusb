@@ -94,6 +94,15 @@ impl LinuxDevice {
         Ok(())
     }
 
+    pub(crate) fn make_control_transfer(self: &Arc<Self>) -> TransferHandle<super::TransferData> {
+        TransferHandle::new(super::TransferData::new(
+            self.clone(),
+            None,
+            0,
+            EndpointType::Control,
+        ))
+    }
+
     pub(crate) fn claim_interface(
         self: &Arc<Self>,
         interface: u8,
@@ -107,6 +116,33 @@ impl LinuxDevice {
             device: self.clone(),
             interface,
         }))
+    }
+
+    pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
+        let ep = unsafe { (*urb).endpoint };
+        if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
+            // SAFETY: Transfer was not submitted. We still own the transfer
+            // and can write to the URB and complete it in place of the handler.
+            unsafe {
+                {
+                    let u = &mut *urb;
+                    debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
+                    u.actual_length = 0;
+                    u.status = e.raw_os_error();
+                }
+                notify_completion::<super::TransferData>(urb as *mut c_void)
+            }
+        } else {
+            debug!("Submitted URB {urb:?} on ep {ep:x}");
+        }
+    }
+
+    pub(crate) unsafe fn cancel_urb(&self, urb: *mut Urb) {
+        unsafe {
+            if let Err(e) = usbfs::discard_urb(&self.fd, urb) {
+                debug!("Failed to cancel URB {urb:?}: {e}");
+            }
+        }
     }
 }
 
@@ -128,7 +164,12 @@ impl LinuxInterface {
         endpoint: u8,
         ep_type: EndpointType,
     ) -> TransferHandle<super::TransferData> {
-        TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
+        TransferHandle::new(super::TransferData::new(
+            self.device.clone(),
+            Some(self.clone()),
+            endpoint,
+            ep_type,
+        ))
     }
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
@@ -141,33 +182,6 @@ impl LinuxInterface {
             self.interface,
             alt_setting,
         )?)
-    }
-
-    pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
-        let ep = unsafe { (*urb).endpoint };
-        if let Err(e) = usbfs::submit_urb(&self.device.fd, urb) {
-            // SAFETY: Transfer was not submitted. We still own the transfer
-            // and can write to the URB and complete it in place of the handler.
-            unsafe {
-                {
-                    let u = &mut *urb;
-                    debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
-                    u.actual_length = 0;
-                    u.status = e.raw_os_error();
-                }
-                notify_completion::<super::TransferData>(urb as *mut c_void)
-            }
-        } else {
-            debug!("Submitted URB {urb:?} on ep {ep:x}");
-        }
-    }
-
-    pub(crate) unsafe fn cancel_urb(&self, urb: *mut Urb) {
-        unsafe {
-            if let Err(e) = usbfs::discard_urb(&self.device.fd, urb) {
-                debug!("Failed to cancel URB {urb:?}: {e}");
-            }
-        }
     }
 }
 
