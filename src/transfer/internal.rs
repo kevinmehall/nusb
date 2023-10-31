@@ -69,7 +69,7 @@ const STATE_PENDING: u8 = 1;
 
 /// Like PENDING, but there is no one waiting for completion. The completion
 /// handler will drop the buffer and transfer.
-const STATE_ABANDONED: u8 = 3;
+const STATE_ABANDONED: u8 = 2;
 
 /// The transfer completion has been handled on the event loop thread. The
 /// buffer is valid and may be accessed by the `TransferHandle`.
