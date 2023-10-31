@@ -1,4 +1,4 @@
-use std::{ffi::c_void, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use log::{debug, error};
 use rustix::{
@@ -124,13 +124,14 @@ impl LinuxDevice {
             // SAFETY: Transfer was not submitted. We still own the transfer
             // and can write to the URB and complete it in place of the handler.
             unsafe {
-                {
+                let user_data = {
                     let u = &mut *urb;
                     debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
                     u.actual_length = 0;
                     u.status = e.raw_os_error();
-                }
-                notify_completion::<super::TransferData>(urb as *mut c_void)
+                    u.usercontext
+                };
+                notify_completion::<super::TransferData>(user_data)
             }
         } else {
             debug!("Submitted URB {urb:?} on ep {ep:x}");
