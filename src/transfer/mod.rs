@@ -125,9 +125,18 @@ impl TryFrom<Completion<ResponseBuffer>> for ResponseBuffer {
 }
 
 /// [`Future`] used to await the completion of a transfer.
+/// 
+/// Use the methods on [`Interface`][super::Interface] to
+/// submit an individual transfer and obtain a `TransferFuture`.
 ///
 /// The transfer is cancelled on drop. The buffer and
-/// any partially-completed data are destroyed.
+/// any partially-completed data are destroyed. This means
+/// that `TransferFuture` is not [cancel-safe] and cannot be used
+/// in `select!{}`, When racing a `TransferFuture` with a timeout
+/// you cannot tell whether data may have been partially transferred on timeout.
+/// Use the [`Queue`] interface if these matter for your application.
+/// 
+/// [cancel-safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
 pub struct TransferFuture<D: TransferRequest> {
     transfer: TransferHandle<platform::TransferData>,
     ty: PhantomData<D::Response>,

@@ -130,10 +130,12 @@ impl Device {
 }
 
 /// An opened interface of a USB device.
+/// 
+/// Obtain an `Interface` with the [`Device::claim_interface`] method.
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
 /// use in multiple places in your program. The interface is released when all clones, and all
-/// associated transfers ([`TransferFuture`]s and [`Queue`]s) are dropped.
+/// associated [`TransferFuture`]s and [`Queue`]s are dropped.
 #[derive(Clone)]
 pub struct Interface {
     backend: Arc<platform::Interface>,
@@ -233,7 +235,7 @@ impl Interface {
 
     /// Create a queue for managing multiple **OUT (device-to-host)** transfers on a **bulk** endpoint.
     ///
-    /// An OUT endpoint address must have the top (`0x80`) bit clear.
+    /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
     }

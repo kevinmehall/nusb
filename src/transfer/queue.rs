@@ -16,6 +16,8 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// needs to attempt a transfer in every possible frame. That requires always
 /// having a transfer request pending with the kernel by submitting multiple
 /// transfer requests and re-submitting them as they complete.
+/// 
+/// Use the methods on [`Interface`][`crate::Interface`] to obtain a `Queue`.
 ///
 /// When the `Queue` is dropped, all pending transfers are cancelled.
 ///
@@ -25,18 +27,25 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 ///    to keep track of and poll using something like `FuturesUnordered`.
 ///  * A `Queue` provides better cancellation semantics than `Future`'s
 ///    cancel-on-drop.
-///     * After dropping a `TransferFuture`, you lose the ability to get the
-///       status of the cancelled transfer and see if it may have been partially
-///       or fully completed.
+///     * After dropping a [`TransferFuture`][super::TransferFuture], you lose
+///       the ability to get the status of the cancelled transfer and see if it
+///       may have been partially or fully completed.
 ///     * When cancelling multiple transfers, it's important to do so in reverse
 ///       order so that subsequent pending transfers can't end up executing.
 ///       When managing a collection of `TransferFuture`s it's tricky to
 ///       guarantee drop order, while `Queue` always cancels its contained
 ///       transfers in reverse order.
+///     * The `TransferFuture` methods on `Interface` are not [cancel-safe],
+///       meaning they cannot be used in `select!{}` or similar patterns,
+///       because dropping the Future has side effects and can lose data. The
+///       Future returned from [`Queue::next_complete`] is cancel-safe because
+///       it merely waits for completion, while the `Queue` owns the pending
+///       transfers.
 ///  * A queue caches the internal transfer data structures of the last
 ///    completed transfer, meaning that if you re-use the data buffer there is
 ///    no memory allocation involved in continued streaming.
 ///
+/// [cancel-safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
 /// ### Example (read from an endpoint)
 ///
 /// ```no_run
@@ -151,6 +160,9 @@ where
     /// For an `IN` endpoint, the completion contains a [`Vec<u8>`].\
     /// For an `OUT` endpoint, the completion contains a [`ResponseBuffer`][`super::ResponseBuffer`].
     ///
+    /// This future is cancel-safe: it can be cancelled and re-created without
+    /// side effects, enabling its use in `select!{}` or similar.
+    /// 
     /// Panics if there are no transfers pending.
     pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + 'a {
         poll_fn(|cx| {
@@ -172,10 +184,11 @@ where
         self.pending.len()
     }
 
-    /// Cancel all pending transfers.
+    /// Request cancellation of all pending transfers.
     ///
-    /// They will still be returned from subsequent calls to `next_complete` so
-    /// you can tell which were completed, partially-completed, or cancelled.
+    /// The transfers will still be returned from subsequent calls to
+    /// `next_complete` so you can tell which were completed,
+    /// partially-completed, or cancelled.
     pub fn cancel_all(&mut self) {
         // Cancel transfers in reverse order to ensure subsequent transfers
         // can't complete out of order while we're going through them.
