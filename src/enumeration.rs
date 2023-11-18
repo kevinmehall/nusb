@@ -38,6 +38,9 @@ pub struct DeviceInfo {
     #[cfg(target_os = "windows")]
     pub(crate) interfaces: HashMap<u8, OsString>,
 
+    #[cfg(target_os = "macos")]
+    pub(crate) location_id: u32,
+
     pub(crate) bus_number: u8,
     pub(crate) device_address: u8,
 
@@ -85,6 +88,12 @@ impl DeviceInfo {
     #[cfg(target_os = "windows")]
     pub fn driver(&self) -> Option<&str> {
         self.driver.as_deref()
+    }
+
+    /// *(macOS-only)* IOKit Location ID
+    #[cfg(target_os = "macos")]
+    pub fn location_id(&self) -> u32 {
+        self.location_id
     }
 
     /// Number identifying the bus / host controller where the device is connected.
