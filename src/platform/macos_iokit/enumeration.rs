@@ -38,6 +38,12 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter()?.filter_map(probe_device))
 }
 
+pub(crate) fn service_by_location_id(location_id: u32) -> Result<IoService, Error> {
+    usb_service_iter()?
+        .find(|dev| get_integer_property(dev, "locationID") == Some(location_id))
+        .ok_or(Error::new(ErrorKind::NotFound, "not found by locationID"))
+}
+
 fn probe_device(device: IoService) -> Option<DeviceInfo> {
     // Can run `ioreg -p IOUSB -l` to see all properties
     let location_id: u32 = get_integer_property(&device, "locationID")?;

@@ -10,3 +10,5 @@ pub(crate) use device::MacDevice as Device;
 pub(crate) use device::MacInterface as Interface;
 
 mod iokit;
+mod iokit_c;
+mod iokit_usb;

@@ -13,7 +13,7 @@ fn main() {
     let device = di.open().unwrap();
 
     // Linux can make control transfers without claiming an interface
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let result = block_on(device.control_out(ControlOut {
             control_type: ControlType::Vendor,
