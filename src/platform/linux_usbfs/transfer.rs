@@ -118,11 +118,8 @@ impl PlatformTransfer for TransferData {
 impl PlatformSubmit<Vec<u8>> for TransferData {
     unsafe fn submit(&mut self, data: Vec<u8>, user_data: *mut c_void) {
         let ep = self.urb_mut().endpoint;
-        let len = if ep & 0x80 == 0 {
-            data.len()
-        } else {
-            data.capacity()
-        };
+        assert!(ep & 0x80 == 0);
+        let len = data.len();
         self.fill(data, len, user_data);
 
         // SAFETY: we just properly filled the buffer and it is not already pending
