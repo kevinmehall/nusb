@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use io_kit_sys::ret::{kIOReturnNoDevice, kIOReturnSuccess, IOReturn};
+use io_kit_sys::ret::{kIOReturnNoDevice, kIOReturnSuccess, kIOReturnAborted, IOReturn };
 use log::{error, info};
 
 use crate::{
@@ -143,6 +143,7 @@ impl TransferData {
         let status = match inner.status {
             kIOReturnSuccess => Ok(()),
             kIOReturnNoDevice => Err(TransferError::Disconnected),
+            kIOReturnAborted => Err(TransferError::Cancelled),
             _ => Err(TransferError::Unknown),
         };
 
@@ -154,7 +155,14 @@ unsafe impl Send for TransferData {}
 
 impl PlatformTransfer for TransferData {
     fn cancel(&self) {
-        // TODO
+        if let Some(intf) = self.interface.as_ref() {
+            let r = unsafe {call_iokit_function!(intf.interface.raw, AbortPipe(self.pipe_ref)) };
+            info!("Cancelled all transfers on endpoint {ep}. status={r:x}", ep=self.pipe_ref);
+        } else {
+            assert!(self.pipe_ref == 0);
+            let r = unsafe { call_iokit_function!(self.device.device.raw, USBDeviceAbortPipeZero()) };
+            info!("Cancelled all transfers on control pipe. status={r:x}");
+        }
     }
 }
 
