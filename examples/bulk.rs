@@ -13,6 +13,10 @@ fn main() {
     let device = di.open().unwrap();
     let interface = device.claim_interface(0).unwrap();
 
+    block_on(interface.bulk_out(0x02, Vec::from([1, 2, 3, 4, 5])))
+        .into_result()
+        .unwrap();
+
     let mut queue = interface.bulk_in_queue(0x81);
 
     loop {

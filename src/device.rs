@@ -88,7 +88,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlIn>(data);
@@ -121,7 +121,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
@@ -130,7 +130,7 @@ impl Device {
 }
 
 /// An opened interface of a USB device.
-/// 
+///
 /// Obtain an `Interface` with the [`Device::claim_interface`] method.
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
