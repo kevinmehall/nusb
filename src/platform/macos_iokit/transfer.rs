@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use io_kit_sys::ret::{kIOReturnNoDevice, kIOReturnSuccess, kIOReturnAborted, IOReturn };
+use io_kit_sys::ret::{
+    kIOReturnAborted, kIOReturnNoDevice, kIOReturnSuccess, kIOReturnUnderrun, IOReturn,
+};
 use log::{error, info};
 
 use crate::{
@@ -36,6 +38,7 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
 }
 
 pub struct TransferData {
+    endpoint_addr: u8,
     pipe_ref: u8,
     buf: *mut u8,
     capacity: usize,
@@ -70,6 +73,7 @@ impl TransferData {
         endpoint: &EndpointInfo,
     ) -> TransferData {
         TransferData {
+            endpoint_addr: endpoint.address(),
             pipe_ref: endpoint.pipe_ref,
             buf: null_mut(),
             capacity: 0,
@@ -85,6 +89,7 @@ impl TransferData {
 
     pub(super) fn new_control(device: Arc<super::Device>) -> TransferData {
         TransferData {
+            endpoint_addr: 0,
             pipe_ref: 0,
             buf: null_mut(),
             capacity: 0,
@@ -122,7 +127,10 @@ impl TransferData {
     /// SAFETY: requires that the transfer is not active, but is fully prepared (as it is when submitting the transfer fails)
     unsafe fn check_submit_result(&mut self, res: IOReturn) {
         if res != kIOReturnSuccess {
-            error!("Failed to submit transfer: {res:x}");
+            error!(
+                "Failed to submit transfer on endpoint {ep}: {res:x}",
+                ep = self.endpoint_addr
+            );
             let callback_data = {
                 let inner = &mut *self.inner;
                 inner.status = res;
@@ -141,7 +149,7 @@ impl TransferData {
         #[allow(non_upper_case_globals)]
         #[deny(unreachable_patterns)]
         let status = match inner.status {
-            kIOReturnSuccess => Ok(()),
+            kIOReturnSuccess | kIOReturnUnderrun => Ok(()),
             kIOReturnNoDevice => Err(TransferError::Disconnected),
             kIOReturnAborted => Err(TransferError::Cancelled),
             _ => Err(TransferError::Unknown),
@@ -156,11 +164,15 @@ unsafe impl Send for TransferData {}
 impl PlatformTransfer for TransferData {
     fn cancel(&self) {
         if let Some(intf) = self.interface.as_ref() {
-            let r = unsafe {call_iokit_function!(intf.interface.raw, AbortPipe(self.pipe_ref)) };
-            info!("Cancelled all transfers on endpoint {ep}. status={r:x}", ep=self.pipe_ref);
+            let r = unsafe { call_iokit_function!(intf.interface.raw, AbortPipe(self.pipe_ref)) };
+            info!(
+                "Cancelled all transfers on endpoint {ep:02x}. status={r:x}",
+                ep = self.endpoint_addr
+            );
         } else {
             assert!(self.pipe_ref == 0);
-            let r = unsafe { call_iokit_function!(self.device.device.raw, USBDeviceAbortPipeZero()) };
+            let r =
+                unsafe { call_iokit_function!(self.device.device.raw, USBDeviceAbortPipeZero()) };
             info!("Cancelled all transfers on control pipe. status={r:x}");
         }
     }
@@ -168,7 +180,7 @@ impl PlatformTransfer for TransferData {
 
 impl PlatformSubmit<Vec<u8>> for TransferData {
     unsafe fn submit(&mut self, data: Vec<u8>, callback_data: *mut std::ffi::c_void) {
-        //assert!(ep & 0x80 == 0);
+        assert!(self.endpoint_addr & 0x80 == 0);
         let len = data.len();
         self.fill(data, callback_data);
 
@@ -183,7 +195,11 @@ impl PlatformSubmit<Vec<u8>> for TransferData {
                 self.inner as *mut c_void
             )
         );
-        info!("Submitted OUT transfer {inner:?}", inner = self.inner);
+        info!(
+            "Submitted OUT transfer {inner:?} on endpoint {ep:02x}",
+            inner = self.inner,
+            ep = self.endpoint_addr
+        );
         self.check_submit_result(res);
     }
 
@@ -198,8 +214,7 @@ impl PlatformSubmit<Vec<u8>> for TransferData {
 
 impl PlatformSubmit<RequestBuffer> for TransferData {
     unsafe fn submit(&mut self, data: RequestBuffer, callback_data: *mut std::ffi::c_void) {
-        //assert!(ep & 0x80 == 0x80);
-        //assert!(ty == USBDEVFS_URB_TYPE_BULK || ty == USBDEVFS_URB_TYPE_INTERRUPT);
+        assert!(self.endpoint_addr & 0x80 == 0x80);
 
         let (data, len) = data.into_vec();
         self.fill(data, callback_data);
@@ -215,7 +230,11 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
                 self.inner as *mut c_void
             )
         );
-        info!("Submitted IN transfer {inner:?}", inner = self.inner);
+        info!(
+            "Submitted IN transfer {inner:?} on endpoint {ep:02x}",
+            inner = self.inner,
+            ep = self.endpoint_addr
+        );
 
         self.check_submit_result(res);
     }

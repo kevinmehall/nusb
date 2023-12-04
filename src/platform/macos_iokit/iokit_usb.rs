@@ -1,7 +1,8 @@
-/// Wrappers for IOKit USB device and interface
-///
-/// Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
-/// licensed under MIT OR Apache-2.0.
+//! Wrappers for IOKit USB device and interface
+//!
+//! Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
+//! licensed under MIT OR Apache-2.0.
+
 use std::{collections::BTreeMap, io::ErrorKind, time::Duration};
 
 use core_foundation::{base::TCFType, runloop::CFRunLoopSource};
@@ -114,14 +115,6 @@ impl IoKitDevice {
         }
     }
 
-    pub(crate) fn open(&mut self) -> Result<(), Error> {
-        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceOpen())) }
-    }
-
-    pub(crate) fn close(&mut self) -> Result<(), Error> {
-        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceClose())) }
-    }
-
     pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, Error> {
         unsafe {
             let mut raw_source: CFRunLoopSourceRef = std::ptr::null_mut();
@@ -178,6 +171,16 @@ pub(crate) struct EndpointInfo {
     pub(crate) max_burst: u8,
     pub(crate) mult: u8,
     pub(crate) bytes_per_interval: u16,
+}
+
+impl EndpointInfo {
+    pub(crate) fn address(&self) -> u8 {
+        if self.direction == 0 {
+            self.number
+        } else {
+            self.number | 0x80
+        }
+    }
 }
 
 /// Wrapper around an IOKit UsbInterface
@@ -284,26 +287,19 @@ impl IoKitInterface {
                     )
                 ))?;
 
-                let address = if direction == 0 {
-                    number
-                } else {
-                    number | 0x80
+                let endpoint = EndpointInfo {
+                    pipe_ref,
+                    direction,
+                    number,
+                    transfer_type,
+                    max_packet_size,
+                    interval,
+                    max_burst,
+                    mult,
+                    bytes_per_interval,
                 };
 
-                endpoints.insert(
-                    address,
-                    EndpointInfo {
-                        pipe_ref,
-                        direction,
-                        number,
-                        transfer_type,
-                        max_packet_size,
-                        interval,
-                        max_burst,
-                        mult,
-                        bytes_per_interval,
-                    },
-                );
+                endpoints.insert(endpoint.address(), endpoint);
             }
             Ok(endpoints)
         }

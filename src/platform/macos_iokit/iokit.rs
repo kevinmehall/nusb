@@ -1,5 +1,5 @@
 //! Utilities for using IOKit APIs.
-//! 
+//!
 //! Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
 //! licensed under MIT OR Apache-2.0.
 

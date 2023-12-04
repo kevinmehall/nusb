@@ -234,6 +234,7 @@ pub enum Speed {
 }
 
 impl Speed {
+    #[allow(dead_code)] // not used on all platforms
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "low" | "1.5" => Some(Speed::Low),
