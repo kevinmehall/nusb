@@ -16,7 +16,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// needs to attempt a transfer in every possible frame. That requires always
 /// having a transfer request pending with the kernel by submitting multiple
 /// transfer requests and re-submitting them as they complete.
-/// 
+///
 /// Use the methods on [`Interface`][`crate::Interface`] to obtain a `Queue`.
 ///
 /// When the `Queue` is dropped, all pending transfers are cancelled.
@@ -162,7 +162,7 @@ where
     ///
     /// This future is cancel-safe: it can be cancelled and re-created without
     /// side effects, enabling its use in `select!{}` or similar.
-    /// 
+    ///
     /// Panics if there are no transfers pending.
     pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + 'a {
         poll_fn(|cx| {

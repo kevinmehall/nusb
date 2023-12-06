@@ -17,9 +17,9 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
 
 ### :construction: Current status
 
-* Linux:  Control, bulk and interrupt transfers work, minimally tested
-* Windows:  Control, bulk and interrupt transfers work, minimally tested
-* macOS : [Not yet implemented](https://github.com/kevinmehall/nusb/issues/3)
+* Support for Linux, Windows, and macOS
+* Control, bulk and interrupt transfers work
+* Minimally tested: please test with your device and report issues
 
 ### License
 MIT or Apache 2.0, at your option
