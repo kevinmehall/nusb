@@ -34,7 +34,8 @@ impl MacDevice {
     }
 
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
-        [].into_iter()
+        let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
+        (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())
     }
 
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {

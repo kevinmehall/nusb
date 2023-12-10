@@ -3,7 +3,7 @@
 //! Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
 //! licensed under MIT OR Apache-2.0.
 
-use std::{collections::BTreeMap, io::ErrorKind, time::Duration};
+use std::{collections::BTreeMap, io::ErrorKind, ptr, slice, time::Duration};
 
 use core_foundation::{base::TCFType, runloop::CFRunLoopSource};
 use core_foundation_sys::runloop::CFRunLoopSourceRef;
@@ -27,7 +27,8 @@ use super::{
     },
     iokit_c::{
         kIOCFPlugInInterfaceID, kIOUSBFindInterfaceDontCare, kIOUsbDeviceUserClientTypeID,
-        IOCFPlugInInterface, IOCreatePlugInInterfaceForService, IOUSBFindInterfaceRequest,
+        IOCFPlugInInterface, IOCreatePlugInInterfaceForService, IOUSBConfigurationDescriptor,
+        IOUSBFindInterfaceRequest,
     },
 };
 
@@ -144,6 +145,29 @@ impl IoKitDevice {
             ))?;
 
             Ok(IoServiceIterator::new(iterator))
+        }
+    }
+
+    pub(crate) fn get_number_of_configurations(&self) -> Result<u8, Error> {
+        unsafe {
+            let mut num = 0;
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                GetNumberOfConfigurations(&mut num)
+            ))?;
+            Ok(num)
+        }
+    }
+
+    pub(crate) fn get_configuration_descriptor(&self, index: u8) -> Result<&[u8], Error> {
+        unsafe {
+            let mut ptr: *mut IOUSBConfigurationDescriptor = ptr::null_mut();
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                GetConfigurationDescriptorPtr(index, &mut ptr)
+            ))?;
+            let len = u16::to_le((*ptr).wTotalLength) as usize;
+            Ok(slice::from_raw_parts(ptr as *const u8, len))
         }
     }
 }
