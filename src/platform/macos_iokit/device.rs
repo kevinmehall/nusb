@@ -33,6 +33,10 @@ impl MacDevice {
         }))
     }
 
+    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+        [].into_iter()
+    }
+
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
         unsafe {
             check_iokit_return(call_iokit_function!(

@@ -1,8 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{fs::File, io::Read, mem::ManuallyDrop, path::PathBuf, sync::Arc};
 
 use log::{debug, error};
 use rustix::{
-    fd::OwnedFd,
+    fd::{AsRawFd, FromRawFd, OwnedFd},
     fs::{Mode, OFlags},
     io::Errno,
 };
@@ -12,6 +12,7 @@ use super::{
     usbfs::{self, Urb},
 };
 use crate::{
+    descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{notify_completion, EndpointType, TransferHandle},
     DeviceInfo, Error,
 };
@@ -19,6 +20,9 @@ use crate::{
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
     events_id: usize,
+
+    /// Read from the fd, consists of device descriptor followed by configuration descriptors
+    descriptors: Vec<u8>,
 }
 
 impl LinuxDevice {
@@ -31,13 +35,24 @@ impl LinuxDevice {
         debug!("Opening usbfs device {}", path.display());
         let fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
 
+        let descriptors = {
+            let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            buf
+        };
+
         // because there's no Arc::try_new_cyclic
         let mut events_err = None;
         let arc = Arc::new_cyclic(|weak| {
             let res = events::register(&fd, weak.clone());
             let events_id = *res.as_ref().unwrap_or(&usize::MAX);
             events_err = res.err();
-            LinuxDevice { fd, events_id }
+            LinuxDevice {
+                fd,
+                events_id,
+                descriptors,
+            }
         });
 
         if let Some(err) = events_err {
@@ -82,6 +97,10 @@ impl LinuxDevice {
                 error!("Unexpected error {e} from REAPURBNDELAY");
             }
         }
+    }
+
+    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+        parse_concatenated_config_descriptors(&self.descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
     }
 
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {

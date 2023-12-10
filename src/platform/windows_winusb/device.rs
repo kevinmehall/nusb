@@ -34,6 +34,10 @@ impl WindowsDevice {
         }))
     }
 
+    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+        [].into_iter()
+    }
+
     pub(crate) fn set_configuration(&self, _configuration: u8) -> Result<(), Error> {
         Err(io::Error::new(
             ErrorKind::Unsupported,

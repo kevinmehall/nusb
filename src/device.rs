@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    descriptors::Configuration,
     platform,
     transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
     DeviceInfo, Error,
@@ -41,6 +42,13 @@ impl Device {
     pub fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
         let backend = self.backend.claim_interface(interface)?;
         Ok(Interface { backend })
+    }
+
+    /// Iterate over the configurations of the device.
+    pub fn configurations(&self) -> impl Iterator<Item = Configuration> {
+        self.backend
+            .configuration_descriptors()
+            .map(Configuration::new)
     }
 
     /// Set the device configuration.
