@@ -8,8 +8,12 @@ use std::{
 
 use log::{debug, error};
 use windows_sys::Win32::{
-    Devices::Usb::{
-        WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting, WINUSB_INTERFACE_HANDLE,
+    Devices::{
+        Properties::DEVPKEY_Device_Address,
+        Usb::{
+            WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting,
+            GUID_DEVINTERFACE_USB_DEVICE, WINUSB_INTERFACE_HANDLE,
+        },
     },
     Foundation::{FALSE, TRUE},
 };
@@ -22,6 +26,7 @@ use crate::{
 
 use super::{
     hub::HubHandle,
+    setupapi::DeviceInfoSet,
     util::{create_file, raw_handle},
 };
 
@@ -34,9 +39,22 @@ impl WindowsDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
         debug!("Creating device for {:?}", d.instance_id);
 
+        // Look up the device again in case the DeviceInfo is stale.
+        // In particular, don't trust its `port_number` because another device might now be connected to
+        // that port, and we'd get its descriptors instead.
+        let dset = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_DEVICE), Some(&d.instance_id))?;
+        let Some(dev) = dset.iter_devices().next() else {
+            return Err(Error::new(ErrorKind::NotConnected, "Device not connected"));
+        };
+
         let hub_handle = HubHandle::by_instance_id(&d.parent_instance_id)
             .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
-        let hub_port_number = d.port_number;
+        let Some(hub_port_number) = dev.get_u32_property(DEVPKEY_Device_Address) else {
+            return Err(Error::new(
+                ErrorKind::NotConnected,
+                "Could not find hub port number",
+            ));
+        };
 
         let connection_info = hub_handle.get_node_connection_info(hub_port_number)?;
 
