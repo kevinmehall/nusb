@@ -15,13 +15,18 @@ use windows_sys::Win32::{
 };
 
 use crate::{
+    descriptors::{validate_config_descriptor, DESCRIPTOR_TYPE_CONFIGURATION},
     transfer::{EndpointType, TransferHandle},
     DeviceInfo, Error,
 };
 
-use super::util::{create_file, raw_handle};
+use super::{
+    hub::HubHandle,
+    util::{create_file, raw_handle},
+};
 
 pub(crate) struct WindowsDevice {
+    config_descriptors: Vec<Vec<u8>>,
     interface_paths: HashMap<u8, OsString>,
 }
 
@@ -29,13 +34,36 @@ impl WindowsDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
         debug!("Creating device for {:?}", d.instance_id);
 
+        let hub_handle = HubHandle::by_instance_id(&d.parent_instance_id)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
+        let hub_port_number = d.port_number;
+
+        let connection_info = hub_handle.get_node_connection_info(hub_port_number)?;
+
+        let num_configurations = connection_info.DeviceDescriptor.bNumConfigurations;
+
+        let config_descriptors = (0..num_configurations)
+            .flat_map(|i| {
+                let res =
+                    hub_handle.get_descriptor(hub_port_number, DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
+                match res {
+                    Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
+                    Err(e) => {
+                        error!("Failed to read config descriptor {}: {}", i, e);
+                        None
+                    }
+                }
+            })
+            .collect();
+
         Ok(Arc::new(WindowsDevice {
             interface_paths: d.interfaces.clone(),
+            config_descriptors,
         }))
     }
 
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
-        [].into_iter()
+        self.config_descriptors.iter().map(|d| &d[..])
     }
 
     pub(crate) fn set_configuration(&self, _configuration: u8) -> Result<(), Error> {
