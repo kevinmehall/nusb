@@ -20,10 +20,15 @@ fn inspect_device(dev: DeviceInfo) {
     let dev = match dev.open() {
         Ok(dev) => dev,
         Err(e) => {
-            println!("\tFailed to open device: {}", e);
+            println!("  Failed to open device: {}", e);
             return;
         }
     };
+
+    match dev.active_configuration() {
+        Ok(config) => println!("  Active configuration is {}", config.configuration_value()),
+        Err(e) => println!("Unknown active configuration: {e}"),
+    }
 
     for config in dev.configurations() {
         println!("  Configuration {}", config.configuration_value());

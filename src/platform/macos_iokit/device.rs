@@ -33,6 +33,10 @@ impl MacDevice {
         }))
     }
 
+    pub(crate) fn active_configuration_value(&self) -> u8 {
+        1
+    }
+
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
         let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
         (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())

@@ -80,6 +80,10 @@ impl WindowsDevice {
         }))
     }
 
+    pub(crate) fn active_configuration_value(&self) -> u8 {
+        1
+    }
+
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
         self.config_descriptors.iter().map(|d| &d[..])
     }

@@ -14,7 +14,7 @@ use crate::Speed;
 pub struct SysfsPath(PathBuf);
 
 impl SysfsPath {
-    fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, io::Error>
+    pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, io::Error>
     where
         T: FromStr,
         T::Err: std::error::Error + Send + Sync + 'static,
