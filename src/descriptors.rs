@@ -28,6 +28,16 @@ pub(crate) const DESCRIPTOR_LEN_INTERFACE: u8 = 9;
 pub(crate) const DESCRIPTOR_TYPE_ENDPOINT: u8 = 0x05;
 pub(crate) const DESCRIPTOR_LEN_ENDPOINT: u8 = 7;
 
+/// USB defined language IDs for string descriptors.
+///
+/// In practice, different language IDs are not used,
+/// and device string descriptors are only provided
+/// with [`language_id::US_ENGLISH`].
+pub mod language_id {
+    /// US English
+    pub const US_ENGLISH: u16 = 0x0409;
+}
+
 /// A raw USB descriptor.
 ///
 /// Wraps a byte slice to provide access to the bytes of a descriptor by implementing `Deref` to `[u8]`,

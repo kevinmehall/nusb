@@ -38,6 +38,8 @@ pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
     interface_paths: HashMap<u8, OsString>,
     active_config: u8,
+    hub_handle: HubHandle,
+    hub_port_number: u32,
 }
 
 impl WindowsDevice {
@@ -83,6 +85,8 @@ impl WindowsDevice {
             interface_paths: d.interfaces.clone(),
             config_descriptors,
             active_config: connection_info.CurrentConfigurationValue,
+            hub_handle,
+            hub_port_number,
         }))
     }
 
@@ -99,6 +103,19 @@ impl WindowsDevice {
             ErrorKind::Unsupported,
             "set_configuration not supported by WinUSB",
         ))
+    }
+
+    pub(crate) fn get_descriptor(
+        &self,
+        desc_type: u8,
+        desc_index: u8,
+        language_id: u16,
+    ) -> Result<Vec<u8>, Error> {
+        //TODO: this has a race condition in that the device is identified only by port number. If the device is
+        // disconnected and another device connects to the same port while this `Device` exists, it may return
+        // descriptors from the new device.
+        self.hub_handle
+            .get_descriptor(self.hub_port_number, desc_type, desc_index, language_id)
     }
 
     pub(crate) fn reset(&self) -> Result<(), Error> {
