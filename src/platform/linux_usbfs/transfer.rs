@@ -12,9 +12,12 @@ use crate::transfer::{
     RequestBuffer, ResponseBuffer, TransferError, SETUP_PACKET_SIZE,
 };
 
-use super::usbfs::{
-    Urb, USBDEVFS_URB_TYPE_BULK, USBDEVFS_URB_TYPE_CONTROL, USBDEVFS_URB_TYPE_INTERRUPT,
-    USBDEVFS_URB_TYPE_ISO,
+use super::{
+    errno_to_transfer_error,
+    usbfs::{
+        Urb, USBDEVFS_URB_TYPE_BULK, USBDEVFS_URB_TYPE_CONTROL, USBDEVFS_URB_TYPE_INTERRUPT,
+        USBDEVFS_URB_TYPE_ISO,
+    },
 };
 
 /// Linux-specific transfer state.
@@ -213,13 +216,7 @@ fn urb_status(urb: &Urb) -> Result<(), TransferError> {
     }
 
     // It's sometimes positive, sometimes negative, but rustix panics if negative.
-    Err(match Errno::from_raw_os_error(urb.status.abs()) {
-        Errno::NODEV | Errno::SHUTDOWN => TransferError::Disconnected,
-        Errno::PIPE => TransferError::Stall,
-        Errno::NOENT | Errno::CONNRESET => TransferError::Cancelled,
-        Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
-            TransferError::Fault
-        }
-        _ => TransferError::Unknown,
-    })
+    Err(errno_to_transfer_error(Errno::from_raw_os_error(
+        urb.status.abs(),
+    )))
 }

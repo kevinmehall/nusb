@@ -1,3 +1,4 @@
+use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
     io::Read,
@@ -17,13 +18,15 @@ use rustix::{
 };
 
 use super::{
-    events,
+    errno_to_transfer_error, events,
     usbfs::{self, Urb},
     SysfsPath,
 };
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
-    transfer::{notify_completion, EndpointType, TransferHandle},
+    transfer::{
+        notify_completion, Control, Direction, EndpointType, TransferError, TransferHandle,
+    },
     DeviceInfo, Error,
 };
 
@@ -144,6 +147,68 @@ impl LinuxDevice {
         Ok(())
     }
 
+    /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
+    unsafe fn control_blocking(
+        &self,
+        direction: Direction,
+        control: Control,
+        data: *mut u8,
+        len: usize,
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        let r = usbfs::control(
+            &self.fd,
+            usbfs::CtrlTransfer {
+                bRequestType: control.request_type(direction),
+                bRequest: control.request,
+                wValue: control.value,
+                wIndex: control.index,
+                wLength: len.try_into().expect("length must fit in u16"),
+                timeout: timeout
+                    .as_millis()
+                    .try_into()
+                    .expect("timeout must fit in u32 ms"),
+                data: data as *mut c_void,
+            },
+        );
+
+        r.map_err(errno_to_transfer_error)
+    }
+
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        unsafe {
+            self.control_blocking(
+                Direction::In,
+                control,
+                data.as_mut_ptr(),
+                data.len(),
+                timeout,
+            )
+        }
+    }
+
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        unsafe {
+            self.control_blocking(
+                Direction::Out,
+                control,
+                data.as_ptr() as *mut u8,
+                data.len(),
+                timeout,
+            )
+        }
+    }
+
     pub(crate) fn make_control_transfer(self: &Arc<Self>) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(
             self.clone(),
@@ -221,6 +286,24 @@ impl LinuxInterface {
             endpoint,
             ep_type,
         ))
+    }
+
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.device.control_in_blocking(control, data, timeout)
+    }
+
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.device.control_out_blocking(control, data, timeout)
     }
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {

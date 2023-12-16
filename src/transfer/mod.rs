@@ -22,7 +22,7 @@ pub use buffer::{RequestBuffer, ResponseBuffer};
 mod control;
 #[allow(unused)]
 pub(crate) use control::SETUP_PACKET_SIZE;
-pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
+pub use control::{Control, ControlIn, ControlOut, ControlType, Direction, Recipient};
 
 mod internal;
 pub(crate) use internal::{

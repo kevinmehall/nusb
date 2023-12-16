@@ -1,9 +1,12 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     descriptors::{ActiveConfigurationError, Configuration},
     platform,
-    transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
+    transfer::{
+        Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
+        TransferFuture,
+    },
     DeviceInfo, Error,
 };
 
@@ -85,7 +88,43 @@ impl Device {
         self.backend.reset()
     }
 
-    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_in_blocking(control, data, timeout)
+    }
+
+    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_out_blocking(control, data, timeout)
+    }
+
+    /// Asynchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Example
     ///
@@ -172,6 +211,36 @@ impl Interface {
     /// alternate setting when the interface is released or the program exits.
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         self.backend.set_alt_setting(alt_setting)
+    }
+
+    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_in_blocking(control, data, timeout)
+    }
+
+    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_out_blocking(control, data, timeout)
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.

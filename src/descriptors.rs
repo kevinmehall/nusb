@@ -2,7 +2,13 @@
 //!
 //! Descriptors are blocks of data that describe the functionality of a USB device.
 
-use std::{collections::BTreeMap, fmt::{Display, Debug}, io::ErrorKind, iter, ops::Deref};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+    io::ErrorKind,
+    iter,
+    ops::Deref,
+};
 
 use log::warn;
 
@@ -287,7 +293,12 @@ impl<'a> Configuration<'a> {
 
 struct DebugEntries<F>(F);
 
-impl<F, I> Debug for DebugEntries<F> where F: Fn() -> I, I: Iterator, I::Item: Debug {
+impl<F, I> Debug for DebugEntries<F>
+where
+    F: Fn() -> I,
+    I: Iterator,
+    I::Item: Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.0()).finish()
     }
@@ -301,7 +312,10 @@ impl<'a> Debug for Configuration<'a> {
             .field("attributes", &self.attributes())
             .field("max_power", &self.max_power())
             .field("string_index", &self.string_index())
-            .field("interface_alt_settings", &DebugEntries(|| self.interface_alt_settings()))
+            .field(
+                "interface_alt_settings",
+                &DebugEntries(|| self.interface_alt_settings()),
+            )
             .finish()
     }
 }

@@ -14,8 +14,8 @@ use windows_sys::Win32::{
     },
     Foundation::{
         GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
-        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, ERROR_REQUEST_ABORTED, FALSE,
-        TRUE, WIN32_ERROR,
+        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, ERROR_REQUEST_ABORTED,
+        ERROR_SEM_TIMEOUT, ERROR_TIMEOUT, FALSE, TRUE, WIN32_ERROR,
     },
     System::IO::{CancelIoEx, OVERLAPPED},
 };
@@ -321,10 +321,10 @@ pub(super) fn handle_event(completion: *mut OVERLAPPED) {
     }
 }
 
-fn map_error(err: WIN32_ERROR) -> TransferError {
+pub(crate) fn map_error(err: WIN32_ERROR) -> TransferError {
     match err {
         ERROR_GEN_FAILURE => TransferError::Stall,
-        ERROR_REQUEST_ABORTED => TransferError::Cancelled,
+        ERROR_REQUEST_ABORTED | ERROR_TIMEOUT | ERROR_SEM_TIMEOUT => TransferError::Cancelled,
         ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
             TransferError::Disconnected
         }

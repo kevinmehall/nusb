@@ -1,26 +1,30 @@
 use std::{
     collections::HashMap,
-    ffi::OsString,
+    ffi::{c_void, OsString},
     io::{self, ErrorKind},
+    mem::size_of_val,
     os::windows::prelude::OwnedHandle,
+    ptr::null_mut,
     sync::Arc,
+    time::Duration,
 };
 
-use log::{debug, error};
+use log::{debug, error, info};
 use windows_sys::Win32::{
     Devices::{
         Properties::DEVPKEY_Device_Address,
         Usb::{
-            WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting,
-            GUID_DEVINTERFACE_USB_DEVICE, WINUSB_INTERFACE_HANDLE,
+            WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize,
+            WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, GUID_DEVINTERFACE_USB_DEVICE,
+            PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
         },
     },
-    Foundation::{FALSE, TRUE},
+    Foundation::{GetLastError, FALSE, TRUE},
 };
 
 use crate::{
     descriptors::{validate_config_descriptor, DESCRIPTOR_TYPE_CONFIGURATION},
-    transfer::{EndpointType, TransferHandle},
+    transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
     DeviceInfo, Error,
 };
 
@@ -144,6 +148,111 @@ impl WindowsInterface {
         ep_type: EndpointType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
+    }
+
+    /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
+    unsafe fn control_blocking(
+        &self,
+        direction: Direction,
+        control: Control,
+        data: *mut u8,
+        len: usize,
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        info!("Blocking control {direction:?}, {len} bytes");
+        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        let r = WinUsb_SetPipePolicy(
+            self.winusb_handle,
+            0,
+            PIPE_TRANSFER_TIMEOUT,
+            size_of_val(&timeout_ms) as u32,
+            &timeout_ms as *const u32 as *const c_void,
+        );
+
+        if r != TRUE {
+            error!(
+                "WinUsb_SetPipePolicy PIPE_TRANSFER_TIMEOUT failed: {}",
+                io::Error::last_os_error()
+            );
+        }
+
+        let pkt = WINUSB_SETUP_PACKET {
+            RequestType: control.request_type(direction),
+            Request: control.request,
+            Value: control.value,
+            Index: control.index,
+            Length: len.try_into().expect("request size too large"),
+        };
+
+        let mut actual_len = 0;
+
+        let r = WinUsb_ControlTransfer(
+            self.winusb_handle,
+            pkt,
+            data,
+            len.try_into().expect("request size too large"),
+            &mut actual_len,
+            null_mut(),
+        );
+
+        if r == TRUE {
+            Ok(actual_len as usize)
+        } else {
+            error!(
+                "WinUsb_ControlTransfer failed: {}",
+                io::Error::last_os_error()
+            );
+            Err(super::transfer::map_error(GetLastError()))
+        }
+    }
+
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        unsafe {
+            self.control_blocking(
+                Direction::In,
+                control,
+                data.as_mut_ptr(),
+                data.len(),
+                timeout,
+            )
+        }
+    }
+
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        // When passed a pointer to read-only memory (e.g. a constant slice),
+        // WinUSB fails with "Invalid access to memory location. (os error 998)".
+        // I assume the kernel is checking the pointer for write access
+        // regardless of the transfer direction. Copy the data to the stack to ensure
+        // we give it a pointer to writable memory.
+        let mut buf = [0; 4096];
+        let Some(buf) = buf.get_mut(..data.len()) else {
+            error!(
+                "Control transfer length {} exceeds limit of 4096",
+                data.len()
+            );
+            return Err(TransferError::Unknown);
+        };
+        buf.copy_from_slice(data);
+
+        unsafe {
+            self.control_blocking(
+                Direction::Out,
+                control,
+                buf.as_mut_ptr(),
+                buf.len(),
+                timeout,
+            )
+        }
     }
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {

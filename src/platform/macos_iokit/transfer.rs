@@ -5,9 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use io_kit_sys::ret::{
-    kIOReturnAborted, kIOReturnNoDevice, kIOReturnSuccess, kIOReturnUnderrun, IOReturn,
-};
+use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 use log::{error, info};
 
 use crate::{
@@ -18,7 +16,7 @@ use crate::{
     },
 };
 
-use super::{iokit::call_iokit_function, iokit_usb::EndpointInfo};
+use super::{iokit::call_iokit_function, iokit_usb::EndpointInfo, status_to_transfer_result};
 
 extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut c_void) {
     info!(
@@ -146,16 +144,7 @@ impl TransferData {
     unsafe fn take_status(&mut self) -> (Result<(), TransferError>, usize) {
         let inner = unsafe { &*self.inner };
 
-        #[allow(non_upper_case_globals)]
-        #[deny(unreachable_patterns)]
-        let status = match inner.status {
-            kIOReturnSuccess | kIOReturnUnderrun => Ok(()),
-            kIOReturnNoDevice => Err(TransferError::Disconnected),
-            kIOReturnAborted => Err(TransferError::Cancelled),
-            _ => Err(TransferError::Unknown),
-        };
-
-        (status, inner.actual_len)
+        (status_to_transfer_result(inner.status), inner.actual_len)
     }
 }
 
