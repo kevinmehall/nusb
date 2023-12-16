@@ -170,6 +170,14 @@ impl IoKitDevice {
             Ok(slice::from_raw_parts(ptr as *const u8, len))
         }
     }
+
+    pub(crate) fn get_configuration(&self) -> Result<u8, Error> {
+        unsafe {
+            let mut val = 0;
+            check_iokit_return(call_iokit_function!(self.raw, GetConfiguration(&mut val)))?;
+            Ok(val)
+        }
+    }
 }
 
 impl Drop for IoKitDevice {
