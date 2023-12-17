@@ -39,6 +39,9 @@ pub struct DeviceInfo {
     pub(crate) interfaces: HashMap<u8, OsString>,
 
     #[cfg(target_os = "macos")]
+    pub(crate) registry_id: u64,
+
+    #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
     pub(crate) bus_number: u8,
@@ -94,6 +97,12 @@ impl DeviceInfo {
     #[cfg(target_os = "macos")]
     pub fn location_id(&self) -> u32 {
         self.location_id
+    }
+
+    /// *(macOS-only)* IOKit [Registry Entry ID](https://developer.apple.com/documentation/iokit/1514719-ioregistryentrygetregistryentryi?language=objc)
+    #[cfg(target_os = "macos")]
+    pub fn registry_entry_id(&self) -> u64 {
+        self.registry_id
     }
 
     /// Number identifying the bus / host controller where the device is connected.
@@ -207,6 +216,12 @@ impl std::fmt::Debug for DeviceInfo {
                 .field("port_number", &self.port_number)
                 .field("driver", &self.driver)
                 .field("interfaces", &self.interfaces);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            s.field("location_id", &self.location_id);
+            s.field("registry_entry_id", &self.registry_id);
         }
 
         s.finish()

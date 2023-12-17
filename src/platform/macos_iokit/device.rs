@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    enumeration::service_by_location_id,
+    enumeration::service_by_registry_id,
     events::EventRegistration,
     iokit::{call_iokit_function, check_iokit_return},
     iokit_usb::{EndpointInfo, IoKitDevice, IoKitInterface},
@@ -22,7 +22,8 @@ pub(crate) struct MacDevice {
 
 impl MacDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<MacDevice>, Error> {
-        let service = service_by_location_id(d.location_id)?;
+        log::info!("Opening device from registry id {}", d.registry_id);
+        let service = service_by_registry_id(d.registry_id)?;
         let device = IoKitDevice::new(service)?;
         let _event_registration = add_event_source(device.create_async_event_source()?);
 
