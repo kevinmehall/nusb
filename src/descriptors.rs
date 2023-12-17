@@ -473,6 +473,12 @@ pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iter
     })
 }
 
+/// Make public when fuzzing
+#[cfg(fuzzing)]
+pub fn fuzz_parse_concatenated_config_descriptors(buf: &[u8]) -> impl Iterator<Item = &[u8]> {
+    parse_concatenated_config_descriptors(buf)
+}
+
 #[cfg(test)]
 mod test_concatenated {
     use super::parse_concatenated_config_descriptors;
