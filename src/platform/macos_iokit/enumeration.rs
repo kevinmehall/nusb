@@ -9,7 +9,8 @@ use core_foundation::{
 use io_kit_sys::{
     kIOMasterPortDefault, kIORegistryIterateParents, kIORegistryIterateRecursively,
     keys::kIOServicePlane, ret::kIOReturnSuccess, usb::lib::kIOUSBDeviceClassName,
-    IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
+    IORegistryEntryGetRegistryEntryID, IORegistryEntrySearchCFProperty,
+    IOServiceGetMatchingServices, IOServiceMatching,
 };
 use log::{error, info};
 
@@ -38,19 +39,20 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter()?.filter_map(probe_device))
 }
 
-pub(crate) fn service_by_location_id(location_id: u32) -> Result<IoService, Error> {
+pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
     usb_service_iter()?
-        .find(|dev| get_integer_property(dev, "locationID") == Some(location_id))
-        .ok_or(Error::new(ErrorKind::NotFound, "not found by locationID"))
+        .find(|dev| get_id(dev) == Some(registry_id))
+        .ok_or(Error::new(ErrorKind::NotFound, "not found by registry id"))
 }
 
 fn probe_device(device: IoService) -> Option<DeviceInfo> {
-    // Can run `ioreg -p IOUSB -l` to see all properties
-    let location_id: u32 = get_integer_property(&device, "locationID")?;
-    log::info!("Probing device {location_id}");
+    let registry_id = get_id(&device)?;
+    log::info!("Probing device {registry_id}");
 
+    // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
-        location_id,
+        registry_id,
+        location_id: get_integer_property(&device, "locationID")?,
         bus_number: 0, // TODO: does this exist on macOS?
         device_address: get_integer_property(&device, "USB Address")?,
         vendor_id: get_integer_property(&device, "idVendor")?,
@@ -64,6 +66,21 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
         product_string: get_string_property(&device, "USB Product Name"),
         serial_number: get_string_property(&device, "USB Serial Number"),
     })
+}
+
+fn get_id(device: &IoService) -> Option<u64> {
+    unsafe {
+        let mut out = 0;
+        let r = IORegistryEntryGetRegistryEntryID(device.get(), &mut out);
+
+        if r == kIOReturnSuccess {
+            Some(out)
+        } else {
+            // not sure this can actually fail.
+            error!("IORegistryEntryGetRegistryEntryID failed with {r}");
+            None
+        }
+    }
 }
 
 fn get_property<T: ConcreteCFType>(device: &IoService, property: &'static str) -> Option<T> {
