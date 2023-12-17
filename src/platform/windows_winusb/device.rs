@@ -33,6 +33,7 @@ use super::{
 pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
     interface_paths: HashMap<u8, OsString>,
+    active_config: u8,
 }
 
 impl WindowsDevice {
@@ -77,11 +78,12 @@ impl WindowsDevice {
         Ok(Arc::new(WindowsDevice {
             interface_paths: d.interfaces.clone(),
             config_descriptors,
+            active_config: connection_info.CurrentConfigurationValue,
         }))
     }
 
     pub(crate) fn active_configuration_value(&self) -> u8 {
-        1
+        self.active_config
     }
 
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
