@@ -20,35 +20,19 @@ fn inspect_device(dev: DeviceInfo) {
     let dev = match dev.open() {
         Ok(dev) => dev,
         Err(e) => {
-            println!("  Failed to open device: {}", e);
+            println!("Failed to open device: {}", e);
             return;
         }
     };
 
     match dev.active_configuration() {
-        Ok(config) => println!("  Active configuration is {}", config.configuration_value()),
+        Ok(config) => println!("Active configuration is {}", config.configuration_value()),
         Err(e) => println!("Unknown active configuration: {e}"),
     }
 
     for config in dev.configurations() {
-        println!("  Configuration {}", config.configuration_value());
-        for intf in config.interfaces() {
-            for alt in intf.alt_settings() {
-                println!(
-                    "    Interface {}, alt setting {}",
-                    alt.interface_number(),
-                    alt.alternate_setting()
-                );
-                for ep in alt.endpoints() {
-                    println!(
-                        "      Endpoint {:02x} {:?} {:?}",
-                        ep.address(),
-                        ep.transfer_type(),
-                        ep.direction()
-                    );
-                }
-            }
-        }
+        println!("{config:#?}");
     }
+    println!("");
     println!("");
 }

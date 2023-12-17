@@ -2,7 +2,7 @@
 //!
 //! Descriptors are blocks of data that describe the functionality of a USB device.
 
-use std::{collections::BTreeMap, fmt::Display, io::ErrorKind, iter, ops::Deref};
+use std::{collections::BTreeMap, fmt::{Display, Debug}, io::ErrorKind, iter, ops::Deref};
 
 use log::warn;
 
@@ -285,6 +285,27 @@ impl<'a> Configuration<'a> {
     }
 }
 
+struct DebugEntries<F>(F);
+
+impl<F, I> Debug for DebugEntries<F> where F: Fn() -> I, I: Iterator, I::Item: Debug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0()).finish()
+    }
+}
+
+impl<'a> Debug for Configuration<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Configuration")
+            .field("configuration_value", &self.configuration_value())
+            .field("num_interfaces", &self.num_interfaces())
+            .field("attributes", &self.attributes())
+            .field("max_power", &self.max_power())
+            .field("string_index", &self.string_index())
+            .field("interface_alt_settings", &DebugEntries(|| self.interface_alt_settings()))
+            .finish()
+    }
+}
+
 /// Interface descriptors for alternate settings, grouped by the interface number.
 #[derive(Clone)]
 pub struct InterfaceGroup<'a> {
@@ -371,6 +392,21 @@ impl<'a> InterfaceAltSetting<'a> {
     }
 }
 
+impl<'a> Debug for InterfaceAltSetting<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InterfaceAltSetting")
+            .field("interface_number", &self.interface_number())
+            .field("alternate_setting", &self.alternate_setting())
+            .field("num_endpoints", &self.num_endpoints())
+            .field("class", &self.class())
+            .field("subclass", &self.subclass())
+            .field("protocol", &self.protocol())
+            .field("string_index", &self.string_index())
+            .field("endpoints", &DebugEntries(|| self.endpoints()))
+            .finish()
+    }
+}
+
 /// Information about a USB endpoint, with access to any associated descriptors.
 pub struct Endpoint<'a>(&'a [u8]);
 
@@ -432,6 +468,19 @@ descriptor_fields! {
         /// Get the `bInterval` field: Polling interval in frames or microframes.
         #[doc(alias = "bInterval")]
         pub fn interval at 6 -> u8;
+    }
+}
+
+impl<'a> Debug for Endpoint<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("address", &format_args!("0x{:02X}", self.address()))
+            .field("direction", &self.direction())
+            .field("transfer_type", &self.transfer_type())
+            .field("max_packet_size", &self.max_packet_size())
+            .field("packets_per_microframe", &self.packets_per_microframe())
+            .field("interval", &self.interval())
+            .finish()
     }
 }
 
