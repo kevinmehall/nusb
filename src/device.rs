@@ -1,11 +1,19 @@
-use std::sync::Arc;
+use std::{io::ErrorKind, sync::Arc, time::Duration};
+
+use log::error;
 
 use crate::{
     descriptors::{ActiveConfigurationError, Configuration},
     platform,
-    transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
+    transfer::{
+        Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
+        TransferFuture,
+    },
     DeviceInfo, Error,
 };
+
+const STANDARD_REQUEST_GET_DESCRIPTOR: u8 = 0x06;
+const DESCRIPTOR_TYPE_STRING: u8 = 0x03;
 
 /// An opened USB device.
 ///
@@ -74,6 +82,103 @@ impl Device {
         self.backend.set_configuration(configuration)
     }
 
+    /// Request a descriptor from the device.
+    ///
+    /// The `language_id` should be `0` unless you are requesting a string descriptor.
+    ///
+    /// ### Platform-specific details
+    ///
+    /// * On Windows, the timeout argument is ignored, and an OS-defined timeout is used.
+    /// * On Windows, this does not wake suspended devices. Reading their
+    ///   descriptors will return an error.
+    pub fn get_descriptor(
+        &self,
+        desc_type: u8,
+        desc_index: u8,
+        language_id: u16,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, Error> {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = timeout;
+            self.backend
+                .get_descriptor(desc_type, desc_index, language_id)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            use crate::transfer::{ControlType, Recipient};
+
+            let mut buf = vec![0; 4096];
+            let len = self.control_in_blocking(
+                Control {
+                    control_type: ControlType::Standard,
+                    recipient: Recipient::Device,
+                    request: STANDARD_REQUEST_GET_DESCRIPTOR,
+                    value: ((desc_type as u16) << 8) | desc_index as u16,
+                    index: language_id,
+                },
+                &mut buf,
+                timeout,
+            )?;
+
+            buf.truncate(len);
+            Ok(buf)
+        }
+    }
+
+    /// Request the list of supported languages for string descriptors.
+    ///
+    /// ### Platform-specific details
+    ///
+    /// See notes on [`get_descriptor`][`Self::get_descriptor`].
+    pub fn get_string_descriptor_supported_languages(
+        &self,
+        timeout: Duration,
+    ) -> Result<impl Iterator<Item = u16>, Error> {
+        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)?;
+        validate_string_descriptor(&data)?;
+
+        //TODO: Use array_chunks once stable
+        let mut iter = data.into_iter().skip(2);
+        Ok(std::iter::from_fn(move || {
+            Some(u16::from_le_bytes([iter.next()?, iter.next()?]))
+        }))
+    }
+
+    /// Request a string descriptor from the device.
+    ///
+    /// Almost all devices support only the language ID [`US_ENGLISH`][`crate::descriptors::language_id::US_ENGLISH`].
+    ///
+    /// Unpaired UTF-16 surrogates will be replaced with `�`, like [`String::from_utf16_lossy`].
+    ///
+    /// ### Platform-specific details
+    ///
+    /// See notes on [`get_descriptor`][`Self::get_descriptor`].
+    pub fn get_string_descriptor(
+        &self,
+        desc_index: u8,
+        language_id: u16,
+        timeout: Duration,
+    ) -> Result<String, Error> {
+        if desc_index == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "string descriptor index 0 is reserved for the language table",
+            ));
+        }
+        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)?;
+        validate_string_descriptor(&data)?;
+
+        Ok(char::decode_utf16(
+            data[2..]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes(c.try_into().unwrap())),
+        )
+        .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect::<String>())
+    }
+
     /// Reset the device, forcing it to re-enumerate.
     ///
     /// This `Device` will no longer be usable, and you should drop it and call
@@ -85,7 +190,43 @@ impl Device {
         self.backend.reset()
     }
 
-    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_in_blocking(control, data, timeout)
+    }
+
+    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_out_blocking(control, data, timeout)
+    }
+
+    /// Asynchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Example
     ///
@@ -152,6 +293,17 @@ impl Device {
     }
 }
 
+fn validate_string_descriptor(data: &[u8]) -> Result<(), Error> {
+    if data.len() < 2 || data[0] as usize != data.len() || data[1] != DESCRIPTOR_TYPE_STRING {
+        error!("String descriptor language list read {data:?}, not a valid string descriptor");
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "string descriptor data was invalid",
+        ));
+    }
+    Ok(())
+}
+
 /// An opened interface of a USB device.
 ///
 /// Obtain an `Interface` with the [`Device::claim_interface`] method.
@@ -172,6 +324,36 @@ impl Interface {
     /// alternate setting when the interface is released or the program exits.
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         self.backend.set_alt_setting(alt_setting)
+    }
+
+    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    pub fn control_in_blocking(
+        &self,
+        control: Control,
+        data: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_in_blocking(control, data, timeout)
+    }
+
+    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
+    ///   are better off using the async methods.
+    pub fn control_out_blocking(
+        &self,
+        control: Control,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, TransferError> {
+        self.backend.control_out_blocking(control, data, timeout)
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.

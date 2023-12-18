@@ -2,7 +2,13 @@
 //!
 //! Descriptors are blocks of data that describe the functionality of a USB device.
 
-use std::{collections::BTreeMap, fmt::{Display, Debug}, io::ErrorKind, iter, ops::Deref};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+    io::ErrorKind,
+    iter,
+    ops::Deref,
+};
 
 use log::warn;
 
@@ -21,6 +27,16 @@ pub(crate) const DESCRIPTOR_LEN_INTERFACE: u8 = 9;
 
 pub(crate) const DESCRIPTOR_TYPE_ENDPOINT: u8 = 0x05;
 pub(crate) const DESCRIPTOR_LEN_ENDPOINT: u8 = 7;
+
+/// USB defined language IDs for string descriptors.
+///
+/// In practice, different language IDs are not used,
+/// and device string descriptors are only provided
+/// with [`language_id::US_ENGLISH`].
+pub mod language_id {
+    /// US English
+    pub const US_ENGLISH: u16 = 0x0409;
+}
 
 /// A raw USB descriptor.
 ///
@@ -287,7 +303,12 @@ impl<'a> Configuration<'a> {
 
 struct DebugEntries<F>(F);
 
-impl<F, I> Debug for DebugEntries<F> where F: Fn() -> I, I: Iterator, I::Item: Debug {
+impl<F, I> Debug for DebugEntries<F>
+where
+    F: Fn() -> I,
+    I: Iterator,
+    I::Item: Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.0()).finish()
     }
@@ -301,7 +322,10 @@ impl<'a> Debug for Configuration<'a> {
             .field("attributes", &self.attributes())
             .field("max_power", &self.max_power())
             .field("string_index", &self.string_index())
-            .field("interface_alt_settings", &DebugEntries(|| self.interface_alt_settings()))
+            .field(
+                "interface_alt_settings",
+                &DebugEntries(|| self.interface_alt_settings()),
+            )
             .finish()
     }
 }

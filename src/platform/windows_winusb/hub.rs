@@ -1,20 +1,21 @@
 use std::{
     alloc::{self, Layout},
     ffi::{c_void, OsStr},
-    io, mem,
+    io::ErrorKind,
+    mem,
     os::windows::prelude::OwnedHandle,
     ptr::{addr_of, null_mut},
     slice,
 };
 
-use log::error;
+use log::{error, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
         GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
         IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
         USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
     },
-    Foundation::TRUE,
+    Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
     System::IO::DeviceIoControl,
 };
 
@@ -69,7 +70,7 @@ impl HubHandle {
             if r == TRUE {
                 Ok(info)
             } else {
-                let err = io::Error::last_os_error();
+                let err = Error::last_os_error();
                 error!("Hub DeviceIoControl failed: {err:?}");
                 Err(err)
             }
@@ -83,7 +84,10 @@ impl HubHandle {
         descriptor_index: u8,
         language_id: u16,
     ) -> Result<Vec<u8>, Error> {
-        let length = 4096;
+        // Experimentally determined on Windows 10 19045.3803 that this fails
+        // with ERROR_INVALID_PARAMETER for non-cached descriptors when
+        // requesting length greater than 4095.
+        let length = 4095;
 
         unsafe {
             let layout = Layout::from_size_align(
@@ -125,9 +129,15 @@ impl HubHandle {
                 let vec = slice::from_raw_parts(start, len).to_owned();
                 Ok(vec)
             } else {
-                let err = io::Error::last_os_error();
-                error!("Hub get descriptor failed: {err:?}");
-                Err(err)
+                let err = GetLastError();
+                warn!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
+                Err(match err {
+                    ERROR_GEN_FAILURE => Error::new(
+                        ErrorKind::Other,
+                        "Descriptor request failed. Device might be suspended.",
+                    ),
+                    _ => Error::from_raw_os_error(err as i32),
+                })
             };
 
             alloc::dealloc(req as *mut _, layout);

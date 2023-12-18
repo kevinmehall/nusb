@@ -42,6 +42,37 @@ pub enum Recipient {
     Other = 3,
 }
 
+/// SETUP packet without direction or buffers
+pub struct Control {
+    /// Request type used for the `bmRequestType` field sent in the SETUP packet.
+    #[doc(alias = "bmRequestType")]
+    pub control_type: ControlType,
+
+    /// Recipient used for the `bmRequestType` field sent in the SETUP packet.
+    #[doc(alias = "bmRequestType")]
+    pub recipient: Recipient,
+
+    /// `bRequest` field sent in the SETUP packet.
+    #[doc(alias = "bRequest")]
+    pub request: u8,
+
+    /// `wValue` field sent in the SETUP packet.
+    #[doc(alias = "wValue")]
+    pub value: u16,
+
+    /// `wIndex` field sent in the SETUP packet.
+    ///
+    /// For [`Recipient::Interface`] this is the interface number. For [`Recipient::Endpoint`] this is the endpoint number.
+    #[doc(alias = "wIndex")]
+    pub index: u16,
+}
+
+impl Control {
+    pub(crate) fn request_type(&self, direction: Direction) -> u8 {
+        request_type(direction, self.control_type, self.recipient)
+    }
+}
+
 /// SETUP packet and associated data to make an **OUT** request on a control endpoint.
 pub struct ControlOut<'a> {
     /// Request type used for the `bmRequestType` field sent in the SETUP packet.

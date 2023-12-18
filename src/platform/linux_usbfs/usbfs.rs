@@ -150,3 +150,53 @@ pub struct Urb {
     pub usercontext: *mut c_void,
     // + variable size array of iso_packet_desc
 }
+
+pub struct Transfer<Opcode, Input> {
+    input: Input,
+    _opcode: PhantomData<Opcode>,
+}
+
+impl<Opcode: CompileTimeOpcode, Input> Transfer<Opcode, Input> {
+    #[inline]
+    pub unsafe fn new(input: Input) -> Self {
+        Self {
+            input,
+            _opcode: PhantomData,
+        }
+    }
+}
+
+unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for Transfer<Opcode, Input> {
+    type Output = usize;
+
+    const IS_MUTATING: bool = true;
+    const OPCODE: rustix::ioctl::Opcode = Opcode::OPCODE;
+
+    fn as_ptr(&mut self) -> *mut c_void {
+        &mut self.input as *mut Input as *mut c_void
+    }
+
+    unsafe fn output_from_ptr(r: IoctlOutput, _: *mut c_void) -> io::Result<usize> {
+        Ok(r as usize)
+    }
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+pub struct CtrlTransfer {
+    pub bRequestType: u8,
+    pub bRequest: u8,
+    pub wValue: u16,
+    pub wIndex: u16,
+    pub wLength: u16,
+    pub timeout: u32, /* in milliseconds */
+    pub data: *mut c_void,
+}
+
+pub fn control<Fd: AsFd>(fd: Fd, transfer: CtrlTransfer) -> io::Result<usize> {
+    unsafe {
+        let ctl =
+            Transfer::<ioctl::ReadWriteOpcode<b'U', 0, CtrlTransfer>, CtrlTransfer>::new(transfer);
+        ioctl::ioctl(fd, ctl)
+    }
+}
