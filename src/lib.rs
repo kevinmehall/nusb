@@ -111,6 +111,7 @@ use std::io;
 
 mod platform;
 
+pub mod descriptors;
 mod enumeration;
 pub use enumeration::{DeviceInfo, Speed};
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    descriptors::{ActiveConfigurationError, Configuration},
     platform,
     transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
     DeviceInfo, Error,
@@ -43,7 +44,29 @@ impl Device {
         Ok(Interface { backend })
     }
 
+    /// Get information about the active configuration.
+    pub fn active_configuration(&self) -> Result<Configuration, ActiveConfigurationError> {
+        let active = self.backend.active_configuration_value();
+
+        self.configurations()
+            .find(|c| c.configuration_value() == active)
+            .ok_or_else(|| ActiveConfigurationError {
+                configuration_value: active,
+            })
+    }
+
+    /// Iterate over all configurations of the device.
+    pub fn configurations(&self) -> impl Iterator<Item = Configuration> {
+        self.backend
+            .configuration_descriptors()
+            .map(Configuration::new)
+    }
+
     /// Set the device configuration.
+    ///
+    /// The argument is the desired configuration's `bConfigurationValue`
+    /// descriptor field from [`Configuration::configuration_value`] or `0` to
+    /// unconfigure the device.
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows

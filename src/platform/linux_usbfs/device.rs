@@ -1,8 +1,17 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    fs::File,
+    io::Read,
+    mem::ManuallyDrop,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+};
 
 use log::{debug, error};
 use rustix::{
-    fd::OwnedFd,
+    fd::{AsRawFd, FromRawFd, OwnedFd},
     fs::{Mode, OFlags},
     io::Errno,
 };
@@ -10,8 +19,10 @@ use rustix::{
 use super::{
     events,
     usbfs::{self, Urb},
+    SysfsPath,
 };
 use crate::{
+    descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{notify_completion, EndpointType, TransferHandle},
     DeviceInfo, Error,
 };
@@ -19,17 +30,30 @@ use crate::{
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
     events_id: usize,
+
+    /// Read from the fd, consists of device descriptor followed by configuration descriptors
+    descriptors: Vec<u8>,
+
+    sysfs: Option<SysfsPath>,
+    active_config: AtomicU8,
 }
 
 impl LinuxDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
-        Self::open(d.bus_number(), d.device_address())
-    }
+        let busnum = d.bus_number();
+        let devnum = d.device_address();
+        let active_config = d.path.read_attr("bConfigurationValue")?;
 
-    pub(crate) fn open(busnum: u8, devnum: u8) -> Result<Arc<LinuxDevice>, Error> {
         let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
         debug!("Opening usbfs device {}", path.display());
         let fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
+
+        let descriptors = {
+            let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            buf
+        };
 
         // because there's no Arc::try_new_cyclic
         let mut events_err = None;
@@ -37,7 +61,13 @@ impl LinuxDevice {
             let res = events::register(&fd, weak.clone());
             let events_id = *res.as_ref().unwrap_or(&usize::MAX);
             events_err = res.err();
-            LinuxDevice { fd, events_id }
+            LinuxDevice {
+                fd,
+                events_id,
+                descriptors,
+                sysfs: Some(d.path.clone()),
+                active_config: AtomicU8::new(active_config),
+            }
         });
 
         if let Some(err) = events_err {
@@ -84,8 +114,28 @@ impl LinuxDevice {
         }
     }
 
+    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+        parse_concatenated_config_descriptors(&self.descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
+    }
+
+    pub(crate) fn active_configuration_value(&self) -> u8 {
+        if let Some(sysfs) = self.sysfs.as_ref() {
+            match sysfs.read_attr("bConfigurationValue") {
+                Ok(v) => {
+                    self.active_config.store(v, Ordering::SeqCst);
+                    return v;
+                }
+                Err(e) => {
+                    error!("Failed to read sysfs bConfigurationValue: {e}, using cached value");
+                }
+            }
+        }
+        self.active_config.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
         usbfs::set_configuration(&self.fd, configuration)?;
+        self.active_config.store(configuration, Ordering::SeqCst);
         Ok(())
     }
 

@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, io::ErrorKind, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    io::ErrorKind,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+};
 
 use log::{debug, error};
 
@@ -18,6 +25,20 @@ use super::{
 pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
     pub(super) device: IoKitDevice,
+    active_config: AtomicU8,
+}
+
+// `get_configuration` does IO, so avoid it in the common case that:
+//    * the device has a single configuration
+//    * the device has at least one interface, indicating that it is configured
+fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
+    if dev.get_number_of_configurations().unwrap_or(0) != 1 {
+        return None;
+    }
+    let mut intf = dev.create_interface_iterator().ok()?;
+    intf.next()?;
+    let config_desc = dev.get_configuration_descriptor(0).ok()?;
+    config_desc.get(5).copied() // get bConfigurationValue from descriptor
 }
 
 impl MacDevice {
@@ -27,10 +48,29 @@ impl MacDevice {
         let device = IoKitDevice::new(service)?;
         let _event_registration = add_event_source(device.create_async_event_source()?);
 
+        let active_config = if let Some(active_config) = guess_active_config(&device) {
+            log::debug!("Active config from single descriptor is {}", active_config);
+            active_config
+        } else {
+            let res = device.get_configuration();
+            log::debug!("Active config from request is {:?}", res);
+            res.unwrap_or(0)
+        };
+
         Ok(Arc::new(MacDevice {
             _event_registration,
             device,
+            active_config: AtomicU8::new(active_config),
         }))
+    }
+
+    pub(crate) fn active_configuration_value(&self) -> u8 {
+        self.active_config.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+        let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
+        (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())
     }
 
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
@@ -38,8 +78,10 @@ impl MacDevice {
             check_iokit_return(call_iokit_function!(
                 self.device.raw,
                 SetConfiguration(configuration)
-            ))
+            ))?
         }
+        self.active_config.store(configuration, Ordering::SeqCst);
+        Ok(())
     }
 
     pub(crate) fn reset(&self) -> Result<(), Error> {
