@@ -12,6 +12,7 @@ rust-version = "1.74"
 
 [dependencies]
 atomic-waker = "1.1.2"
+futures-core = "0.3.29"
 log = "0.4.20"
 once_cell = "1.18.0"
 slab = "0.4.9"
