@@ -1,8 +1,5 @@
 #[cfg(target_os = "windows")]
-use std::{
-    collections::HashMap,
-    ffi::{OsStr, OsString},
-};
+use std::ffi::{OsStr, OsString};
 
 #[cfg(target_os = "linux")]
 use crate::platform::SysfsPath;
@@ -33,10 +30,10 @@ pub struct DeviceInfo {
     pub(crate) port_number: u32,
 
     #[cfg(target_os = "windows")]
-    pub(crate) driver: Option<String>,
+    pub(crate) devinst: crate::platform::DevInst,
 
     #[cfg(target_os = "windows")]
-    pub(crate) interfaces: HashMap<u8, OsString>,
+    pub(crate) driver: Option<String>,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
@@ -211,11 +208,10 @@ impl std::fmt::Debug for DeviceInfo {
 
         #[cfg(target_os = "windows")]
         {
-            s.field("instance_id", &self.instance_id)
-                .field("parent_instance_id", &self.parent_instance_id)
-                .field("port_number", &self.port_number)
-                .field("driver", &self.driver)
-                .field("interfaces", &self.interfaces);
+            s.field("instance_id", &self.instance_id);
+            s.field("parent_instance_id", &self.parent_instance_id);
+            s.field("port_number", &self.port_number);
+            s.field("driver", &self.driver);
         }
 
         #[cfg(target_os = "macos")]

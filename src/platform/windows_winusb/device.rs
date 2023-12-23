@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{c_void, OsString},
+    ffi::c_void,
     io::{self, ErrorKind},
     mem::size_of_val,
     os::windows::prelude::OwnedHandle,
@@ -15,8 +15,8 @@ use windows_sys::Win32::{
         Properties::DEVPKEY_Device_Address,
         Usb::{
             WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize,
-            WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, GUID_DEVINTERFACE_USB_DEVICE,
-            PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+            WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT,
+            WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
         },
     },
     Foundation::{GetLastError, FALSE, TRUE},
@@ -24,19 +24,19 @@ use windows_sys::Win32::{
 
 use crate::{
     descriptors::{validate_config_descriptor, DESCRIPTOR_TYPE_CONFIGURATION},
+    platform::windows_winusb::enumeration::find_device_interfaces,
     transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
     DeviceInfo, Error,
 };
 
 use super::{
     hub::HubHandle,
-    setupapi::DeviceInfoSet,
-    util::{create_file, raw_handle},
+    util::{create_file, raw_handle, WCString},
 };
 
 pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
-    interface_paths: HashMap<u8, OsString>,
+    interface_paths: HashMap<u8, WCString>,
     active_config: u8,
     hub_handle: HubHandle,
     hub_port_number: u32,
@@ -49,14 +49,13 @@ impl WindowsDevice {
         // Look up the device again in case the DeviceInfo is stale.
         // In particular, don't trust its `port_number` because another device might now be connected to
         // that port, and we'd get its descriptors instead.
-        let dset = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_DEVICE), Some(&d.instance_id))?;
-        let Some(dev) = dset.iter_devices().next() else {
-            return Err(Error::new(ErrorKind::NotConnected, "Device not connected"));
-        };
-
-        let hub_handle = HubHandle::by_instance_id(&d.parent_instance_id)
+        let parent_hub = d
+            .devinst
+            .parent()
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to find parent hub"))?;
+        let hub_handle = HubHandle::by_devinst(parent_hub)
             .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
-        let Some(hub_port_number) = dev.get_u32_property(DEVPKEY_Device_Address) else {
+        let Some(hub_port_number) = d.devinst.get_property::<u32>(DEVPKEY_Device_Address) else {
             return Err(Error::new(
                 ErrorKind::NotConnected,
                 "Could not find hub port number",
@@ -81,8 +80,10 @@ impl WindowsDevice {
             })
             .collect();
 
+        let interface_paths = find_device_interfaces(d.devinst);
+
         Ok(Arc::new(WindowsDevice {
-            interface_paths: d.interfaces.clone(),
+            interface_paths,
             config_descriptors,
             active_config: connection_info.CurrentConfigurationValue,
             hub_handle,

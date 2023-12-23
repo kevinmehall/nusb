@@ -1,6 +1,6 @@
 use std::{
     alloc::{self, Layout},
-    ffi::{c_void, OsStr},
+    ffi::c_void,
     io::ErrorKind,
     mem,
     os::windows::prelude::OwnedHandle,
@@ -22,7 +22,7 @@ use windows_sys::Win32::{
 use crate::Error;
 
 use super::{
-    setupapi::DeviceInfoSet,
+    cfgmgr32::DevInst,
     util::{create_file, raw_handle},
 };
 
@@ -30,19 +30,17 @@ use super::{
 pub struct HubHandle(OwnedHandle);
 
 impl HubHandle {
-    pub fn by_instance_id(instance_id: &OsStr) -> Option<HubHandle> {
-        let devs = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_HUB), Some(instance_id)).ok()?;
-        let Some(hub_interface) = devs.iter_interfaces(GUID_DEVINTERFACE_USB_HUB).next() else {
+    pub fn by_devinst(devinst: DevInst) -> Option<HubHandle> {
+        let paths = devinst.interfaces(GUID_DEVINTERFACE_USB_HUB);
+        let Some(path) = paths.iter().next() else {
             error!("Failed to find hub interface");
             return None;
         };
 
-        let hub_path = hub_interface.get_path()?;
-
-        match create_file(&hub_path) {
+        match create_file(path) {
             Ok(f) => Some(HubHandle(f)),
             Err(e) => {
-                error!("Failed to open hub {hub_path:?}: {e}");
+                error!("Failed to open hub: {e}");
                 None
             }
         }
