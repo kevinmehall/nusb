@@ -51,6 +51,11 @@ pub(crate) fn add_event_source(source: CFRunLoopSource) -> EventRegistration {
             runloop.add_source(&source.0, unsafe { kCFRunLoopCommonModes });
             tx.send(SendCFRunLoop(runloop)).unwrap();
             CFRunLoop::run_current();
+
+            // Remove the global if we exited the run loop
+            let mut el = EVENT_LOOP.lock().unwrap();
+            let _ = el.runloop.take();
+            el.count = 0;
             info!("event loop thread exited");
         });
         event_loop.runloop = Some(rx.recv().expect("failed to start run loop thread"));
