@@ -10,6 +10,8 @@ pub(crate) use device::WindowsInterface as Interface;
 mod transfer;
 pub(crate) use transfer::TransferData;
 
+mod cfgmgr32;
 mod hub;
-mod setupapi;
+mod registry;
+pub(crate) use cfgmgr32::DevInst;
 mod util;

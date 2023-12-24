@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{c_void, OsString},
+    ffi::c_void,
     io::{self, ErrorKind},
     mem::size_of_val,
     os::windows::prelude::OwnedHandle,
@@ -11,13 +11,9 @@ use std::{
 
 use log::{debug, error, info};
 use windows_sys::Win32::{
-    Devices::{
-        Properties::DEVPKEY_Device_Address,
-        Usb::{
-            WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize,
-            WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, GUID_DEVINTERFACE_USB_DEVICE,
-            PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
-        },
+    Devices::Usb::{
+        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting,
+        WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, FALSE, TRUE},
 };
@@ -29,48 +25,34 @@ use crate::{
 };
 
 use super::{
-    hub::HubHandle,
-    setupapi::DeviceInfoSet,
-    util::{create_file, raw_handle},
+    enumeration::find_device_interfaces,
+    hub::HubPort,
+    util::{create_file, raw_handle, WCString},
+    DevInst,
 };
 
 pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
-    interface_paths: HashMap<u8, OsString>,
+    interface_paths: HashMap<u8, WCString>,
     active_config: u8,
-    hub_handle: HubHandle,
-    hub_port_number: u32,
+    devinst: DevInst,
 }
 
 impl WindowsDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
         debug!("Creating device for {:?}", d.instance_id);
 
-        // Look up the device again in case the DeviceInfo is stale.
-        // In particular, don't trust its `port_number` because another device might now be connected to
-        // that port, and we'd get its descriptors instead.
-        let dset = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_DEVICE), Some(&d.instance_id))?;
-        let Some(dev) = dset.iter_devices().next() else {
-            return Err(Error::new(ErrorKind::NotConnected, "Device not connected"));
-        };
-
-        let hub_handle = HubHandle::by_instance_id(&d.parent_instance_id)
-            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
-        let Some(hub_port_number) = dev.get_u32_property(DEVPKEY_Device_Address) else {
-            return Err(Error::new(
-                ErrorKind::NotConnected,
-                "Could not find hub port number",
-            ));
-        };
-
-        let connection_info = hub_handle.get_node_connection_info(hub_port_number)?;
-
+        // Look up the device again in case the DeviceInfo is stale. In
+        // particular, don't trust its `port_number` because another device
+        // might now be connected to that port, and we'd get its descriptors
+        // instead.
+        let hub_port = HubPort::by_child_devinst(d.devinst)?;
+        let connection_info = hub_port.get_node_connection_info()?;
         let num_configurations = connection_info.DeviceDescriptor.bNumConfigurations;
 
         let config_descriptors = (0..num_configurations)
             .flat_map(|i| {
-                let res =
-                    hub_handle.get_descriptor(hub_port_number, DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
+                let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
                 match res {
                     Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
                     Err(e) => {
@@ -81,12 +63,13 @@ impl WindowsDevice {
             })
             .collect();
 
+        let interface_paths = find_device_interfaces(d.devinst);
+
         Ok(Arc::new(WindowsDevice {
-            interface_paths: d.interfaces.clone(),
+            interface_paths,
             config_descriptors,
             active_config: connection_info.CurrentConfigurationValue,
-            hub_handle,
-            hub_port_number,
+            devinst: d.devinst,
         }))
     }
 
@@ -111,11 +94,7 @@ impl WindowsDevice {
         desc_index: u8,
         language_id: u16,
     ) -> Result<Vec<u8>, Error> {
-        //TODO: this has a race condition in that the device is identified only by port number. If the device is
-        // disconnected and another device connects to the same port while this `Device` exists, it may return
-        // descriptors from the new device.
-        self.hub_handle
-            .get_descriptor(self.hub_port_number, desc_type, desc_index, language_id)
+        HubPort::by_child_devinst(self.devinst)?.get_descriptor(desc_type, desc_index, language_id)
     }
 
     pub(crate) fn reset(&self) -> Result<(), Error> {

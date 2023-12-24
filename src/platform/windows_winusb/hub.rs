@@ -1,6 +1,6 @@
 use std::{
     alloc::{self, Layout},
-    ffi::{c_void, OsStr},
+    ffi::c_void,
     io::ErrorKind,
     mem,
     os::windows::prelude::OwnedHandle,
@@ -10,10 +10,13 @@ use std::{
 
 use log::{error, warn};
 use windows_sys::Win32::{
-    Devices::Usb::{
-        GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
-        IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
-        USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+    Devices::{
+        Properties::DEVPKEY_Device_Address,
+        Usb::{
+            GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
+            USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+        },
     },
     Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
     System::IO::DeviceIoControl,
@@ -22,7 +25,7 @@ use windows_sys::Win32::{
 use crate::Error;
 
 use super::{
-    setupapi::DeviceInfoSet,
+    cfgmgr32::DevInst,
     util::{create_file, raw_handle},
 };
 
@@ -30,19 +33,17 @@ use super::{
 pub struct HubHandle(OwnedHandle);
 
 impl HubHandle {
-    pub fn by_instance_id(instance_id: &OsStr) -> Option<HubHandle> {
-        let devs = DeviceInfoSet::get(Some(GUID_DEVINTERFACE_USB_HUB), Some(instance_id)).ok()?;
-        let Some(hub_interface) = devs.iter_interfaces(GUID_DEVINTERFACE_USB_HUB).next() else {
+    pub fn by_devinst(devinst: DevInst) -> Option<HubHandle> {
+        let paths = devinst.interfaces(GUID_DEVINTERFACE_USB_HUB);
+        let Some(path) = paths.iter().next() else {
             error!("Failed to find hub interface");
             return None;
         };
 
-        let hub_path = hub_interface.get_path()?;
-
-        match create_file(&hub_path) {
+        match create_file(path) {
             Ok(f) => Some(HubHandle(f)),
             Err(e) => {
-                error!("Failed to open hub {hub_path:?}: {e}");
+                error!("Failed to open hub: {e}");
                 None
             }
         }
@@ -144,5 +145,49 @@ impl HubHandle {
 
             res
         }
+    }
+}
+
+pub struct HubPort {
+    hub_handle: HubHandle,
+    port_number: u32,
+}
+
+impl HubPort {
+    pub fn by_child_devinst(devinst: DevInst) -> Result<HubPort, Error> {
+        let parent_hub = devinst
+            .parent()
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to find parent hub"))?;
+        let hub_handle = HubHandle::by_devinst(parent_hub)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
+        let Some(port_number) = devinst.get_property::<u32>(DEVPKEY_Device_Address) else {
+            return Err(Error::new(
+                ErrorKind::NotConnected,
+                "Could not find hub port number",
+            ));
+        };
+
+        Ok(HubPort {
+            hub_handle,
+            port_number,
+        })
+    }
+
+    pub fn get_node_connection_info(&self) -> Result<USB_NODE_CONNECTION_INFORMATION_EX, Error> {
+        self.hub_handle.get_node_connection_info(self.port_number)
+    }
+
+    pub fn get_descriptor(
+        &self,
+        descriptor_type: u8,
+        descriptor_index: u8,
+        language_id: u16,
+    ) -> Result<Vec<u8>, Error> {
+        self.hub_handle.get_descriptor(
+            self.port_number,
+            descriptor_type,
+            descriptor_index,
+            language_id,
+        )
     }
 }
