@@ -73,6 +73,7 @@ impl Drop for EventRegistration {
 
         if event_loop.count == 0 {
             runloop.stop();
+            event_loop.runloop.take();
         }
     }
 }
