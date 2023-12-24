@@ -10,10 +10,13 @@ use std::{
 
 use log::{error, warn};
 use windows_sys::Win32::{
-    Devices::Usb::{
-        GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
-        IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
-        USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+    Devices::{
+        Properties::DEVPKEY_Device_Address,
+        Usb::{
+            GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
+            USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+        },
     },
     Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
     System::IO::DeviceIoControl,
@@ -142,5 +145,49 @@ impl HubHandle {
 
             res
         }
+    }
+}
+
+pub struct HubPort {
+    hub_handle: HubHandle,
+    port_number: u32,
+}
+
+impl HubPort {
+    pub fn by_child_devinst(devinst: DevInst) -> Result<HubPort, Error> {
+        let parent_hub = devinst
+            .parent()
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to find parent hub"))?;
+        let hub_handle = HubHandle::by_devinst(parent_hub)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
+        let Some(port_number) = devinst.get_property::<u32>(DEVPKEY_Device_Address) else {
+            return Err(Error::new(
+                ErrorKind::NotConnected,
+                "Could not find hub port number",
+            ));
+        };
+
+        Ok(HubPort {
+            hub_handle,
+            port_number,
+        })
+    }
+
+    pub fn get_node_connection_info(&self) -> Result<USB_NODE_CONNECTION_INFORMATION_EX, Error> {
+        self.hub_handle.get_node_connection_info(self.port_number)
+    }
+
+    pub fn get_descriptor(
+        &self,
+        descriptor_type: u8,
+        descriptor_index: u8,
+        language_id: u16,
+    ) -> Result<Vec<u8>, Error> {
+        self.hub_handle.get_descriptor(
+            self.port_number,
+            descriptor_type,
+            descriptor_index,
+            language_id,
+        )
     }
 }

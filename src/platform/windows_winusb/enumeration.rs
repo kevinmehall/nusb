@@ -14,7 +14,7 @@ use crate::{DeviceInfo, Error, Speed};
 
 use super::{
     cfgmgr32::{self, get_device_interface_property, DevInst},
-    hub::HubHandle,
+    hub::HubPort,
     util::WCString,
 };
 
@@ -33,12 +33,11 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     debug!("Probing device {instance_id:?}");
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
-    let parent_hub = devinst.parent()?;
     let bus_number = devinst.get_property::<u32>(DEVPKEY_Device_BusNumber)?;
     let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
 
-    let hub = HubHandle::by_devinst(parent_hub)?;
-    let info = hub.get_node_connection_info(port_number).ok()?;
+    let hub_port = HubPort::by_child_devinst(devinst).ok()?;
+    let info = hub_port.get_node_connection_info().ok()?;
 
     // Windows sets some device properties from string descriptors read at enumeration,
     // but if the device doesn't set the descriptor, we don't want the value Windows made up.
