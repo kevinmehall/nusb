@@ -84,9 +84,7 @@ impl DeviceInfo {
 
         #[cfg(target_os = "macos")]
         {
-            DeviceId(crate::platform::DeviceId {
-                registry_id: self.registry_id,
-            })
+            DeviceId(self.registry_id)
         }
     }
 
