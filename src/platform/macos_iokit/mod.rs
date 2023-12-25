@@ -21,10 +21,8 @@ mod iokit;
 mod iokit_c;
 mod iokit_usb;
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct DeviceId {
-    pub(crate) registry_id: u64,
-}
+/// Device ID is the registry entry ID
+pub type DeviceId = u64;
 
 fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
     #[allow(non_upper_case_globals)]
