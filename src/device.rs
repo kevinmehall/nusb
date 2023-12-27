@@ -53,6 +53,10 @@ impl Device {
     }
 
     /// Get information about the active configuration.
+    ///
+    /// This returns cached data and does not perform IO. However, it can fail if the
+    /// device is unconfigured, or if it can't find a configuration descriptor for
+    /// the configuration reported as active by the OS.
     pub fn active_configuration(&self) -> Result<Configuration, ActiveConfigurationError> {
         let active = self.backend.active_configuration_value();
 
@@ -63,7 +67,9 @@ impl Device {
             })
     }
 
-    /// Iterate over all configurations of the device.
+    /// Get an iterator returning information about each configuration of the device.
+    ///
+    /// This returns cached data and does not perform IO.
     pub fn configurations(&self) -> impl Iterator<Item = Configuration> {
         self.backend
             .configuration_descriptors()
@@ -190,7 +196,7 @@ impl Device {
         self.backend.reset()
     }
 
-    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
     ///
@@ -208,7 +214,7 @@ impl Device {
         self.backend.control_in_blocking(control, data, timeout)
     }
 
-    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    /// Synchronously perform a single **OUT (host-to-device)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
     ///
@@ -326,7 +332,7 @@ impl Interface {
         self.backend.set_alt_setting(alt_setting)
     }
 
-    /// Synchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
     ///
@@ -341,7 +347,7 @@ impl Interface {
         self.backend.control_in_blocking(control, data, timeout)
     }
 
-    /// Synchronously submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    /// Synchronously perform a single **OUT (host-to-device)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
     ///

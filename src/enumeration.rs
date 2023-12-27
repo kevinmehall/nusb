@@ -15,6 +15,7 @@ use crate::{Device, Error};
 /// * Some fields are platform-specific
 ///     * Linux: `path`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
+///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
 pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
@@ -157,12 +158,20 @@ impl DeviceInfo {
     }
 
     /// Manufacturer string, if available without device IO
+    ///
+    /// ### Platform-specific notes
+    ///  * Windows: this comes from the driver, and for some drivers
+    ///    does not match the string returned from the device.
     #[doc(alias = "iManufacturer")]
     pub fn manufacturer_string(&self) -> Option<&str> {
         self.manufacturer_string.as_deref()
     }
 
     /// Product string, if available without device IO
+    ///
+    /// ### Platform-specific notes
+    ///  * Windows: this comes from the driver, and for some drivers
+    ///    does not match the string returned from the device.
     #[doc(alias = "iProduct")]
     pub fn product_string(&self) -> Option<&str> {
         self.product_string.as_deref()

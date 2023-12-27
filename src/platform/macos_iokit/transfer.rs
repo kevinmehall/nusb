@@ -57,7 +57,7 @@ impl Drop for TransferData {
 /// Bring the data accessed on the transfer callback out-of-line
 /// so that we can have a reference to it while the callback may
 /// write to other fields concurrently. This could be included
-/// in TransferData with the proposed [UnsafePinned](https://github.com/rust-lang/rfcs/pull/3467)
+/// in `TransferData`` with the proposed [`UnsafePinned`](https://github.com/rust-lang/rfcs/pull/3467)
 pub struct TransferDataInner {
     actual_len: usize,
     callback_data: *mut c_void,

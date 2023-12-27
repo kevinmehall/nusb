@@ -3,10 +3,12 @@
 //!
 //! `nusb` is comparable to the C library [libusb] and its Rust bindings [rusb],
 //! but written in pure Rust. It's built on and exposes async APIs by default,
-//! but can be made blocking using [`futures_lite::future::block_on`].
+//! but can be made blocking using [`futures_lite::future::block_on`][block_on]
+//! or similar.
 //!
 //! [libusb]: https://libusb.info
 //! [rusb]: https://docs.rs/rusb/
+//! [block_on]: https://docs.rs/futures-lite/latest/futures_lite/future/fn.block_on.html
 //!
 //! Use `nusb` to write user-space drivers in Rust for non-standard USB devices
 //! or those without kernel support. For devices implementing a standard USB
@@ -26,6 +28,8 @@
 //! device.
 //!
 //! Call [`device_info.open()`](`DeviceInfo::open`) to open a selected device.
+//! Additional information about the device can be queried with
+//! [`device.active_configuration()`](`Device::active_configuration`).
 //!
 //! USB devices consist of one or more interfaces exposing a group of
 //! functionality. A device with multiple interfaces is known as a composite
@@ -105,7 +109,10 @@
 //!
 //! ### macOS
 //!
-//! Not yet supported.
+//! `nusb` uses IOKit on macOS.
+//!
+//! Users have access to USB devices by default, with no permission configuration needed.
+//! Devices with a kernel driver are not accessible.
 
 use std::io;
 

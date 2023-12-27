@@ -75,7 +75,7 @@ impl TransferRequest for RequestBuffer {
 /// you how many bytes were successfully sent, which may be useful in the case
 /// of a partially-completed transfer.
 ///
-/// The `ResponseBuffer` can be turned into an empty Vec to re-use the allocation
+/// The `ResponseBuffer` can be turned into an empty `Vec` to re-use the allocation
 /// for another transfer, or dropped to free the memory.
 pub struct ResponseBuffer {
     pub(crate) buf: *mut u8,

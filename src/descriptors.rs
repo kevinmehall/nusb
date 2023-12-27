@@ -277,7 +277,9 @@ descriptor_fields! {
 
         /// `bConfigurationValue` descriptor field: Identifier for the configuration.
         ///
-        /// Pass this to `Device::set_configuration` to select this configuration.
+        /// Pass this value to
+        /// [`Device::set_configuration`][crate::Device::set_configuration] to
+        /// select this configuration.
         #[doc(alias = "bConfigurationValue")]
         pub fn configuration_value at 5 -> u8;
 
@@ -361,7 +363,8 @@ impl<'a> InterfaceGroup<'a> {
 pub struct InterfaceAltSetting<'a>(&'a [u8]);
 
 impl<'a> InterfaceAltSetting<'a> {
-    /// Get the interface descriptor followed by all trailing endpoint and other descriptors.
+    /// Get the interface descriptor followed by all trailing endpoint and other
+    /// descriptors up to the next interface descriptor.
     pub fn descriptors(&self) -> Descriptors {
         Descriptors(self.0)
     }
@@ -478,7 +481,7 @@ descriptor_fields! {
 
         /// Get the raw value of the `bmAttributes` descriptor field.
         ///
-        /// See [transfer_type][Self::transfer_type] for the transfer type field.
+        /// See [`transfer_type``][Self::transfer_type] for the transfer type field.
         #[doc(alias = "bmAttributes")]
         pub fn attributes at 3 -> u8;
 
