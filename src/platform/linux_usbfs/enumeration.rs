@@ -11,7 +11,7 @@ use crate::Error;
 use crate::Speed;
 
 #[derive(Debug, Clone)]
-pub struct SysfsPath(PathBuf);
+pub struct SysfsPath(pub(crate) PathBuf);
 
 impl SysfsPath {
     pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, io::Error>
