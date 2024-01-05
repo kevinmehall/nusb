@@ -120,12 +120,14 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-pub use enumeration::{DeviceInfo, Speed};
+pub use enumeration::{DeviceId, DeviceInfo, Speed};
 
 mod device;
 pub use device::{Device, Interface};
 
 pub mod transfer;
+
+pub mod hotplug;
 
 /// OS error returned from operations other than transfers.
 pub type Error = io::Error;
@@ -145,4 +147,36 @@ pub type Error = io::Error;
 /// * On Windows, hubs are not included in the list
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
+}
+
+/// Get a [`Stream`][`futures_core::Stream`] that yields an
+/// [event][`hotplug::HotplugEvent`] when a USB device is connected or
+/// disconnected from the system.
+///
+/// Events will be returned for devices connected or disconnected beginning at
+/// the time this function is called. To maintain a list of connected devices,
+/// call [`list_devices`] after creating the watch with this function to avoid
+/// potentially missing a newly-attached device:
+///
+/// ## Example
+///
+/// ```no_run
+/// use std::collections::HashMap;
+/// use nusb::{DeviceInfo, DeviceId, hotplug::HotplugEvent};
+/// let watch = nusb::watch_devices().unwrap();
+/// let mut devices: HashMap<DeviceId, DeviceInfo> = nusb::list_devices().unwrap()
+///     .map(|d| (d.id(), d)).collect();
+/// for event in futures_lite::stream::block_on(watch) {
+///     match event {
+///         HotplugEvent::Connected(d) => {
+///             devices.insert(d.id(), d);
+///         }
+///         HotplugEvent::Disconnected(id) => {
+///             devices.remove(&id);
+///         }
+///     }
+/// }
+/// ```
+pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
+    Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
 }

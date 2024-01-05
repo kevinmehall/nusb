@@ -41,12 +41,12 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
     usb_service_iter()?
-        .find(|dev| get_id(dev) == Some(registry_id))
+        .find(|dev| get_registry_id(dev) == Some(registry_id))
         .ok_or(Error::new(ErrorKind::NotFound, "not found by registry id"))
 }
 
-fn probe_device(device: IoService) -> Option<DeviceInfo> {
-    let registry_id = get_id(&device)?;
+pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
+    let registry_id = get_registry_id(&device)?;
     log::info!("Probing device {registry_id}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
@@ -68,7 +68,7 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
     })
 }
 
-fn get_id(device: &IoService) -> Option<u64> {
+pub(crate) fn get_registry_id(device: &IoService) -> Option<u64> {
     unsafe {
         let mut out = 0;
         let r = IORegistryEntryGetRegistryEntryID(device.get(), &mut out);
