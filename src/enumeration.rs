@@ -62,9 +62,17 @@ pub struct DeviceInfo {
 
 impl DeviceInfo {
     /// *(Linux-only)* Sysfs path for the device.
+    #[doc(hidden)]
+    #[deprecated = "use `sysfs_path()` instead"]
     #[cfg(target_os = "linux")]
     pub fn path(&self) -> &SysfsPath {
         &self.path
+    }
+
+    /// *(Linux-only)* Sysfs path for the device.
+    #[cfg(target_os = "linux")]
+    pub fn sysfs_path(&self) -> &std::path::Path {
+        &self.path.0
     }
 
     /// *(Windows-only)* Instance ID path of this device
