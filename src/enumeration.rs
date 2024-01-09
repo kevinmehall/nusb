@@ -13,7 +13,7 @@ use crate::{Device, Error};
 /// ### Platform-specific notes
 ///
 /// * Some fields are platform-specific
-///     * Linux: `path`
+///     * Linux: `sysfs_path`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
@@ -220,7 +220,7 @@ impl std::fmt::Debug for DeviceInfo {
 
         #[cfg(target_os = "linux")]
         {
-            s.field("path", &self.path);
+            s.field("sysfs_path", &self.path);
         }
 
         #[cfg(target_os = "windows")]
