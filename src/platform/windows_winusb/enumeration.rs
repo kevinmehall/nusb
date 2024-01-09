@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsString};
 use log::{debug, error};
 use windows_sys::Win32::Devices::{
     Properties::{
-        DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_FriendlyName,
+        DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
         DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_Manufacturer,
         DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
@@ -43,7 +43,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     // but if the device doesn't set the descriptor, we don't want the value Windows made up.
     let product_string = if info.DeviceDescriptor.iProduct != 0 {
         devinst
-            .get_property::<OsString>(DEVPKEY_Device_FriendlyName)
+            .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
             .and_then(|s| s.into_string().ok())
     } else {
         None
