@@ -58,6 +58,8 @@ pub struct DeviceInfo {
     pub(crate) manufacturer_string: Option<String>,
     pub(crate) product_string: Option<String>,
     pub(crate) serial_number: Option<String>,
+
+    pub(crate) interfaces: Vec<InterfaceInfo>,
 }
 
 impl DeviceInfo {
@@ -176,10 +178,6 @@ impl DeviceInfo {
     }
 
     /// Product string, if available without device IO
-    ///
-    /// ### Platform-specific notes
-    ///  * Windows: this comes from the driver, and for some drivers
-    ///    does not match the string returned from the device.
     #[doc(alias = "iProduct")]
     pub fn product_string(&self) -> Option<&str> {
         self.product_string.as_deref()
@@ -189,6 +187,28 @@ impl DeviceInfo {
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
         self.serial_number.as_deref()
+    }
+
+    /// Iterator over the device's interfaces.
+    ///
+    /// This returns summary information about the interfaces in the device's
+    /// active configuration for the purposes of matching devices prior to
+    /// opening them.
+    ///
+    /// Additional information about interfaces can be found in the
+    /// configuration descriptor after opening the device by calling
+    /// [`Device::active_configuration`].
+    ///
+    /// ### Platform-specific notes:
+    ///   * Windows: this is only available for composite devices bound to the
+    ///     `usbccgp` driver, and will be empty if the entire device is bound to
+    ///     a specific driver.
+    ///   * Windows: When interfaces are grouped by an interface
+    ///     association descriptor, this returns details from the interface
+    ///     association descriptor and does not include each of the associated
+    ///     interfaces.
+    pub fn interfaces(&self) -> impl Iterator<Item = &InterfaceInfo> {
+        self.interfaces.iter()
     }
 
     /// Open the device
@@ -210,9 +230,9 @@ impl std::fmt::Debug for DeviceInfo {
                 "device_version",
                 &format_args!("0x{:04X}", self.device_version),
             )
-            .field("class", &self.class)
-            .field("subclass", &self.subclass)
-            .field("protocol", &self.protocol)
+            .field("class", &format_args!("0x{:02X}", self.class))
+            .field("subclass", &format_args!("0x{:02X}", self.subclass))
+            .field("protocol", &format_args!("0x{:02X}", self.protocol))
             .field("speed", &self.speed)
             .field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
@@ -236,6 +256,8 @@ impl std::fmt::Debug for DeviceInfo {
             s.field("location_id", &self.location_id);
             s.field("registry_entry_id", &self.registry_id);
         }
+
+        s.field("interfaces", &self.interfaces);
 
         s.finish()
     }
@@ -272,5 +294,55 @@ impl Speed {
             "super+" | "10000" => Some(Speed::SuperPlus),
             _ => None,
         }
+    }
+}
+
+/// Summary information about a device's interface, available before opening a device.
+#[derive(Clone)]
+pub struct InterfaceInfo {
+    pub(crate) interface_number: u8,
+    pub(crate) class: u8,
+    pub(crate) subclass: u8,
+    pub(crate) protocol: u8,
+    pub(crate) interface_string: Option<String>,
+}
+
+impl InterfaceInfo {
+    /// Identifier for the interface from the `bInterfaceNumber` descriptor field.
+    pub fn interface_number(&self) -> u8 {
+        self.interface_number
+    }
+
+    /// Code identifying the standard interface class, from the `bInterfaceClass` interface descriptor field.
+    pub fn class(&self) -> u8 {
+        self.class
+    }
+
+    /// Standard subclass, from the `bInterfaceSubClass` interface descriptor field.
+    pub fn subclass(&self) -> u8 {
+        self.subclass
+    }
+
+    /// Standard protocol, from the `bInterfaceProtocol` interface descriptor field.
+    pub fn protocol(&self) -> u8 {
+        self.protocol
+    }
+
+    /// Interface string descriptor value as cached by the OS.
+    pub fn interface_string(&self) -> Option<&str> {
+        self.interface_string.as_deref()
+    }
+}
+
+// Not derived so that we can format some fields in hex
+impl std::fmt::Debug for InterfaceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InterfaceInfo")
+            .field("interface_number", &self.interface_number)
+            .field("class", &format_args!("0x{:02X}", self.class))
+            .field("subclass", &format_args!("0x{:02X}", self.subclass))
+            .field("protocol", &format_args!("0x{:02X}", self.protocol))
+            .field("interface_string", &self.interface_string)
+            .finish()
     }
 }

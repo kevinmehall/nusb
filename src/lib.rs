@@ -120,7 +120,7 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-pub use enumeration::{DeviceInfo, Speed};
+pub use enumeration::{DeviceInfo, InterfaceInfo, Speed};
 
 mod device;
 pub use device::{Device, Interface};

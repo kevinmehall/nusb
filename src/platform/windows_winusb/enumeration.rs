@@ -1,16 +1,19 @@
-use std::{collections::HashMap, ffi::OsString};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+};
 
 use log::{debug, error};
 use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
-        DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_Manufacturer,
-        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
+        DEVPKEY_Device_Manufacturer, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
     Usb::{GUID_DEVINTERFACE_USB_DEVICE, USB_DEVICE_SPEED},
 };
 
-use crate::{DeviceInfo, Error, Speed};
+use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
 
 use super::{
     cfgmgr32::{self, get_device_interface_property, DevInst},
@@ -70,6 +73,34 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         .and_then(|s| s.into_string().ok())
         .unwrap_or_default();
 
+    let mut interfaces = if driver.eq_ignore_ascii_case("usbccgp") {
+        devinst
+            .children()
+            .flat_map(|intf| {
+                let interface_number = get_interface_number(intf)?;
+                let (class, subclass, protocol) = intf
+                    .get_property::<Vec<OsString>>(DEVPKEY_Device_CompatibleIds)?
+                    .iter()
+                    .find_map(|s| parse_compatible_id(s))?;
+                let interface_string = intf
+                    .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
+                    .and_then(|s| s.into_string().ok());
+
+                Some(InterfaceInfo {
+                    interface_number,
+                    class,
+                    subclass,
+                    protocol,
+                    interface_string,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    interfaces.sort_unstable_by_key(|i| i.interface_number);
+
     Some(DeviceInfo {
         instance_id,
         parent_instance_id,
@@ -88,6 +119,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         manufacturer_string,
         product_string,
         serial_number,
+        interfaces,
     })
 }
 
@@ -119,6 +151,42 @@ pub(crate) fn find_device_interfaces(dev: DevInst) -> HashMap<u8, WCString> {
     interfaces
 }
 
+fn get_interface_number(intf_dev: DevInst) -> Option<u8> {
+    let hw_ids = intf_dev.get_property::<Vec<OsString>>(DEVPKEY_Device_HardwareIds);
+    let Some(intf_num) = hw_ids
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find_map(|id| id.to_str()?.rsplit_once("&MI_")?.1.parse::<u8>().ok())
+    else {
+        error!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
+        return None;
+    };
+    Some(intf_num)
+}
+
+/// Parse class, subclass, protocol from a Compatible ID value
+fn parse_compatible_id(s: &OsStr) -> Option<(u8, u8, u8)> {
+    let s = s.to_str()?;
+    let s = s.strip_prefix("USB\\Class_")?;
+    let class = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
+    let s = s.get(2..)?.strip_prefix("&SubClass_")?;
+    let subclass = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
+    let s = s.get(2..)?.strip_prefix("&Prot_")?;
+    let protocol = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
+    Some((class, subclass, protocol))
+}
+
+#[test]
+fn test_parse_compatible_id() {
+    assert_eq!(parse_compatible_id(OsStr::new("")), None);
+    assert_eq!(parse_compatible_id(OsStr::new("USB\\Class_03")), None);
+    assert_eq!(
+        parse_compatible_id(OsStr::new("USB\\Class_03&SubClass_11&Prot_22")),
+        Some((3, 17, 34))
+    );
+}
+
 /// Probe a device node for a child device (USB interface) of a composite device
 /// to see if it is usable with WinUSB and find the Windows interface used to
 /// open it.
@@ -135,16 +203,7 @@ fn probe_interface(cdev: DevInst) -> Option<(u8, WCString)> {
         return None;
     }
 
-    let hw_ids = cdev.get_property::<Vec<OsString>>(DEVPKEY_Device_HardwareIds);
-    let Some(intf_num) = hw_ids
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .find_map(|id| id.to_str()?.rsplit_once("&MI_")?.1.parse::<u8>().ok())
-    else {
-        error!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
-        return None;
-    };
+    let intf_num = get_interface_number(cdev)?;
 
     let reg_key = cdev.registry_key().unwrap();
     let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {

@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use log::debug;
 
+use crate::enumeration::InterfaceInfo;
 use crate::DeviceInfo;
 use crate::Error;
 use crate::Speed;
@@ -33,6 +34,16 @@ impl SysfsPath {
         let s = self.read_attr::<String>(attr)?;
         T::from_hex_str(&s)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid hex str"))
+    }
+
+    fn children(&self) -> impl Iterator<Item = SysfsPath> {
+        fs::read_dir(&self.0)
+            .ok()
+            .into_iter()
+            .flat_map(|x| x)
+            .filter_map(|f| f.ok())
+            .filter(|f| f.file_type().ok().is_some_and(|t| t.is_dir()))
+            .map(|f| SysfsPath(f.path()))
     }
 }
 
@@ -83,6 +94,31 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
         manufacturer_string: path.read_attr("manufacturer").ok(),
         product_string: path.read_attr("product").ok(),
         serial_number: path.read_attr("serial").ok(),
+        interfaces: {
+            let mut interfaces: Vec<_> = path
+                .children()
+                .filter(|i| {
+                    // Skip subdirectories like `power` that aren't interfaces
+                    // (they would be skipped when missing required properties,
+                    // but might as well not open them)
+                    i.0.file_name()
+                        .unwrap_or_default()
+                        .as_encoded_bytes()
+                        .contains(&b':')
+                })
+                .flat_map(|i| {
+                    Some(InterfaceInfo {
+                        interface_number: i.read_attr_hex("bInterfaceNumber").ok()?,
+                        class: i.read_attr_hex("bInterfaceClass").ok()?,
+                        subclass: i.read_attr_hex("bInterfaceSubClass").ok()?,
+                        protocol: i.read_attr_hex("bInterfaceProtocol").ok()?,
+                        interface_string: i.read_attr("interface").ok(),
+                    })
+                })
+                .collect();
+            interfaces.sort_unstable_by_key(|i| i.interface_number);
+            interfaces
+        },
         path,
     })
 }
