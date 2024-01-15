@@ -2,7 +2,8 @@ use std::{
     collections::VecDeque,
     future::{poll_fn, Future},
     marker::PhantomData,
-    sync::Arc, task::{Context, Poll},
+    sync::Arc,
+    task::{Context, Poll},
 };
 
 use crate::platform;
@@ -164,7 +165,9 @@ where
     /// side effects, enabling its use in `select!{}` or similar.
     ///
     /// Panics if there are no transfers pending.
-    pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + Unpin + Send + Sync + 'a {
+    pub fn next_complete<'a>(
+        &'a mut self,
+    ) -> impl Future<Output = Completion<R::Response>> + Unpin + Send + Sync + 'a {
         poll_fn(|cx| self.poll_next(cx))
     }
 
