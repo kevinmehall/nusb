@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     future::{poll_fn, Future},
     marker::PhantomData,
-    sync::Arc,
+    sync::Arc, task::{Context, Poll},
 };
 
 use crate::platform;
@@ -123,7 +123,7 @@ pub struct Queue<R: TransferRequest> {
 
 impl<R> Queue<R>
 where
-    R: TransferRequest,
+    R: TransferRequest + Send + Sync,
     platform::TransferData: PlatformSubmit<R>,
 {
     pub(crate) fn new(
@@ -165,17 +165,27 @@ where
     ///
     /// Panics if there are no transfers pending.
     pub fn next_complete<'a>(&'a mut self) -> impl Future<Output = Completion<R::Response>> + Unpin + Send + Sync + 'a {
-        poll_fn(|cx| {
-            let res = self
-                .pending
-                .front_mut()
-                .expect("queue should have pending transfers when calling next_complete")
-                .poll_completion::<R>(cx);
-            if res.is_ready() {
-                self.cached = self.pending.pop_front();
-            }
-            res
-        })
+        poll_fn(|cx| self.poll_next(cx))
+    }
+
+    /// Get the next pending transfer if one has completed, or register the
+    /// current task for wakeup when the next transfer completes.
+    ///
+    /// For an `IN` endpoint, the completion contains a [`Vec<u8>`].\
+    /// For an `OUT` endpoint, the completion contains a
+    /// [`ResponseBuffer`][`super::ResponseBuffer`].
+    ///
+    /// Panics if there are no transfers pending.
+    pub fn poll_next(&mut self, cx: &mut Context) -> Poll<Completion<R::Response>> {
+        let res = self
+            .pending
+            .front_mut()
+            .expect("queue should have pending transfers when calling next_complete")
+            .poll_completion::<R>(cx);
+        if res.is_ready() {
+            self.cached = self.pending.pop_front();
+        }
+        res
     }
 
     /// Get the number of transfers that have been submitted with `submit` that
