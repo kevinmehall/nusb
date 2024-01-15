@@ -167,23 +167,29 @@ impl DeviceInfo {
         self.speed
     }
 
-    /// Manufacturer string, if available without device IO
+    /// Manufacturer string, if available without device IO.
     ///
     /// ### Platform-specific notes
-    ///  * Windows: this comes from the driver, and for some drivers
-    ///    does not match the string returned from the device.
+    ///  * Windows: Windows does not cache the manufacturer string, and
+    ///    this will return `None` regardless of whether a descriptor exists.
     #[doc(alias = "iManufacturer")]
     pub fn manufacturer_string(&self) -> Option<&str> {
         self.manufacturer_string.as_deref()
     }
 
-    /// Product string, if available without device IO
+    /// Product string, if available without device IO.
     #[doc(alias = "iProduct")]
     pub fn product_string(&self) -> Option<&str> {
         self.product_string.as_deref()
     }
 
-    /// Serial number string, if available without device IO
+    /// Serial number string, if available without device IO.
+    ///
+    /// ### Platform-specific notes
+    /// * On Windows, this comes from a case-insensitive instance ID and may
+    /// have been converted to upper case from the descriptor string. It is
+    /// recommended to use a [case-insensitive
+    /// comparison][str::eq_ignore_ascii_case] when matching a device.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
         self.serial_number.as_deref()
