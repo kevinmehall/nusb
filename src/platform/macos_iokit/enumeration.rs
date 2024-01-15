@@ -9,12 +9,12 @@ use core_foundation::{
 use io_kit_sys::{
     kIOMasterPortDefault, kIORegistryIterateParents, kIORegistryIterateRecursively,
     keys::kIOServicePlane, ret::kIOReturnSuccess, usb::lib::kIOUSBDeviceClassName,
-    IORegistryEntryGetRegistryEntryID, IORegistryEntrySearchCFProperty,
-    IOServiceGetMatchingServices, IOServiceMatching,
+    IORegistryEntryGetChildIterator, IORegistryEntryGetRegistryEntryID,
+    IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
 };
-use log::{error, info};
+use log::{error, info, warn};
 
-use crate::{DeviceInfo, Error, Speed};
+use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
 
 use super::iokit::{IoService, IoServiceIterator};
 
@@ -65,6 +65,18 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
         manufacturer_string: get_string_property(&device, "USB Vendor Name"),
         product_string: get_string_property(&device, "USB Product Name"),
         serial_number: get_string_property(&device, "USB Serial Number"),
+        interfaces: get_children(&device).map_or(Vec::new(), |iter| {
+            iter.flat_map(|child| {
+                Some(InterfaceInfo {
+                    interface_number: get_integer_property(&child, "bInterfaceNumber")?,
+                    class: get_integer_property(&child, "bInterfaceClass")?,
+                    subclass: get_integer_property(&child, "bInterfaceSubClass")?,
+                    protocol: get_integer_property(&child, "bInterfaceProtocol")?,
+                    interface_string: get_string_property(&child, "USB Interface Name"),
+                })
+            })
+            .collect()
+        }),
     })
 }
 
@@ -118,6 +130,20 @@ fn get_integer_property<T: TryFrom<i64>>(device: &IoService, property: &'static 
     get_property::<CFNumber>(device, property)
         .and_then(|n| n.to_i64())
         .and_then(|n| n.try_into().ok())
+}
+
+fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
+    unsafe {
+        let mut iterator = 0;
+        let r =
+            IORegistryEntryGetChildIterator(device.get(), kIOServicePlane as *mut _, &mut iterator);
+        if r != kIOReturnSuccess {
+            warn!("IORegistryEntryGetChildIterator failed: {r}");
+            return Err(Error::from_raw_os_error(r));
+        }
+
+        Ok(IoServiceIterator::new(iterator))
+    }
 }
 
 fn map_speed(speed: u32) -> Option<Speed> {
