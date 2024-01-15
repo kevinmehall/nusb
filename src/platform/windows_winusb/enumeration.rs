@@ -153,16 +153,35 @@ pub(crate) fn find_device_interfaces(dev: DevInst) -> HashMap<u8, WCString> {
 
 fn get_interface_number(intf_dev: DevInst) -> Option<u8> {
     let hw_ids = intf_dev.get_property::<Vec<OsString>>(DEVPKEY_Device_HardwareIds);
-    let Some(intf_num) = hw_ids
+    hw_ids
         .as_deref()
         .unwrap_or_default()
         .iter()
-        .find_map(|id| id.to_str()?.rsplit_once("&MI_")?.1.parse::<u8>().ok())
-    else {
-        error!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
-        return None;
-    };
-    Some(intf_num)
+        .find_map(|id| parse_hardware_id(id))
+        .or_else(|| {
+            error!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
+            None
+        })
+}
+
+/// Parse interface number from a Hardware ID value
+fn parse_hardware_id(s: &OsStr) -> Option<u8> {
+    let s = s.to_str()?;
+    let s = s.rsplit_once("&MI_")?.1;
+    u8::from_str_radix(s.get(0..2)?, 16).ok()
+}
+
+#[test]
+fn test_parse_hardware_id() {
+    assert_eq!(parse_hardware_id(OsStr::new("")), None);
+    assert_eq!(
+        parse_hardware_id(OsStr::new("USB\\VID_1234&PID_5678&MI_0A")),
+        Some(10)
+    );
+    assert_eq!(
+        parse_hardware_id(OsStr::new("USB\\VID_9999&PID_AAAA&REV_0101&MI_01")),
+        Some(1)
+    );
 }
 
 /// Parse class, subclass, protocol from a Compatible ID value
