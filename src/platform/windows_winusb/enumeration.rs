@@ -8,7 +8,7 @@ use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
         DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
-        DEVPKEY_Device_Manufacturer, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
     Usb::{GUID_DEVINTERFACE_USB_DEVICE, USB_DEVICE_SPEED},
 };
@@ -42,23 +42,9 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let hub_port = HubPort::by_child_devinst(devinst).ok()?;
     let info = hub_port.get_node_connection_info().ok()?;
 
-    // Windows sets some device properties from string descriptors read at enumeration,
-    // but if the device doesn't set the descriptor, we don't want the value Windows made up.
-    let product_string = if info.DeviceDescriptor.iProduct != 0 {
-        devinst
-            .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
-            .and_then(|s| s.into_string().ok())
-    } else {
-        None
-    };
-
-    let manufacturer_string = if info.DeviceDescriptor.iProduct != 0 {
-        devinst
-            .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
-            .and_then(|s| s.into_string().ok())
-    } else {
-        None
-    };
+    let product_string = devinst
+        .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
+        .and_then(|s| s.into_string().ok());
 
     let serial_number = if info.DeviceDescriptor.iSerialNumber != 0 {
         (&instance_id)
@@ -116,7 +102,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         subclass: info.DeviceDescriptor.bDeviceSubClass,
         protocol: info.DeviceDescriptor.bDeviceProtocol,
         speed: map_speed(info.Speed),
-        manufacturer_string,
+        manufacturer_string: None,
         product_string,
         serial_number,
         interfaces,
