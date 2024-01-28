@@ -11,6 +11,8 @@ use std::{
 };
 
 use log::{debug, error};
+use rustix::event::epoll;
+use rustix::fd::AsFd;
 use rustix::{
     fd::{AsRawFd, FromRawFd, OwnedFd},
     fs::{Mode, OFlags},
@@ -22,6 +24,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
+use crate::platform::linux_usbfs::events::Watch;
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{
@@ -61,7 +64,11 @@ impl LinuxDevice {
         // because there's no Arc::try_new_cyclic
         let mut events_err = None;
         let arc = Arc::new_cyclic(|weak| {
-            let res = events::register(&fd, weak.clone());
+            let res = events::register(
+                fd.as_fd(),
+                Watch::Device(weak.clone()),
+                epoll::EventFlags::OUT,
+            );
             let events_id = *res.as_ref().unwrap_or(&usize::MAX);
             events_err = res.err();
             LinuxDevice {
@@ -109,7 +116,7 @@ impl LinuxDevice {
                 // only returns ENODEV after all events are received, so unregister to
                 // keep the event thread from spinning because we won't receive further events.
                 // The drop impl will try to unregister again, but that's ok.
-                events::unregister_fd(&self.fd);
+                events::unregister_fd(self.fd.as_fd());
             }
             Err(e) => {
                 error!("Unexpected error {e} from REAPURBNDELAY");
@@ -282,7 +289,7 @@ impl LinuxDevice {
 impl Drop for LinuxDevice {
     fn drop(&mut self) {
         debug!("Closing device {}", self.events_id);
-        events::unregister(&self.fd, self.events_id)
+        events::unregister(self.fd.as_fd(), self.events_id)
     }
 }
 
