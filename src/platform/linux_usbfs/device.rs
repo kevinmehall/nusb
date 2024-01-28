@@ -246,7 +246,7 @@ impl LinuxDevice {
                 let driver = usbfs::get_driver(&self.fd, interface)?;
 
                 // avoid detaching another instance of nusb or libusb
-                if !driver.starts_with(b"usbfs\0") {
+                if driver.is_some_and(|d| !d.starts_with(b"usbfs\0")) {
                     usbfs::detach_kernel_driver(&self.fd, interface)?;
                 }
 

@@ -70,19 +70,23 @@ struct GetDriver {
     driver: [u8; 256],
 }
 
-pub fn get_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<[u8; 256]> {
+pub fn get_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<Option<[u8; 256]>> {
     let mut driver = GetDriver {
         interface: interface.into(),
         driver: [0; 256],
     };
 
-    unsafe {
+    let r = unsafe {
         let ctl =
             ioctl::Updater::<ioctl::WriteOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
-        ioctl::ioctl(&fd, ctl)?;
-    }
+        ioctl::ioctl(&fd, ctl)
+    };
 
-    Ok(driver.driver)
+    match r {
+        Ok(()) => Ok(Some(driver.driver)),
+        Err(Errno::NODATA) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 #[repr(C)]
