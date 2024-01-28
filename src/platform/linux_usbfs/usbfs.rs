@@ -31,10 +31,42 @@ pub fn claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     }
 }
 
+#[repr(C)]
+struct DetachAndClaimIface {
+    interface: c_uint,
+    flags: c_uint,
+
+    // Note: USBDEVFS_MAXDRIVERNAME is 255, but we only use 5 bytes for the driver name. Using 5
+    // here simplifies the implementation.
+    driver: [c_uchar; 5 + 1],
+}
+
+pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    const USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER: c_uint = 0x02;
+    unsafe {
+        let ctl = ioctl::Setter::<
+            ioctl::ReadOpcode<b'U', 27, DetachAndClaimIface>,
+            DetachAndClaimIface,
+        >::new(DetachAndClaimIface {
+            interface: interface.into(),
+            flags: USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER,
+            driver: *b"usbfs\0",
+        });
+        ioctl::ioctl(fd, ctl)
+    }
+}
+
 pub fn release_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
         let ctl =
             ioctl::Setter::<ioctl::ReadOpcode<b'U', 16, c_uint>, c_uint>::new(interface.into());
+        ioctl::ioctl(fd, ctl)
+    }
+}
+
+pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    unsafe {
+        let ctl = ioctl::NoArg::<ioctl::NoneOpcode<b'U', 23, ()>>::new();
         ioctl::ioctl(fd, ctl)
     }
 }

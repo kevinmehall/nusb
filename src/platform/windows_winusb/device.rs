@@ -130,6 +130,13 @@ impl WindowsDevice {
             winusb_handle,
         }))
     }
+
+    pub(crate) fn detach_and_claim_interface(
+        self: &Arc<Self>,
+        interface: u8,
+    ) -> Result<Arc<WindowsInterface>, Error> {
+        self.claim_interface(interface)
+    }
 }
 
 pub(crate) struct WindowsInterface {
