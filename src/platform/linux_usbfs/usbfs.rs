@@ -78,7 +78,7 @@ pub fn get_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<[u8; 256]> {
 
     unsafe {
         let ctl =
-            ioctl::Updater::<ioctl::ReadOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
+            ioctl::Updater::<ioctl::WriteOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
         ioctl::ioctl(&fd, ctl)?;
     }
 
@@ -100,7 +100,7 @@ pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
             data: std::ptr::null_mut(),
         };
         let ctl =
-            ioctl::Setter::<ioctl::WriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
+            ioctl::Setter::<ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
     }
 }
@@ -113,7 +113,7 @@ pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
             data: std::ptr::null_mut(),
         };
         let ctl =
-            ioctl::Setter::<ioctl::WriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
+            ioctl::Setter::<ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
     }
 }
