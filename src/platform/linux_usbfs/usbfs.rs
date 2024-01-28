@@ -11,7 +11,7 @@ use std::{
 
 use rustix::{
     fd::AsFd,
-    io,
+    io::{self, Errno},
     ioctl::{self, CompileTimeOpcode, Ioctl, IoctlOutput},
 };
 
@@ -59,24 +59,30 @@ pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result
 
         let ctl =
             ioctl::Setter::<ioctl::ReadOpcode<b'U', 27, DetachAndClaim>, DetachAndClaim>::new(dc);
-        match ioctl::ioctl(&fd, ctl) {
-            Err(e) if e == io::Errno::NOTTY => {}
-            other => return other,
-        }
 
-        // disconnect-and-claim failed, fall back to the racy detach-and-claim
-        let detach_result = detach_kernel_driver(&fd, interface);
-
-        if let Err(e) = claim_interface(fd, interface) {
-            if let Err(detach_err) = detach_result {
-                return Err(detach_err);
-            }
-
-            return Err(e);
-        }
-
-        Ok(())
+        ioctl::ioctl(&fd, ctl)
     }
+}
+
+#[repr(C)]
+struct GetDriver {
+    interface: c_int,
+    driver: [u8; 256],
+}
+
+pub fn get_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<[u8; 256]> {
+    let mut driver = GetDriver {
+        interface: interface.into(),
+        driver: [0; 256],
+    };
+
+    unsafe {
+        let ctl =
+            ioctl::Updater::<ioctl::ReadOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
+        ioctl::ioctl(&fd, ctl)?;
+    }
+
+    Ok(driver.driver)
 }
 
 #[repr(C)]
@@ -86,27 +92,8 @@ struct UsbFsIoctl {
     data: *mut c_void,
 }
 
-#[repr(C)]
-struct GetDriver {
-    interface: c_int,
-    driver: [u8; 256],
-}
-
 pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
-        // Only detach usbfs
-        let mut driver = GetDriver {
-            interface: interface.into(),
-            driver: [0; 256],
-        };
-        let ctl =
-            ioctl::Updater::<ioctl::ReadOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
-        ioctl::ioctl(&fd, ctl)?;
-
-        if driver.driver[0..6] != *b"usbfs\0" {
-            return Err(io::Errno::NOENT);
-        }
-
         let command = UsbFsIoctl {
             interface: interface.into(),
             ioctl_code: ioctl::NoneOpcode::<b'U', 22, ()>::OPCODE.raw(), // IOCTL_USBFS_DISCONNECT
