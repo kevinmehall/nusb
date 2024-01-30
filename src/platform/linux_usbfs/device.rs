@@ -230,6 +230,23 @@ impl LinuxDevice {
         Ok(Arc::new(LinuxInterface {
             device: self.clone(),
             interface,
+            reattach: false,
+        }))
+    }
+
+    pub(crate) fn detach_and_claim_interface(
+        self: &Arc<Self>,
+        interface: u8,
+    ) -> Result<Arc<LinuxInterface>, Error> {
+        usbfs::detach_and_claim_interface(&self.fd, interface)?;
+        debug!(
+            "Detached and claimed interface {interface} on device id {dev}",
+            dev = self.events_id
+        );
+        Ok(Arc::new(LinuxInterface {
+            device: self.clone(),
+            interface,
+            reattach: true,
         }))
     }
 
@@ -272,6 +289,7 @@ impl Drop for LinuxDevice {
 pub(crate) struct LinuxInterface {
     pub(crate) interface: u8,
     pub(crate) device: Arc<LinuxDevice>,
+    pub(crate) reattach: bool,
 }
 
 impl LinuxInterface {
@@ -326,5 +344,13 @@ impl Drop for LinuxInterface {
             "Released interface {} on device {}: {res:?}",
             self.interface, self.device.events_id
         );
+
+        if res.is_ok() && self.reattach {
+            let res = usbfs::attach_kernel_driver(&self.device.fd, self.interface);
+            debug!(
+                "Reattached kernel drivers for interface {} on device {}: {res:?}",
+                self.interface, self.device.events_id
+            );
+        }
     }
 }

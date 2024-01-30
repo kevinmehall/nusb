@@ -188,6 +188,13 @@ impl MacDevice {
             _event_registration,
         }))
     }
+
+    pub(crate) fn detach_and_claim_interface(
+        self: &Arc<Self>,
+        interface: u8,
+    ) -> Result<Arc<MacInterface>, Error> {
+        self.claim_interface(interface)
+    }
 }
 
 pub(crate) struct MacInterface {

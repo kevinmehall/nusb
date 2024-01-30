@@ -40,6 +40,51 @@ pub fn release_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
 }
 
 #[repr(C)]
+struct DetachAndClaim {
+    interface: c_uint,
+    flags: c_uint,
+    driver: [c_uchar; 255 + 1],
+}
+
+pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    const USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER: c_uint = 0x02;
+    unsafe {
+        let mut dc = DetachAndClaim {
+            interface: interface.into(),
+            flags: USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER,
+            driver: [0; 256],
+        };
+
+        dc.driver[0..6].copy_from_slice(b"usbfs\0");
+
+        let ctl =
+            ioctl::Setter::<ioctl::ReadOpcode<b'U', 27, DetachAndClaim>, DetachAndClaim>::new(dc);
+
+        ioctl::ioctl(&fd, ctl)
+    }
+}
+
+#[repr(C)]
+struct UsbFsIoctl {
+    interface: c_uint,
+    ioctl_code: c_uint,
+    data: *mut c_void,
+}
+
+pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    unsafe {
+        let command = UsbFsIoctl {
+            interface: interface.into(),
+            ioctl_code: ioctl::NoneOpcode::<b'U', 23, ()>::OPCODE.raw(), // IOCTL_USBFS_CONNECT
+            data: std::ptr::null_mut(),
+        };
+        let ctl =
+            ioctl::Setter::<ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
+        ioctl::ioctl(fd, ctl)
+    }
+}
+
+#[repr(C)]
 struct SetAltSetting {
     interface: c_int,
     alt_setting: c_int,

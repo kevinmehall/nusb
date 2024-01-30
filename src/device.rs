@@ -52,6 +52,16 @@ impl Device {
         Ok(Interface { backend })
     }
 
+    /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
+    ///
+    /// ### Platform notes
+    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
+    /// the same effect as [`claim_interface`][`Device::claim_interface`].
+    pub fn detach_and_claim_interface(&self, interface: u8) -> Result<Interface, Error> {
+        let backend = self.backend.detach_and_claim_interface(interface)?;
+        Ok(Interface { backend })
+    }
+
     /// Get information about the active configuration.
     ///
     /// This returns cached data and does not perform IO. However, it can fail if the
