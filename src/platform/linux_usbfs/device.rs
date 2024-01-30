@@ -238,23 +238,7 @@ impl LinuxDevice {
         self: &Arc<Self>,
         interface: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        match usbfs::detach_and_claim_interface(&self.fd, interface) {
-            Ok(()) => {}
-            Err(e) if e == Errno::NOTTY => {
-                debug!("USBDEVFS_DISCONNECT_CLAIM ioctl failed, falling back to detach-then-claim");
-
-                let driver = usbfs::get_driver(&self.fd, interface)?;
-
-                // avoid detaching another instance of nusb or libusb
-                if driver.is_some_and(|d| !d.starts_with(b"usbfs\0")) {
-                    usbfs::detach_kernel_driver(&self.fd, interface)?;
-                }
-
-                usbfs::claim_interface(&self.fd, interface)?;
-            }
-            Err(e) => return Err(e.into()),
-        }
-
+        usbfs::detach_and_claim_interface(&self.fd, interface)?;
         debug!(
             "Detached and claimed interface {interface} on device id {dev}",
             dev = self.events_id

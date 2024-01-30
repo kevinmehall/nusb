@@ -11,7 +11,7 @@ use std::{
 
 use rustix::{
     fd::AsFd,
-    io::{self, Errno},
+    io,
     ioctl::{self, CompileTimeOpcode, Ioctl, IoctlOutput},
 };
 
@@ -65,48 +65,10 @@ pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result
 }
 
 #[repr(C)]
-struct GetDriver {
-    interface: c_int,
-    driver: [u8; 256],
-}
-
-pub fn get_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<Option<[u8; 256]>> {
-    let mut driver = GetDriver {
-        interface: interface.into(),
-        driver: [0; 256],
-    };
-
-    let r = unsafe {
-        let ctl =
-            ioctl::Updater::<ioctl::WriteOpcode<b'U', 8, GetDriver>, GetDriver>::new(&mut driver);
-        ioctl::ioctl(&fd, ctl)
-    };
-
-    match r {
-        Ok(()) => Ok(Some(driver.driver)),
-        Err(Errno::NODATA) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-#[repr(C)]
 struct UsbFsIoctl {
     interface: c_uint,
     ioctl_code: c_uint,
     data: *mut c_void,
-}
-
-pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
-    unsafe {
-        let command = UsbFsIoctl {
-            interface: interface.into(),
-            ioctl_code: ioctl::NoneOpcode::<b'U', 22, ()>::OPCODE.raw(), // IOCTL_USBFS_DISCONNECT
-            data: std::ptr::null_mut(),
-        };
-        let ctl =
-            ioctl::Setter::<ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
-        ioctl::ioctl(fd, ctl)
-    }
 }
 
 pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
