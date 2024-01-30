@@ -1,0 +1,14 @@
+//! Detach the kernel driver for an FTDI device and then reattach it.
+use std::{thread::sleep, time::Duration};
+fn main() {
+    env_logger::init();
+    let di = nusb::list_devices()
+        .unwrap()
+        .find(|d| d.vendor_id() == 0x0403 && d.product_id() == 0x6010)
+        .expect("device should be connected");
+
+    let device = di.open().unwrap();
+    let interface = device.detach_and_claim_interface(0).unwrap();
+    sleep(Duration::from_secs(1));
+    drop(interface);
+}
