@@ -72,7 +72,7 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
                     class: get_integer_property(&child, "bInterfaceClass")?,
                     subclass: get_integer_property(&child, "bInterfaceSubClass")?,
                     protocol: get_integer_property(&child, "bInterfaceProtocol")?,
-                    interface_string: get_string_property(&child, "USB Interface Name"),
+                    interface_string: get_string_property(&child, "kUSBString"),
                 })
             })
             .collect()
