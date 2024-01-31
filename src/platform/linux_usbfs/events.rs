@@ -2,6 +2,7 @@ use once_cell::sync::OnceCell;
 use rustix::{
     event::epoll::{self, EventData},
     fd::OwnedFd,
+    io::retry_on_intr,
 };
 use slab::Slab;
 use std::{
@@ -52,7 +53,7 @@ fn event_loop() {
     let epoll_fd = EPOLL_FD.get().unwrap();
     let mut event_list = epoll::EventVec::with_capacity(4);
     loop {
-        epoll::wait(epoll_fd, &mut event_list, -1).unwrap();
+        retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, -1)).unwrap();
         for event in &event_list {
             let key = event.data.u64() as usize;
             let device = DEVICES.lock().unwrap().get(key).and_then(|w| w.upgrade());
