@@ -11,7 +11,16 @@ mod device;
 pub(crate) use device::LinuxDevice as Device;
 pub(crate) use device::LinuxInterface as Interface;
 
+mod hotplug;
+pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
+
 use crate::transfer::TransferError;
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct DeviceId {
+    pub(crate) bus: u8,
+    pub(crate) addr: u8,
+}
 
 fn errno_to_transfer_error(e: Errno) -> TransferError {
     match e {
