@@ -33,6 +33,36 @@ pub trait NonWasmSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T> NonWasmSend for T {}
 
+#[cfg(target_arch = "wasm32")]
+pub mod future {
+    use std::{
+        future::{Future, IntoFuture},
+        marker::PhantomData,
+    };
+
+    use super::MaybeFuture;
+
+    pub struct ActualFuture<'a, F: Future + 'a>(F, PhantomData<&'a F>);
+
+    impl<'a, F: Future + 'a> ActualFuture<'a, F> {
+        pub fn new(fut: F) -> Self {
+            Self(fut, PhantomData)
+        }
+    }
+
+    impl<'a, F: Future + 'a> MaybeFuture for ActualFuture<'a, F> {}
+
+    impl<'a, F: Future<Output = O> + 'a, O> IntoFuture for ActualFuture<'a, F> {
+        type Output = O;
+
+        type IntoFuture = F;
+
+        fn into_future(self) -> Self::IntoFuture {
+            self.0
+        }
+    }
+}
+
 #[cfg(any(
     target_os = "linux",
     target_os = "android",

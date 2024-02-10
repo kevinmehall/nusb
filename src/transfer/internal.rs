@@ -4,7 +4,7 @@ use std::{
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     pin::Pin,
-    ptr::{addr_of_mut, NonNull},
+    ptr::NonNull,
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc, Mutex,
@@ -160,7 +160,7 @@ impl<P> Pending<P> {
     fn state(&self) -> &AtomicU8 {
         // Get state without dereferencing as `TransferInner`, because
         // its `platform_data` may be mutably aliased.
-        unsafe { &*(addr_of_mut!((*self.ptr.as_ptr()).state)) }
+        unsafe { &(*self.ptr.as_ptr()).state }
     }
 
     pub fn is_complete(&self) -> bool {
@@ -189,7 +189,7 @@ pub fn take_completed_from_queue<P>(queue: &mut VecDeque<Pending<P>>) -> Option<
 
 pub fn take_completed_from_option<P>(option: &mut Option<Pending<P>>) -> Option<Idle<P>> {
     // TODO: use Option::take_if once supported by MSRV
-    if option.as_mut().map_or(false, |next| next.is_complete()) {
+    if option.as_mut().is_some_and(|next| next.is_complete()) {
         option.take().map(|t| unsafe { t.into_idle() })
     } else {
         None
@@ -256,6 +256,7 @@ impl<D> MaybeFuture for TransferFuture<D>
 where
     D: Send,
 {
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait(mut self) -> Self::Output {
         self.notify
             .wait(|| take_completed_from_option(&mut self.transfer))

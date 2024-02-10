@@ -162,10 +162,12 @@ pub type Error = io::Error;
 /// ### Example
 ///
 /// ```no_run
+/// # fn main() {
 /// use nusb::{self, MaybeFuture};
 /// let device = nusb::list_devices().wait().unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
+/// # }
 /// ```
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
@@ -179,6 +181,7 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 /// Group devices by bus:
 ///
 /// ```no_run
+/// # fn main() {
 /// use std::collections::HashMap;
 /// use nusb::MaybeFuture;
 ///
@@ -189,6 +192,7 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 ///         (bus.bus_id().to_owned(), (bus, devices.clone().into_iter().filter(|dev| dev.bus_id() == bus_id).collect()))
 ///     })
 ///     .collect();
+/// # }
 /// ```
 ///
 /// ### Platform-specific notes
@@ -210,6 +214,7 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 /// ## Example
 ///
 /// ```no_run
+/// # fn main() {
 /// use std::collections::HashMap;
 /// use nusb::{MaybeFuture, DeviceInfo, DeviceId, hotplug::HotplugEvent};
 /// let watch = nusb::watch_devices().unwrap();
@@ -225,6 +230,7 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 ///         }
 ///     }
 /// }
+/// # }
 /// ```
 ///
 /// ### Platform-specific notes:

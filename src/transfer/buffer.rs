@@ -101,6 +101,7 @@ impl Buffer {
     /// For OUT transfers, this is the amount of data written to the buffer which will be sent when the buffer is submitted.
     /// For IN transfers, this is the amount of data received from the device. This length is updated when the transfer is returned.
     #[inline]
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.len as usize
     }

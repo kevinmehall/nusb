@@ -4,7 +4,6 @@ use nusb::{
     transfer::{ControlIn, ControlOut, ControlType, Recipient},
     MaybeFuture,
 };
-
 fn main() {
     env_logger::init();
     let di = nusb::list_devices()
