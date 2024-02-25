@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
 };
 
-use log::{debug, error};
+use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
@@ -130,7 +130,7 @@ pub(crate) fn find_device_interfaces(dev: DevInst) -> HashMap<u8, WCString> {
         if let Some(path) = paths.iter().next() {
             interfaces.insert(0, path.to_owned());
         } else {
-            error!("Failed to find path for winusb device");
+            debug!("Failed to find path for winusb device");
         }
     }
 
@@ -145,7 +145,7 @@ fn get_interface_number(intf_dev: DevInst) -> Option<u8> {
         .iter()
         .find_map(|id| parse_hardware_id(id))
         .or_else(|| {
-            error!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
+            debug!("Failed to parse interface number in hardware IDs: {hw_ids:?}");
             None
         })
 }
@@ -217,9 +217,9 @@ fn probe_interface(cdev: DevInst) -> Option<(u8, WCString)> {
             Ok(s) => s,
             Err(f) => {
                 if e.kind() == f.kind() {
-                    error!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
+                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
                 } else {
-                    error!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
+                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
                 }
                 return None;
             }
@@ -228,7 +228,7 @@ fn probe_interface(cdev: DevInst) -> Option<(u8, WCString)> {
 
     let paths = cdev.interfaces(guid);
     let Some(path) = paths.iter().next() else {
-        error!("Failed to find interface path");
+        debug!("Failed to find interface path");
         return None;
     };
 

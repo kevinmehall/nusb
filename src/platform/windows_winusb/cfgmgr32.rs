@@ -1,6 +1,6 @@
 use std::{ffi::OsString, iter, mem, ptr};
 
-use log::error;
+use log::debug;
 use windows_sys::{
     core::GUID,
     Win32::{
@@ -220,7 +220,7 @@ pub fn list_interfaces(interface: GUID, instance_id: Option<&WCStr>) -> NulSepLi
 
         if cr != CR_SUCCESS {
             buf.clear();
-            error!("CM_Get_Device_Interface_List_SizeW failed, status {cr}");
+            debug!("CM_Get_Device_Interface_List_SizeW failed, status {cr}");
             break;
         }
 
@@ -242,7 +242,7 @@ pub fn list_interfaces(interface: GUID, instance_id: Option<&WCStr>) -> NulSepLi
             continue;
         } else {
             buf.clear();
-            error!("CM_Get_Device_Interface_ListW failed, status {cr}");
+            debug!("CM_Get_Device_Interface_ListW failed, status {cr}");
             break;
         }
     }

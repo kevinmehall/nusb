@@ -12,7 +12,7 @@ use io_kit_sys::{
     IORegistryEntryGetChildIterator, IORegistryEntryGetRegistryEntryID,
     IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
 };
-use log::{error, info, warn};
+use log::debug;
 
 use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
 
@@ -47,7 +47,7 @@ pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Erro
 
 fn probe_device(device: IoService) -> Option<DeviceInfo> {
     let registry_id = get_id(&device)?;
-    log::info!("Probing device {registry_id}");
+    log::debug!("Probing device {registry_id}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
@@ -90,7 +90,7 @@ fn get_id(device: &IoService) -> Option<u64> {
             Some(out)
         } else {
             // not sure this can actually fail.
-            error!("IORegistryEntryGetRegistryEntryID failed with {r}");
+            debug!("IORegistryEntryGetRegistryEntryID failed with {r}");
             None
         }
     }
@@ -109,14 +109,14 @@ fn get_property<T: ConcreteCFType>(device: &IoService, property: &'static str) -
         );
 
         if raw.is_null() {
-            info!("Device does not have property `{property}`");
+            debug!("Device does not have property `{property}`");
             return None;
         }
 
         let res = CFType::wrap_under_create_rule(raw).downcast_into();
 
         if res.is_none() {
-            error!("Failed to convert device property `{property}`");
+            debug!("Failed to convert device property `{property}`");
         }
 
         res
@@ -139,7 +139,7 @@ fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
         let r =
             IORegistryEntryGetChildIterator(device.get(), kIOServicePlane as *mut _, &mut iterator);
         if r != kIOReturnSuccess {
-            warn!("IORegistryEntryGetChildIterator failed: {r}");
+            debug!("IORegistryEntryGetChildIterator failed: {r}");
             return Err(Error::from_raw_os_error(r));
         }
 
