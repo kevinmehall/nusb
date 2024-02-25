@@ -213,10 +213,17 @@ fn probe_interface(cdev: DevInst) -> Option<(u8, WCString)> {
     let reg_key = cdev.registry_key().unwrap();
     let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
         Ok(s) => s,
-        Err(e) => {
-            error!("Failed to get DeviceInterfaceGUIDs from registry: {e}");
-            return None;
-        }
+        Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
+            Ok(s) => s,
+            Err(f) => {
+                if e.kind() == f.kind() {
+                    error!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
+                } else {
+                    error!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
+                }
+                return None;
+            }
+        },
     };
 
     let paths = cdev.interfaces(guid);
