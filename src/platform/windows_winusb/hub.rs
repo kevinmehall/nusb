@@ -8,7 +8,7 @@ use std::{
     slice,
 };
 
-use log::{error, warn};
+use log::{debug, warn};
 use windows_sys::Win32::{
     Devices::{
         Properties::DEVPKEY_Device_Address,
@@ -36,14 +36,14 @@ impl HubHandle {
     pub fn by_devinst(devinst: DevInst) -> Option<HubHandle> {
         let paths = devinst.interfaces(GUID_DEVINTERFACE_USB_HUB);
         let Some(path) = paths.iter().next() else {
-            error!("Failed to find hub interface");
+            debug!("Failed to find hub interface");
             return None;
         };
 
         match create_file(path) {
             Ok(f) => Some(HubHandle(f)),
             Err(e) => {
-                error!("Failed to open hub: {e}");
+                debug!("Failed to open hub: {e}");
                 None
             }
         }
@@ -72,7 +72,7 @@ impl HubHandle {
                 Ok(info)
             } else {
                 let err = Error::last_os_error();
-                error!("Hub DeviceIoControl failed: {err:?}");
+                debug!("Hub DeviceIoControl failed: {err:?}");
                 Err(err)
             }
         }
