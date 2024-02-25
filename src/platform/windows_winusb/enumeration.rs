@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap,
     ffi::{OsStr, OsString},
+    io::ErrorKind,
 };
 
 use log::debug;
@@ -109,32 +109,81 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     })
 }
 
-/// Find USB interfaces of the device and their Windows interface paths.
+/// Find the path to open for an interface of a device
 ///
 /// If the whole device is bound to WinUSB, it can be opened directly. For a
 /// composite device, USB interfaces are represented by child device nodes.
-pub(crate) fn find_device_interfaces(dev: DevInst) -> HashMap<u8, WCString> {
+pub(crate) fn find_device_interface_path(dev: DevInst, intf: u8) -> Result<WCString, Error> {
     let driver = dev
         .get_property::<OsString>(DEVPKEY_Device_Service)
         .and_then(|s| s.into_string().ok())
         .unwrap_or_default();
 
-    debug!("Driver is {:?}", driver);
-
-    let mut interfaces = HashMap::new();
     if driver.eq_ignore_ascii_case("usbccgp") {
-        interfaces.extend(dev.children().flat_map(probe_interface));
+        let child = dev
+            .children()
+            .find(|i| get_interface_number(*i) == Some(intf))
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
+
+        let Some(driver) = child.get_property::<OsString>(DEVPKEY_Device_Service) else {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "Could not determine driver for interface",
+            ));
+        };
+
+        if !driver.eq_ignore_ascii_case("winusb") {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("Interface driver is {driver:?}, not WinUSB"),
+            ));
+        }
+
+        let reg_key = child.registry_key().unwrap();
+        let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
+            Ok(s) => s,
+            Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
+                Ok(s) => s,
+                Err(f) => {
+                    if e.kind() == f.kind() {
+                        debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
+                    } else {
+                        debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
+                    }
+                    return Err(Error::new(
+                        ErrorKind::Unsupported,
+                        "Could not find DeviceInterfaceGUIDs in registry. WinUSB driver may not be correctly installed for this interface."
+                    ));
+                }
+            },
+        };
+
+        let paths = child.interfaces(guid);
+        let Some(path) = paths.iter().next() else {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Failed to find device path for WinUSB interface",
+            ));
+        };
+
+        Ok(path.to_owned())
     } else if driver.eq_ignore_ascii_case("winusb") {
         let paths = dev.interfaces(GUID_DEVINTERFACE_USB_DEVICE);
 
-        if let Some(path) = paths.iter().next() {
-            interfaces.insert(0, path.to_owned());
-        } else {
-            debug!("Failed to find path for winusb device");
-        }
-    }
+        let Some(path) = paths.iter().next() else {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Failed to find device path for WinUSB device",
+            ));
+        };
 
-    interfaces
+        Ok(path.to_owned())
+    } else {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            format!("Device driver is {driver:?}, not WinUSB"),
+        ));
+    }
 }
 
 fn get_interface_number(intf_dev: DevInst) -> Option<u8> {
@@ -190,51 +239,6 @@ fn test_parse_compatible_id() {
         parse_compatible_id(OsStr::new("USB\\Class_03&SubClass_11&Prot_22")),
         Some((3, 17, 34))
     );
-}
-
-/// Probe a device node for a child device (USB interface) of a composite device
-/// to see if it is usable with WinUSB and find the Windows interface used to
-/// open it.
-fn probe_interface(cdev: DevInst) -> Option<(u8, WCString)> {
-    let id = cdev.instance_id();
-    debug!("Probing interface `{id}` of composite device");
-
-    let driver = cdev.get_property::<OsString>(DEVPKEY_Device_Service);
-    if !driver
-        .as_ref()
-        .is_some_and(|d| d.eq_ignore_ascii_case("winusb"))
-    {
-        debug!("Driver is {driver:?}, not usable.");
-        return None;
-    }
-
-    let intf_num = get_interface_number(cdev)?;
-
-    let reg_key = cdev.registry_key().unwrap();
-    let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
-        Ok(s) => s,
-        Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
-            Ok(s) => s,
-            Err(f) => {
-                if e.kind() == f.kind() {
-                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
-                } else {
-                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
-                }
-                return None;
-            }
-        },
-    };
-
-    let paths = cdev.interfaces(guid);
-    let Some(path) = paths.iter().next() else {
-        debug!("Failed to find interface path");
-        return None;
-    };
-
-    debug!("Found usable interface {intf_num} at {path}");
-
-    Some((intf_num, path.to_owned()))
 }
 
 fn map_speed(speed: u8) -> Option<Speed> {

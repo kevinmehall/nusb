@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     ffi::c_void,
     io::{self, ErrorKind},
     mem::size_of_val,
@@ -25,15 +24,14 @@ use crate::{
 };
 
 use super::{
-    enumeration::find_device_interfaces,
+    enumeration::find_device_interface_path,
     hub::HubPort,
-    util::{create_file, raw_handle, WCString},
+    util::{create_file, raw_handle},
     DevInst,
 };
 
 pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
-    interface_paths: HashMap<u8, WCString>,
     active_config: u8,
     devinst: DevInst,
 }
@@ -63,10 +61,7 @@ impl WindowsDevice {
             })
             .collect();
 
-        let interface_paths = find_device_interfaces(d.devinst);
-
         Ok(Arc::new(WindowsDevice {
-            interface_paths,
             config_descriptors,
             active_config: connection_info.CurrentConfigurationValue,
             devinst: d.devinst,
@@ -108,11 +103,14 @@ impl WindowsDevice {
         self: &Arc<Self>,
         interface: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
-        let path = self.interface_paths.get(&interface).ok_or_else(|| {
-            Error::new(ErrorKind::NotFound, "interface not found or not compatible")
-        })?;
+        let path = find_device_interface_path(self.devinst, interface)?;
 
-        let handle = create_file(path)?;
+        log::debug!(
+            "Claiming device {:?} interface {interface} with interface path `{path}`",
+            self.devinst
+        );
+
+        let handle = create_file(&path)?;
 
         super::events::register(&handle)?;
 
