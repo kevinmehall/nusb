@@ -75,7 +75,7 @@ pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
         let command = UsbFsIoctl {
             interface: interface.into(),
-            ioctl_code: ioctl::NoneOpcode::<b'U', 23, ()>::OPCODE.raw(), // IOCTL_USBFS_CONNECT
+            ioctl_code: ioctl::NoneOpcode::<b'U', 23, ()>::OPCODE.raw() as c_uint, // IOCTL_USBFS_CONNECT
             data: std::ptr::null_mut(),
         };
         let ctl =
