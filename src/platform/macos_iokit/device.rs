@@ -257,6 +257,20 @@ impl MacInterface {
             ))
         }
     }
+
+    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+        debug!("Clear halt, endpoint {endpoint:02x}");
+        let ep = self
+            .endpoints
+            .get(&endpoint)
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.interface.raw,
+                ClearPipeStallBothEnds(ep.pipe_ref)
+            ))
+        }
+    }
 }
 
 impl Drop for MacInterface {

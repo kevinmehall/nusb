@@ -335,6 +335,11 @@ impl LinuxInterface {
             alt_setting,
         )?)
     }
+
+    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+        debug!("Clear halt, endpoint {endpoint:02x}");
+        Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)
+    }
 }
 
 impl Drop for LinuxInterface {
