@@ -53,6 +53,12 @@ pub enum TransferError {
     Cancelled,
 
     /// Endpoint in a STALL condition.
+    ///
+    /// This is used by the device to signal that an error occurred. For bulk
+    /// and interrupt endpoints, the stall condition can be cleared with
+    /// [`Interface::clear_halt`][crate::Interface::clear_halt]. For control
+    /// requests, the stall is automatically cleared when another request is
+    /// submitted.
     Stall,
 
     /// Device disconnected.

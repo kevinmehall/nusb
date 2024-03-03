@@ -11,8 +11,9 @@ use std::{
 use log::{debug, error, info, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
-        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting,
-        WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_ResetPipe,
+        WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT,
+        WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, FALSE, TRUE},
 };
@@ -265,7 +266,19 @@ impl WindowsInterface {
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         unsafe {
-            let r = WinUsb_SetCurrentAlternateSetting(raw_handle(&self.handle), alt_setting.into());
+            let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
+            if r == TRUE {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+    }
+
+    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+        debug!("Clear halt, endpoint {endpoint:02x}");
+        unsafe {
+            let r = WinUsb_ResetPipe(self.winusb_handle, endpoint);
             if r == TRUE {
                 Ok(())
             } else {

@@ -521,6 +521,20 @@ impl Interface {
     pub fn interrupt_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
     }
+
+    /// Clear a bulk or interrupt endpoint's halt / stall condition.
+    ///
+    /// Sends a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer to tell the
+    /// device to reset the endpoint's data toggle and clear the halt / stall
+    /// condition, and resets the host-side data toggle.
+    ///
+    /// Use this after receiving [`TransferError::Stall`] to clear the error and
+    /// resume use of the endpoint.
+    ///
+    /// This should not be called when transfers are pending on the endpoint.
+    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+        self.backend.clear_halt(endpoint)
+    }
 }
 
 #[test]
