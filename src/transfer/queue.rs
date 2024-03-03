@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::platform;
+use crate::{platform, Error};
 
 use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRequest};
 
@@ -208,6 +208,20 @@ where
         for transfer in self.pending.iter_mut().rev() {
             transfer.cancel();
         }
+    }
+
+    /// Clear the endpoint's halt / stall condition.
+    ///
+    /// Sends a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer to tell the
+    /// device to reset the endpoint's data toggle and clear the halt / stall
+    /// condition, and resets the host-side data toggle.
+    ///
+    /// Use this after receiving [`TransferError::Stall`] to clear the error and
+    /// resume use of the endpoint.
+    ///
+    /// This should not be called when transfers are pending on the endpoint.
+    pub fn clear_halt(&mut self) -> Result<(), Error> {
+        self.interface.clear_halt(self.endpoint)
     }
 }
 
