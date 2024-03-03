@@ -266,7 +266,7 @@ impl WindowsInterface {
 
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         unsafe {
-            let r = WinUsb_SetCurrentAlternateSetting(raw_handle(&self.handle), alt_setting.into());
+            let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
                 Ok(())
             } else {
