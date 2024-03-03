@@ -15,11 +15,12 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
   that is started when opening the first device.
 * Thinner layer over OS APIs, with less internal state.
 
-### :construction: Current status
+### Current status
 
 * Support for Linux, Windows, and macOS
-* Control, bulk and interrupt transfers work
-* Minimally tested: please test with your device and report issues
+* Device listing and descriptor parsing
+* Transfers on control, bulk and interrupt endpoints
+* Used in production by [probe-rs](https://github.com/probe-rs/probe-rs) and others, but still relatively new. Please test with your device and report issues.
 
 ### License
 MIT or Apache 2.0, at your option
