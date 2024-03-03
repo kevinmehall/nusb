@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use log::{debug, error};
+use log::{debug, error, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
         WinUsb_ControlTransfer, WinUsb_GetOverlappedResult, WinUsb_ReadPipe, WinUsb_WritePipe,
@@ -22,7 +22,7 @@ use windows_sys::Win32::{
 
 use crate::transfer::{
     notify_completion, Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit,
-    PlatformTransfer, RequestBuffer, ResponseBuffer, TransferError,
+    PlatformTransfer, Recipient, RequestBuffer, ResponseBuffer, TransferError,
 };
 
 use super::util::raw_handle;
@@ -228,6 +228,11 @@ impl PlatformSubmit<ControlIn> for TransferData {
     unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
         assert_eq!(self.endpoint, 0);
         assert_eq!(self.ep_type, EndpointType::Control);
+
+        if data.recipient == Recipient::Interface && data.index as u8 != self.interface.interface {
+            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
+        }
+
         addr_of_mut!((*self.event).ptr).write(user_data);
 
         let mut buf = ManuallyDrop::new(Vec::with_capacity(data.length as usize));
@@ -270,6 +275,11 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
     unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
         assert_eq!(self.endpoint, 0);
         assert_eq!(self.ep_type, EndpointType::Control);
+
+        if data.recipient == Recipient::Interface && data.index as u8 != self.interface.interface {
+            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
+        }
+
         addr_of_mut!((*self.event).ptr).write(user_data);
 
         let mut buf = ManuallyDrop::new(data.data.to_vec());

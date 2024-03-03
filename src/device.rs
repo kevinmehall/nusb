@@ -346,8 +346,13 @@ impl Interface {
     ///
     /// ### Platform-specific notes
     ///
-    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
-    ///   are better off using the async methods.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple
+    ///   threads, you are better off using the async methods.
+    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
+    ///   the interface number in the least significant byte of `index`,
+    ///   overriding any value passed. A warning is logged if the passed `index`
+    ///   least significant byte differs from the interface number, and this may
+    ///   become an error in the future.
     pub fn control_in_blocking(
         &self,
         control: Control,
@@ -361,8 +366,13 @@ impl Interface {
     ///
     /// ### Platform-specific notes
     ///
-    /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
-    ///   are better off using the async methods.
+    /// * On Linux, this takes a device-wide lock, so if you have multiple
+    ///   threads, you are better off using the async methods.
+    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
+    ///   the interface number in the least significant byte of `index`,
+    ///   overriding any value passed. A warning is logged if the passed `index`
+    ///   least significant byte differs from the interface number, and this may
+    ///   become an error in the future.
     pub fn control_out_blocking(
         &self,
         control: Control,
@@ -394,6 +404,13 @@ impl Interface {
     /// })).into_result()?;
     /// # Ok(()) }
     /// ```
+    ///
+    /// ### Platform-specific notes
+    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
+    ///   the interface number in the least significant byte of `index`,
+    ///   overriding any value passed. A warning is logged if the passed `index`
+    ///   least significant byte differs from the interface number, and this may
+    ///   become an error in the future.
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlIn>(data);
@@ -422,6 +439,13 @@ impl Interface {
     /// })).into_result()?;
     /// # Ok(()) }
     /// ```
+    ///
+    /// ### Platform-specific notes
+    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
+    ///   the interface number in the least significant byte of `index`,
+    ///   overriding any value passed. A warning is logged if the passed `index`
+    ///   least significant byte differs from the interface number, and this may
+    ///   become an error in the future.
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_transfer(0, EndpointType::Control);
         t.submit::<ControlOut>(data);

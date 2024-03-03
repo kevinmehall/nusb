@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
         WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_SetCurrentAlternateSetting,
@@ -19,7 +19,7 @@ use windows_sys::Win32::{
 
 use crate::{
     descriptors::{validate_config_descriptor, DESCRIPTOR_TYPE_CONFIGURATION},
-    transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
+    transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
     DeviceInfo, Error,
 };
 
@@ -125,6 +125,7 @@ impl WindowsDevice {
 
         Ok(Arc::new(WindowsInterface {
             handle,
+            interface,
             winusb_handle,
         }))
     }
@@ -139,6 +140,7 @@ impl WindowsDevice {
 
 pub(crate) struct WindowsInterface {
     pub(crate) handle: OwnedHandle,
+    pub(crate) interface: u8,
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
 }
 
@@ -161,6 +163,11 @@ impl WindowsInterface {
         timeout: Duration,
     ) -> Result<usize, TransferError> {
         info!("Blocking control {direction:?}, {len} bytes");
+
+        if control.recipient == Recipient::Interface && control.index as u8 != self.interface {
+            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
+        }
+
         let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         let r = WinUsb_SetPipePolicy(
             self.winusb_handle,
