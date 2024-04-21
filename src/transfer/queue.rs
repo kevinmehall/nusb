@@ -116,7 +116,7 @@ pub struct Queue<R: TransferRequest> {
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<TransferHandle<platform::TransferData>>,
 
-    /// An idle transfer that recently completed for re-use. Limiting
+    /// An idle transfer that recently completed for re-use.
     cached: Option<TransferHandle<platform::TransferData>>,
 
     bufs: PhantomData<R>,
