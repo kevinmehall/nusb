@@ -38,7 +38,8 @@ impl RequestBuffer {
     /// Create a `RequestBuffer` by re-using the allocation of a `Vec`.
     pub fn reuse(v: Vec<u8>, len: usize) -> RequestBuffer {
         let mut v = ManuallyDrop::new(v);
-        v.reserve_exact(len.saturating_sub(len));
+        v.clear();
+        v.reserve_exact(len);
         RequestBuffer {
             buf: v.as_mut_ptr(),
             capacity: v.capacity(),
