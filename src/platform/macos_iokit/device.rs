@@ -251,6 +251,8 @@ impl MacInterface {
             self.interface_number
         );
 
+        let mut endpoints = self.endpoints.lock().unwrap();
+
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.interface.raw,
@@ -258,23 +260,27 @@ impl MacInterface {
             ))?;
         }
 
-        let endpoints = self.interface.endpoints()?;
+        *endpoints = self.interface.endpoints()?;
         debug!("Found endpoints: {endpoints:?}");
 
-        *self.endpoints.lock().unwrap() = endpoints;
         Ok(())
     }
 
     pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         debug!("Clear halt, endpoint {endpoint:02x}");
-        let endpoints = self.endpoints.lock().unwrap();
-        let ep = endpoints
-            .get(&endpoint)
-            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+
+        let pipe_ref = {
+            let endpoints = self.endpoints.lock().unwrap();
+            let ep = endpoints
+                .get(&endpoint)
+                .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+            ep.pipe_ref
+        };
+
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.interface.raw,
-                ClearPipeStallBothEnds(ep.pipe_ref)
+                ClearPipeStallBothEnds(pipe_ref)
             ))
         }
     }
