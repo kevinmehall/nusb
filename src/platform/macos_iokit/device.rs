@@ -4,7 +4,7 @@ use std::{
     io::ErrorKind,
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -184,7 +184,7 @@ impl MacDevice {
             device: self.clone(),
             interface_number,
             interface,
-            endpoints,
+            endpoints: Mutex::new(endpoints),
             _event_registration,
         }))
     }
@@ -204,7 +204,7 @@ pub(crate) struct MacInterface {
     pub(crate) device: Arc<MacDevice>,
 
     /// Map from address to a structure that contains the `pipe_ref` used by iokit
-    pub(crate) endpoints: BTreeMap<u8, EndpointInfo>,
+    pub(crate) endpoints: Mutex<BTreeMap<u8, EndpointInfo>>,
 }
 
 impl MacInterface {
@@ -217,7 +217,8 @@ impl MacInterface {
             assert!(endpoint == 0);
             TransferHandle::new(super::TransferData::new_control(self.device.clone()))
         } else {
-            let endpoint = self.endpoints.get(&endpoint).expect("Endpoint not found");
+            let endpoints = self.endpoints.lock().unwrap();
+            let endpoint = endpoints.get(&endpoint).expect("Endpoint not found");
             TransferHandle::new(super::TransferData::new(
                 self.device.clone(),
                 self.clone(),
@@ -250,24 +251,36 @@ impl MacInterface {
             self.interface_number
         );
 
+        let mut endpoints = self.endpoints.lock().unwrap();
+
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.interface.raw,
                 SetAlternateInterface(alt_setting)
-            ))
+            ))?;
         }
+
+        *endpoints = self.interface.endpoints()?;
+        debug!("Found endpoints: {endpoints:?}");
+
+        Ok(())
     }
 
     pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         debug!("Clear halt, endpoint {endpoint:02x}");
-        let ep = self
-            .endpoints
-            .get(&endpoint)
-            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+
+        let pipe_ref = {
+            let endpoints = self.endpoints.lock().unwrap();
+            let ep = endpoints
+                .get(&endpoint)
+                .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+            ep.pipe_ref
+        };
+
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.interface.raw,
-                ClearPipeStallBothEnds(ep.pipe_ref)
+                ClearPipeStallBothEnds(pipe_ref)
             ))
         }
     }

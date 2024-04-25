@@ -287,7 +287,7 @@ impl IoKitInterface {
         }
     }
 
-    pub(crate) fn endpoints(&mut self) -> Result<BTreeMap<u8, EndpointInfo>, Error> {
+    pub(crate) fn endpoints(&self) -> Result<BTreeMap<u8, EndpointInfo>, Error> {
         unsafe {
             let mut endpoints = BTreeMap::new();
             let mut count = 0;
