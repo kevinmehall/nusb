@@ -220,32 +220,32 @@ impl LinuxDevice {
 
     pub(crate) fn claim_interface(
         self: &Arc<Self>,
-        interface: u8,
+        interface_number: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::claim_interface(&self.fd, interface)?;
+        usbfs::claim_interface(&self.fd, interface_number)?;
         debug!(
-            "Claimed interface {interface} on device id {dev}",
+            "Claimed interface {interface_number} on device id {dev}",
             dev = self.events_id
         );
         Ok(Arc::new(LinuxInterface {
             device: self.clone(),
-            interface,
+            interface_number,
             reattach: false,
         }))
     }
 
     pub(crate) fn detach_and_claim_interface(
         self: &Arc<Self>,
-        interface: u8,
+        interface_number: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::detach_and_claim_interface(&self.fd, interface)?;
+        usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
         debug!(
-            "Detached and claimed interface {interface} on device id {dev}",
+            "Detached and claimed interface {interface_number} on device id {dev}",
             dev = self.events_id
         );
         Ok(Arc::new(LinuxInterface {
             device: self.clone(),
-            interface,
+            interface_number,
             reattach: true,
         }))
     }
@@ -287,7 +287,7 @@ impl Drop for LinuxDevice {
 }
 
 pub(crate) struct LinuxInterface {
-    pub(crate) interface: u8,
+    pub(crate) interface_number: u8,
     pub(crate) device: Arc<LinuxDevice>,
     pub(crate) reattach: bool,
 }
@@ -327,11 +327,11 @@ impl LinuxInterface {
     pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         debug!(
             "Set interface {} alt setting to {alt_setting}",
-            self.interface
+            self.interface_number
         );
         Ok(usbfs::set_interface(
             &self.device.fd,
-            self.interface,
+            self.interface_number,
             alt_setting,
         )?)
     }
@@ -344,17 +344,17 @@ impl LinuxInterface {
 
 impl Drop for LinuxInterface {
     fn drop(&mut self) {
-        let res = usbfs::release_interface(&self.device.fd, self.interface);
+        let res = usbfs::release_interface(&self.device.fd, self.interface_number);
         debug!(
             "Released interface {} on device {}: {res:?}",
-            self.interface, self.device.events_id
+            self.interface_number, self.device.events_id
         );
 
         if res.is_ok() && self.reattach {
-            let res = usbfs::attach_kernel_driver(&self.device.fd, self.interface);
+            let res = usbfs::attach_kernel_driver(&self.device.fd, self.interface_number);
             debug!(
                 "Reattached kernel drivers for interface {} on device {}: {res:?}",
-                self.interface, self.device.events_id
+                self.interface_number, self.device.events_id
             );
         }
     }

@@ -102,12 +102,12 @@ impl WindowsDevice {
 
     pub(crate) fn claim_interface(
         self: &Arc<Self>,
-        interface: u8,
+        interface_number: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
-        let path = find_device_interface_path(self.devinst, interface)?;
+        let path = find_device_interface_path(self.devinst, interface_number)?;
 
         log::debug!(
-            "Claiming device {:?} interface {interface} with interface path `{path}`",
+            "Claiming device {:?} interface {interface_number} with interface path `{path}`",
             self.devinst
         );
 
@@ -126,7 +126,8 @@ impl WindowsDevice {
 
         Ok(Arc::new(WindowsInterface {
             handle,
-            interface,
+            device: self.clone(),
+            interface_number,
             winusb_handle,
         }))
     }
@@ -141,7 +142,8 @@ impl WindowsDevice {
 
 pub(crate) struct WindowsInterface {
     pub(crate) handle: OwnedHandle,
-    pub(crate) interface: u8,
+    pub(crate) device: Arc<WindowsDevice>,
+    pub(crate) interface_number: u8,
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
 }
 
@@ -165,7 +167,8 @@ impl WindowsInterface {
     ) -> Result<usize, TransferError> {
         info!("Blocking control {direction:?}, {len} bytes");
 
-        if control.recipient == Recipient::Interface && control.index as u8 != self.interface {
+        if control.recipient == Recipient::Interface && control.index as u8 != self.interface_number
+        {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
