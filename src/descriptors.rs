@@ -238,19 +238,19 @@ impl<'a> Configuration<'a> {
     }
 
     /// Get the configuration descriptor followed by all trailing interface and other descriptors.
-    pub fn descriptors(&self) -> Descriptors {
+    pub fn descriptors(&self) -> Descriptors<'a> {
         Descriptors(self.0)
     }
 
     /// Iterate all interfaces and alternate settings settings of this configuration.
-    pub fn interface_alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting> {
+    pub fn interface_alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting<'a>> {
         self.descriptors()
             .split_by_type(DESCRIPTOR_TYPE_INTERFACE, DESCRIPTOR_LEN_INTERFACE)
             .map(InterfaceAltSetting)
     }
 
     /// Iterate the interfaces of this configuration, grouping together alternate settings of the same interface.
-    pub fn interfaces(&self) -> impl Iterator<Item = InterfaceGroup> {
+    pub fn interfaces(&self) -> impl Iterator<Item = InterfaceGroup<'a>> {
         let mut interfaces = BTreeMap::new();
 
         for intf in self.interface_alt_settings() {
