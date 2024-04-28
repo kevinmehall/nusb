@@ -3,7 +3,7 @@ use std::{io::ErrorKind, sync::Arc, time::Duration};
 use log::error;
 
 use crate::{
-    descriptors::{ActiveConfigurationError, Configuration},
+    descriptors::{ActiveConfigurationError, Configuration, InterfaceAltSetting},
     platform,
     transfer::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
@@ -534,6 +534,30 @@ impl Interface {
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         self.backend.clear_halt(endpoint)
+    }
+
+    /// Get the interface number.
+    pub fn interface_number(&self) -> u8 {
+        self.backend.interface_number
+    }
+
+    /// Get the interface descriptors for the alternate settings of this interface.
+    ///
+    /// This returns cached data and does not perform IO.
+    pub fn descriptors(&self) -> impl Iterator<Item = InterfaceAltSetting> {
+        let active = self.backend.device.active_configuration_value();
+
+        let configuration = self
+            .backend
+            .device
+            .configuration_descriptors()
+            .map(Configuration::new)
+            .find(|c| c.configuration_value() == active);
+
+        configuration
+            .into_iter()
+            .flat_map(|i| i.interface_alt_settings())
+            .filter(|g| g.interface_number() == self.backend.interface_number)
     }
 }
 
