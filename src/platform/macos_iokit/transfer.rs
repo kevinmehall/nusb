@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-use super::{iokit::call_iokit_function, iokit_usb::EndpointInfo, status_to_transfer_result};
+use super::{iokit::call_iokit_function, status_to_transfer_result};
 
 extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut c_void) {
     info!(
@@ -68,11 +68,12 @@ impl TransferData {
     pub(super) fn new(
         device: Arc<super::Device>,
         interface: Arc<super::Interface>,
-        endpoint: &EndpointInfo,
+        endpoint_addr: u8,
+        pipe_ref: u8,
     ) -> TransferData {
         TransferData {
-            endpoint_addr: endpoint.address(),
-            pipe_ref: endpoint.pipe_ref,
+            endpoint_addr,
+            pipe_ref,
             buf: null_mut(),
             capacity: 0,
             inner: Box::into_raw(Box::new(TransferDataInner {

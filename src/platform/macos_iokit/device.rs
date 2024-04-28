@@ -218,11 +218,16 @@ impl MacInterface {
             TransferHandle::new(super::TransferData::new_control(self.device.clone()))
         } else {
             let endpoints = self.endpoints.lock().unwrap();
-            let endpoint = endpoints.get(&endpoint).expect("Endpoint not found");
+
+            // This function can't fail, so if the endpoint is not found, use an invalid
+            // pipe_ref that will fail when submitting the transfer.
+            let pipe_ref = endpoints.get(&endpoint).map(|e| e.pipe_ref).unwrap_or(0);
+
             TransferHandle::new(super::TransferData::new(
                 self.device.clone(),
                 self.clone(),
                 endpoint,
+                pipe_ref,
             ))
         }
     }
