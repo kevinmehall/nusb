@@ -229,7 +229,9 @@ impl PlatformSubmit<ControlIn> for TransferData {
         assert_eq!(self.endpoint, 0);
         assert_eq!(self.ep_type, EndpointType::Control);
 
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface.interface {
+        if data.recipient == Recipient::Interface
+            && data.index as u8 != self.interface.interface_number
+        {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
@@ -276,7 +278,9 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
         assert_eq!(self.endpoint, 0);
         assert_eq!(self.ep_type, EndpointType::Control);
 
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface.interface {
+        if data.recipient == Recipient::Interface
+            && data.index as u8 != self.interface.interface_number
+        {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
