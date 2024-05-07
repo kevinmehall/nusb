@@ -11,9 +11,9 @@ use std::{
 use log::{debug, error, info, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
-        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_ResetPipe,
-        WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT,
-        WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface, WinUsb_Initialize,
+        WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy,
+        PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, FALSE, TRUE},
 };
@@ -130,6 +130,45 @@ impl WindowsDevice {
             interface_number,
             winusb_handle,
         }))
+    }
+
+    /// For composite devices claiming an associated interface.
+    ///
+    /// Should be called after obtaining default `WindowsInterface` via `claim_interface`
+    pub(crate) fn claim_associated_interface(
+        self: &Arc<Self>,
+        default_interface: &WindowsInterface,
+        interface_number: u8,
+    ) -> Result<Arc<WindowsInterface>, Error> {
+        if interface_number == 0 {
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                "Expect a non-zero interface number",
+            ));
+        } else {
+            let mut h = 0;
+            unsafe {
+                if WinUsb_GetAssociatedInterface(
+                    default_interface.winusb_handle,
+                    interface_number - 1,
+                    &mut h,
+                ) == FALSE
+                {
+                    error!(
+                        "WinUsb_GetAssociatedInterface failed: {:?}",
+                        io::Error::last_os_error()
+                    );
+
+                    return Err(io::Error::last_os_error());
+                }
+            };
+            Ok(Arc::new(WindowsInterface {
+                handle: default_interface.handle.try_clone()?,
+                device: self.clone(),
+                interface_number: interface_number,
+                winusb_handle: h,
+            }))
+        }
     }
 
     pub(crate) fn detach_and_claim_interface(

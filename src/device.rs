@@ -52,6 +52,23 @@ impl Device {
         Ok(Interface { backend })
     }
 
+    #[cfg(target_os = "windows")]
+    /// Open an associated interface of the device and claim it for exclusive use.
+    ///
+    /// `default_interface` can be obtained by calling `claim_interface`.
+    ///
+    /// `interface` is assumed to be a non-zero `u8` (since `0_u8` is assumed to be the default interface)
+    pub fn claim_associated_interface(
+        &self,
+        default_interface: &Interface,
+        interface: u8,
+    ) -> Result<Interface, Error> {
+        let backend = self
+            .backend
+            .claim_associated_interface(&default_interface.backend, interface)?;
+        Ok(Interface { backend })
+    }
+
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
     ///
     /// ### Platform notes
