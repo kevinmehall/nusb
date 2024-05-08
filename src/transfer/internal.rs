@@ -111,7 +111,7 @@ impl<P: PlatformTransfer> TransferHandle<P> {
         // It's the syscall that submits the transfer that actually performs the
         // release ordering.
         let prev = self.inner().state.swap(STATE_PENDING, Ordering::Relaxed);
-        assert_eq!(prev, STATE_IDLE, "Transfer should be idle when submitted");
+        debug_assert_eq!(prev, STATE_IDLE, "Transfer should be idle when submitted");
 
         // SAFETY: while `TransferHandle` is alive, the only mutable access to `platform_data`
         // is via this `TransferHandle`. Verified that it is idle.

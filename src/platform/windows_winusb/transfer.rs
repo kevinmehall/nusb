@@ -226,8 +226,8 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
 
 impl PlatformSubmit<ControlIn> for TransferData {
     unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
-        assert_eq!(self.endpoint, 0);
-        assert_eq!(self.ep_type, EndpointType::Control);
+        debug_assert_eq!(self.endpoint, 0);
+        debug_assert_eq!(self.ep_type, EndpointType::Control);
 
         if data.recipient == Recipient::Interface
             && data.index as u8 != self.interface.interface_number
@@ -275,9 +275,10 @@ impl PlatformSubmit<ControlIn> for TransferData {
 
 impl PlatformSubmit<ControlOut<'_>> for TransferData {
     unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
-        assert_eq!(self.endpoint, 0);
-        assert_eq!(self.ep_type, EndpointType::Control);
+        debug_assert_eq!(self.endpoint, 0);
+        debug_assert_eq!(self.ep_type, EndpointType::Control);
 
+        #[cfg(debug_assertions)]
         if data.recipient == Recipient::Interface
             && data.index as u8 != self.interface.interface_number
         {
