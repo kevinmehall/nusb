@@ -469,6 +469,14 @@ impl Interface {
         TransferFuture::new(t)
     }
 
+    #[cfg(target_os = "windows")]
+    /// Enable RAW_IO for a single **IN (device-to-host)** transfer on the specified **bulk** endpoint.
+    ///
+    /// Enabling this should follow [this instruction](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/winusb-functions-for-pipe-policy-modification#:~:text=next%20read%20operation.-,RAW_IO,-Performance%20is%20a)
+    pub fn enable_raw_io(&self, endpoint: u8, enable: bool) {
+        self.backend.enable_raw_io(endpoint, enable);
+    }
+
     /// Submit a single **IN (device-to-host)** transfer on the specified **bulk** endpoint.
     ///
     /// * The requested length must be a multiple of the endpoint's maximum packet size

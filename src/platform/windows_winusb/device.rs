@@ -13,7 +13,7 @@ use windows_sys::Win32::{
     Devices::Usb::{
         WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface, WinUsb_Initialize,
         WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy,
-        PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        PIPE_TRANSFER_TIMEOUT, RAW_IO, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, FALSE, TRUE},
 };
@@ -193,6 +193,28 @@ impl WindowsInterface {
         ep_type: EndpointType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
+    }
+
+    /// Bypasses queuing and error handling to boost performance for multiple read requests.
+    pub(crate) fn enable_raw_io(self: &Arc<Self>, endpoint: u8, enable: bool) {
+        let enable: u32 = if enable { 1 } else { 0 };
+        let length: u32 = size_of_val(&enable) as u32;
+        unsafe {
+            let r = WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                endpoint,
+                RAW_IO,
+                length,
+                &enable as *const u32 as *const c_void,
+            );
+            if r == 1 {
+                debug!(
+                    "WinUsb_SetPipePolicy succeeded to enable/disable RAW_IO on endpoint 0x{endpoint:02X}"
+                );
+            } else {
+                warn!("WinUsb_SetPipePolicy failed to enable/disable RAW_IO on endpoint 0x{endpoint:02X}");
+            }
+        }
     }
 
     /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
