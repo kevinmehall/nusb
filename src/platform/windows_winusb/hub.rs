@@ -124,13 +124,9 @@ impl HubHandle {
             );
             if r == TRUE {
                 let flags = info_v2.Flags.ul;
-                // update, if the device is super speed
+                // update, if the device is super speed. TODO : Not sure if the condition is appropriate
                 if flags & SUPER_SPEED == SUPER_SPEED {
-                    info.Speed = SUPER_SPEED as u8;
-                }
-                // update, if the device is super-plus speed
-                if flags & SUPER_PLUS_SPEED == SUPER_PLUS_SPEED {
-                    info.Speed = SUPER_PLUS_SPEED as u8;
+                    info.Speed = windows_sys::Win32::Devices::Usb::UsbSuperSpeed as u8;
                 }
             }
         };
