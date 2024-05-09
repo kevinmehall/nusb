@@ -195,7 +195,32 @@ impl WindowsInterface {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
     }
 
-    /// Bypasses queuing and error handling to boost performance for multiple read requests.
+    /// Waits for a time-out interval, in milliseconds, before canceling the request
+    pub(crate) fn set_timeout_millisecond(
+        self: &Arc<Self>,
+        endpoint: u8,
+        timeout_millisecond: u32,
+    ) {
+        let length: u32 = size_of_val(&endpoint) as u32;
+        unsafe {
+            let r = WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                endpoint,
+                PIPE_TRANSFER_TIMEOUT,
+                length,
+                &timeout_millisecond as *const u32 as *const c_void,
+            );
+            if r == 1 {
+                debug!(
+                    "WinUsb_SetPipePolicy succeeded to set timeout to {timeout_millisecond} ms on endpoint 0x{endpoint:02X}"
+                );
+            } else {
+                warn!("WinUsb_SetPipePolicy failed to set timeout to {timeout_millisecond} ms on endpoint 0x{endpoint:02X}");
+            }
+        }
+    }
+
+    /// Bypasses queuing and error handling to boost performance for multiple read requests
     pub(crate) fn enable_raw_io(self: &Arc<Self>, endpoint: u8, enable: bool) {
         let enable: u32 = if enable { 1 } else { 0 };
         let length: u32 = size_of_val(&enable) as u32;
@@ -214,6 +239,26 @@ impl WindowsInterface {
             } else {
                 warn!("WinUsb_SetPipePolicy failed to enable/disable RAW_IO on endpoint 0x{endpoint:02X}");
             }
+        }
+
+        use windows_sys::Win32::Devices::Usb::WinUsb_GetPipePolicy;
+        use windows_sys::Win32::Devices::Usb::MAXIMUM_TRANSFER_SIZE;
+        let mut value: u32 = 0;
+        let mut length: u32 = size_of_val(&value) as u32;
+        let r = unsafe {
+            WinUsb_GetPipePolicy(
+                self.winusb_handle,
+                endpoint,
+                MAXIMUM_TRANSFER_SIZE,
+                &mut length as *mut u32,
+                &mut value as *mut u32 as *mut _, //std::ptr::addr_of_mut!(value) as *mut _,
+            )
+        };
+
+        if r == 1 {
+            println!("value = {}", value);
+        } else {
+            println!("value = {value}, read error = {}", r);
         }
     }
 

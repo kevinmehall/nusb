@@ -477,6 +477,18 @@ impl Interface {
         self.backend.enable_raw_io(endpoint, enable);
     }
 
+    #[cfg(target_os = "windows")]
+    /// Set transfers on an endpoint to complete within a specific time, in milliseconds
+    ///
+    /// * If set to zero (default), transfers won't time out because the host controller won't cancel the transfer. In this case, the transfer waits indefinitely until it's manually canceled or the transfer completes normally.
+    /// * If set to a nonzero value (time-out interval), the host controller starts a timer when it receives the transfer request. When the timer exceeds the set time-out interval, the request is canceled.
+    ///
+    /// Enabling this should follow [this instruction](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/winusb-functions-for-pipe-policy-modification#:~:text=next%20read%20operation.-,RAW_IO,-Performance%20is%20a)
+    pub fn set_timeout_millisecond(&self, endpoint: u8, timeout_millisecond: u32) {
+        self.backend
+            .set_timeout_millisecond(endpoint, timeout_millisecond);
+    }
+
     /// Submit a single **IN (device-to-host)** transfer on the specified **bulk** endpoint.
     ///
     /// * The requested length must be a multiple of the endpoint's maximum packet size
