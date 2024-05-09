@@ -256,9 +256,9 @@ impl WindowsInterface {
         };
 
         if r == 1 {
-            println!("value = {}", value);
+            debug!("WinUsb_GetPipePolicy succeeded to read MAXIMUM_TRANSFER_SIZE = {value}");
         } else {
-            println!("value = {value}, read error = {}", r);
+            warn!("WinUsb_GetPipePolicy failed to read MAXIMUM_TRANSFER_SIZE");
         }
     }
 
