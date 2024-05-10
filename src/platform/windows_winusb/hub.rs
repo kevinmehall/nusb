@@ -22,10 +22,7 @@ use windows_sys::Win32::{
         },
     },
     Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
-    System::{
-        SystemInformation::{GetVersionExW, OSVERSIONINFOEXW},
-        IO::DeviceIoControl,
-    },
+    System::IO::DeviceIoControl,
 };
 
 use super::{
