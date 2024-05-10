@@ -8,21 +8,25 @@ use std::{
     slice,
 };
 
+use crate::Error;
 use log::{debug, warn};
 use windows_sys::Win32::{
     Devices::{
         Properties::DEVPKEY_Device_Address,
         Usb::{
             GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
-            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2, USB_DESCRIPTOR_REQUEST,
             USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+            USB_NODE_CONNECTION_INFORMATION_EX_V2,
         },
     },
     Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
-    System::IO::DeviceIoControl,
+    System::{
+        SystemInformation::{GetVersionExW, OSVERSIONINFOEXW},
+        IO::DeviceIoControl,
+    },
 };
-
-use crate::Error;
 
 use super::{
     cfgmgr32::DevInst,
@@ -69,6 +73,7 @@ impl HubHandle {
             );
 
             if r == TRUE {
+                self.refine_node_speed_info(port_number, &mut info);
                 Ok(info)
             } else {
                 let err = Error::last_os_error();
@@ -76,6 +81,48 @@ impl HubHandle {
                 Err(err)
             }
         }
+    }
+
+    /// On Windows versions [newer than Windows 8](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_node_connection_information_ex_v2),
+    /// we may use `USB_NODE_CONNECTION_INFORMATION_EX_V2` to get more precise speed for Super or SuperPlus connections
+    fn refine_node_speed_info(
+        &self,
+        port_number: u32,
+        info: &mut USB_NODE_CONNECTION_INFORMATION_EX,
+    ) {
+        const USB110: u32 = 0x01;
+        const USB200: u32 = 0x02;
+        const USB300: u32 = 0x04;
+        const DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER: u32 = 0x01;
+        const DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER: u32 = 0x02;
+
+        const SUPER_SPEED: u32 =
+            DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER | DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER;
+
+        unsafe {
+            let mut info_v2: USB_NODE_CONNECTION_INFORMATION_EX_V2 = mem::zeroed();
+            info_v2.ConnectionIndex = port_number;
+            info_v2.Length = mem::size_of_val(&info_v2) as u32;
+            info_v2.SupportedUsbProtocols.ul = USB110 | USB200 | USB300;
+            let mut bytes_returned: u32 = 0;
+            let r = DeviceIoControl(
+                raw_handle(&self.0),
+                IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
+                &info_v2 as *const _ as *const c_void,
+                mem::size_of_val(&info_v2) as u32,
+                &mut info_v2 as *mut _ as *mut c_void,
+                mem::size_of_val(&info_v2) as u32,
+                &mut bytes_returned,
+                null_mut(),
+            );
+            if r == TRUE {
+                let flags = info_v2.Flags.ul;
+                // update, if the device is super speed. TODO : Not sure if the condition is appropriate, please check
+                if flags & SUPER_SPEED == SUPER_SPEED {
+                    info.Speed = windows_sys::Win32::Devices::Usb::UsbSuperSpeed as u8;
+                }
+            }
+        };
     }
 
     pub fn get_descriptor(
