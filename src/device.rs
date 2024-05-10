@@ -475,7 +475,12 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+        let interface = self.backend.clone();
+
+        #[cfg(target_os = "windows")]
+        interface.enable_raw_io(endpoint);
+
+        Queue::new(interface, endpoint, EndpointType::Bulk)
     }
 
     /// Create a queue for managing multiple **OUT (device-to-host)** transfers on a **bulk** endpoint.
@@ -512,7 +517,12 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn interrupt_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+        let interface = self.backend.clone();
+
+        #[cfg(target_os = "windows")]
+        interface.enable_raw_io(endpoint);
+
+        Queue::new(interface, endpoint, EndpointType::Interrupt)
     }
 
     /// Create a queue for managing multiple **OUT (device-to-host)** transfers on an **interrupt** endpoint.
