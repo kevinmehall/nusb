@@ -478,7 +478,7 @@ impl Interface {
         Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
     }
 
-    /// Create a queue for managing multiple **OUT (device-to-host)** transfers on a **bulk** endpoint.
+    /// Create a queue for managing multiple **OUT (host-to-device)** transfers on a **bulk** endpoint.
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
