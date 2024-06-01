@@ -10,10 +10,10 @@ use windows_sys::Win32::Devices::{
         DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
         DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
-    Usb::{GUID_DEVINTERFACE_USB_DEVICE, USB_DEVICE_SPEED},
+    Usb::GUID_DEVINTERFACE_USB_DEVICE,
 };
 
-use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
+use crate::{DeviceInfo, Error, InterfaceInfo};
 
 use super::{
     cfgmgr32::{self, get_device_interface_property, DevInst},
@@ -40,13 +40,13 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
 
     let hub_port = HubPort::by_child_devinst(devinst).ok()?;
-    let info = hub_port.get_node_connection_info().ok()?;
+    let info = hub_port.get_info().ok()?;
 
     let product_string = devinst
         .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
         .and_then(|s| s.into_string().ok());
 
-    let serial_number = if info.DeviceDescriptor.iSerialNumber != 0 {
+    let serial_number = if info.device_desc.iSerialNumber != 0 {
         (&instance_id)
             .to_str()
             .and_then(|s| s.rsplit_once("\\").map(|(_, s)| s.to_string()))
@@ -94,14 +94,14 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         port_number,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_number: bus_number as u8,
-        device_address: info.DeviceAddress as u8,
-        vendor_id: info.DeviceDescriptor.idVendor,
-        product_id: info.DeviceDescriptor.idProduct,
-        device_version: info.DeviceDescriptor.bcdDevice,
-        class: info.DeviceDescriptor.bDeviceClass,
-        subclass: info.DeviceDescriptor.bDeviceSubClass,
-        protocol: info.DeviceDescriptor.bDeviceProtocol,
-        speed: map_speed(info.Speed),
+        device_address: info.address,
+        vendor_id: info.device_desc.idVendor,
+        product_id: info.device_desc.idProduct,
+        device_version: info.device_desc.bcdDevice,
+        class: info.device_desc.bDeviceClass,
+        subclass: info.device_desc.bDeviceSubClass,
+        protocol: info.device_desc.bDeviceProtocol,
+        speed: info.speed,
         manufacturer_string: None,
         product_string,
         serial_number,
@@ -239,19 +239,4 @@ fn test_parse_compatible_id() {
         parse_compatible_id(OsStr::new("USB\\Class_03&SubClass_11&Prot_22")),
         Some((3, 17, 34))
     );
-}
-
-fn map_speed(speed: u8) -> Option<Speed> {
-    #![allow(non_upper_case_globals)]
-    use windows_sys::Win32::Devices::Usb::{
-        UsbFullSpeed, UsbHighSpeed, UsbLowSpeed, UsbSuperSpeed,
-    };
-
-    match speed as USB_DEVICE_SPEED {
-        UsbLowSpeed => Some(Speed::Low),
-        UsbFullSpeed => Some(Speed::Full),
-        UsbHighSpeed => Some(Speed::High),
-        UsbSuperSpeed => Some(Speed::Super),
-        _ => None,
-    }
 }
