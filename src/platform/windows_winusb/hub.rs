@@ -13,16 +13,30 @@ use windows_sys::Win32::{
     Devices::{
         Properties::DEVPKEY_Device_Address,
         Usb::{
-            GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
-            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, USB_DESCRIPTOR_REQUEST,
-            USB_DESCRIPTOR_REQUEST_0, USB_NODE_CONNECTION_INFORMATION_EX,
+            UsbFullSpeed, UsbHighSpeed, UsbLowSpeed, GUID_DEVINTERFACE_USB_HUB,
+            IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX,
+            IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2, USB_DESCRIPTOR_REQUEST,
+            USB_DESCRIPTOR_REQUEST_0, USB_DEVICE_DESCRIPTOR, USB_DEVICE_SPEED,
+            USB_NODE_CONNECTION_INFORMATION_EX, USB_NODE_CONNECTION_INFORMATION_EX_V2,
         },
     },
     Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
     System::IO::DeviceIoControl,
 };
 
-use crate::Error;
+// flags for USB_NODE_CONNECTION_INFORMATION_EX_V2.SupportedUsbProtocols
+const USB110: u32 = 0x01;
+const USB200: u32 = 0x02;
+const USB300: u32 = 0x04;
+
+// USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS
+const DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER: u32 = 0x01;
+const DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER: u32 = 0x02;
+const DEVICE_IS_OPERATING_AT_SUPER_SPEED_PLUS_OR_HIGHER: u32 = 0x04;
+const DEVICE_IS_SUPER_SPEED_PLUS_CAPABLE_OR_HIGHER: u32 = 0x08;
+
+use crate::{Error, Speed};
 
 use super::{
     cfgmgr32::DevInst,
@@ -60,6 +74,37 @@ impl HubHandle {
             let r = DeviceIoControl(
                 raw_handle(&self.0),
                 IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX,
+                &info as *const _ as *const c_void,
+                mem::size_of_val(&info) as u32,
+                &mut info as *mut _ as *mut c_void,
+                mem::size_of_val(&info) as u32,
+                &mut bytes_returned,
+                null_mut(),
+            );
+
+            if r == TRUE {
+                Ok(info)
+            } else {
+                let err = Error::last_os_error();
+                debug!("Hub DeviceIoControl failed: {err:?}");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn get_node_connection_info_v2(
+        &self,
+        port_number: u32,
+    ) -> Result<USB_NODE_CONNECTION_INFORMATION_EX_V2, Error> {
+        unsafe {
+            let mut info: USB_NODE_CONNECTION_INFORMATION_EX_V2 = mem::zeroed();
+            info.ConnectionIndex = port_number;
+            info.Length = mem::size_of_val(&info) as u32;
+            info.SupportedUsbProtocols.ul = USB110 | USB200 | USB300;
+            let mut bytes_returned: u32 = 0;
+            let r = DeviceIoControl(
+                raw_handle(&self.0),
+                IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
                 &info as *const _ as *const c_void,
                 mem::size_of_val(&info) as u32,
                 &mut info as *mut _ as *mut c_void,
@@ -152,6 +197,12 @@ pub struct HubPort {
     hub_handle: HubHandle,
     port_number: u32,
 }
+pub struct HubDeviceInfo {
+    pub device_desc: USB_DEVICE_DESCRIPTOR,
+    pub speed: Option<Speed>,
+    pub address: u8,
+    pub active_config: u8,
+}
 
 impl HubPort {
     pub fn by_child_devinst(devinst: DevInst) -> Result<HubPort, Error> {
@@ -173,8 +224,36 @@ impl HubPort {
         })
     }
 
-    pub fn get_node_connection_info(&self) -> Result<USB_NODE_CONNECTION_INFORMATION_EX, Error> {
-        self.hub_handle.get_node_connection_info(self.port_number)
+    pub fn get_info(&self) -> Result<HubDeviceInfo, Error> {
+        #![allow(non_upper_case_globals)]
+
+        let info = self.hub_handle.get_node_connection_info(self.port_number)?;
+        let info_v2 = self
+            .hub_handle
+            .get_node_connection_info_v2(self.port_number)?;
+
+        const SUPER_PLUS: u32 = DEVICE_IS_OPERATING_AT_SUPER_SPEED_PLUS_OR_HIGHER
+            | DEVICE_IS_SUPER_SPEED_PLUS_CAPABLE_OR_HIGHER;
+        const SUPER: u32 =
+            DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER | DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER;
+
+        let v2_flags = unsafe { info_v2.Flags.ul };
+
+        let speed = match info.Speed as USB_DEVICE_SPEED {
+            _ if v2_flags & SUPER_PLUS == SUPER_PLUS => Some(Speed::SuperPlus),
+            _ if v2_flags & SUPER == SUPER => Some(Speed::Super),
+            UsbHighSpeed => Some(Speed::High),
+            UsbFullSpeed => Some(Speed::Full),
+            UsbLowSpeed => Some(Speed::Low),
+            _ => None,
+        };
+
+        Ok(HubDeviceInfo {
+            device_desc: info.DeviceDescriptor,
+            address: info.DeviceAddress as u8,
+            active_config: info.CurrentConfigurationValue,
+            speed,
+        })
     }
 
     pub fn get_descriptor(

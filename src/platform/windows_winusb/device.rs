@@ -46,8 +46,8 @@ impl WindowsDevice {
         // might now be connected to that port, and we'd get its descriptors
         // instead.
         let hub_port = HubPort::by_child_devinst(d.devinst)?;
-        let connection_info = hub_port.get_node_connection_info()?;
-        let num_configurations = connection_info.DeviceDescriptor.bNumConfigurations;
+        let connection_info = hub_port.get_info()?;
+        let num_configurations = connection_info.device_desc.bNumConfigurations;
 
         let config_descriptors = (0..num_configurations)
             .flat_map(|i| {
@@ -64,7 +64,7 @@ impl WindowsDevice {
 
         Ok(Arc::new(WindowsDevice {
             config_descriptors,
-            active_config: connection_info.CurrentConfigurationValue,
+            active_config: connection_info.active_config,
             devinst: d.devinst,
         }))
     }
