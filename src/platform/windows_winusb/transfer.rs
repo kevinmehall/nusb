@@ -15,7 +15,7 @@ use windows_sys::Win32::{
     Foundation::{
         GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
         ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, ERROR_OPERATION_ABORTED,
-        ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT, ERROR_TIMEOUT, FALSE, TRUE, WIN32_ERROR,
+        ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT, ERROR_TIMEOUT, FALSE, HANDLE, TRUE, WIN32_ERROR,
     },
     System::IO::{CancelIoEx, OVERLAPPED},
 };
@@ -24,8 +24,6 @@ use crate::transfer::{
     notify_completion, Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit,
     PlatformTransfer, Recipient, RequestBuffer, ResponseBuffer, TransferError,
 };
-
-use super::util::raw_handle;
 
 #[repr(C)]
 pub(crate) struct EventNotify {
@@ -142,7 +140,7 @@ impl PlatformTransfer for TransferData {
         debug!("Cancelling transfer {:?}", self.event);
         unsafe {
             let r = CancelIoEx(
-                raw_handle(&self.interface.handle),
+                self.interface.handle as HANDLE,
                 self.event as *mut OVERLAPPED,
             );
             if r == 0 {
