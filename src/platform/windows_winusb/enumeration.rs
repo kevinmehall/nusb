@@ -13,7 +13,10 @@ use windows_sys::Win32::Devices::{
     Usb::GUID_DEVINTERFACE_USB_DEVICE,
 };
 
-use crate::{DeviceInfo, Error, InterfaceInfo};
+use crate::{
+    descriptors::{validate_config_descriptor, Configuration, DESCRIPTOR_TYPE_CONFIGURATION},
+    DeviceInfo, Error, InterfaceInfo,
+};
 
 use super::{
     cfgmgr32::{self, get_device_interface_property, DevInst},
@@ -79,7 +82,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
             })
             .collect()
     } else {
-        Vec::new()
+        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or(Vec::new())
     };
 
     interfaces.sort_unstable_by_key(|i| i.interface_number);
@@ -104,6 +107,38 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         serial_number,
         interfaces,
     })
+}
+
+fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Vec<InterfaceInfo>> {
+    let buf = hub_port
+        .get_descriptor(
+            DESCRIPTOR_TYPE_CONFIGURATION,
+            active_config.saturating_sub(1),
+            0,
+        )
+        .ok()?;
+    let len = validate_config_descriptor(&buf)?;
+    let desc = Configuration::new(&buf[..len]);
+
+    if desc.configuration_value() != active_config {
+        return None;
+    }
+
+    Some(
+        desc.interfaces()
+            .map(|i| {
+                let i_desc = i.first_alt_setting();
+
+                InterfaceInfo {
+                    interface_number: i.interface_number(),
+                    class: i_desc.class(),
+                    subclass: i_desc.subclass(),
+                    protocol: i_desc.protocol(),
+                    interface_string: None,
+                }
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn get_driver_name(dev: DevInst) -> String {
