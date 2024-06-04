@@ -14,7 +14,7 @@ use crate::{Device, Error};
 ///
 /// * Some fields are platform-specific
 ///     * Linux: `sysfs_path`
-///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
+///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`, `location_paths`
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
 pub struct DeviceInfo {
@@ -35,6 +35,9 @@ pub struct DeviceInfo {
 
     #[cfg(target_os = "windows")]
     pub(crate) driver: Option<String>,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) location_paths: Vec<OsString>,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
@@ -99,6 +102,12 @@ impl DeviceInfo {
     #[cfg(target_os = "windows")]
     pub fn driver(&self) -> Option<&str> {
         self.driver.as_deref()
+    }
+
+    /// *(Windows-only)* Location paths of this device
+    #[cfg(target_os = "windows")]
+    pub fn location_paths(&self) -> Vec<&OsStr> {
+        self.location_paths.iter().map(<_>::as_ref).collect()
     }
 
     /// *(macOS-only)* IOKit Location ID
@@ -255,6 +264,7 @@ impl std::fmt::Debug for DeviceInfo {
             s.field("parent_instance_id", &self.parent_instance_id);
             s.field("port_number", &self.port_number);
             s.field("driver", &self.driver);
+            s.field("location_paths", &self.location_paths);
         }
 
         #[cfg(target_os = "macos")]

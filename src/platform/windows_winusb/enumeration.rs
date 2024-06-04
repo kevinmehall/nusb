@@ -8,7 +8,7 @@ use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
         DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
-        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
     Usb::GUID_DEVINTERFACE_USB_DEVICE,
 };
@@ -59,6 +59,8 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         .and_then(|s| s.into_string().ok())
         .unwrap_or_default();
 
+    let location_paths = devinst.get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)?;
+
     let mut interfaces = if driver.eq_ignore_ascii_case("usbccgp") {
         devinst
             .children()
@@ -93,6 +95,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         devinst,
         port_number,
         driver: Some(driver).filter(|s| !s.is_empty()),
+        location_paths,
         bus_number: bus_number as u8,
         device_address: info.address,
         vendor_id: info.device_desc.idVendor,
