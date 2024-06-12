@@ -106,8 +106,8 @@ impl DeviceInfo {
 
     /// *(Windows-only)* Location paths of this device
     #[cfg(target_os = "windows")]
-    pub fn location_paths(&self) -> Vec<&OsStr> {
-        self.location_paths.iter().map(<_>::as_ref).collect()
+    pub fn location_paths(&self) -> impl Iterator<Item = &OsStr> {
+        self.location_paths.iter().map(<_>::as_ref)
     }
 
     /// *(macOS-only)* IOKit Location ID
