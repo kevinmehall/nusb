@@ -28,6 +28,8 @@ pub(crate) const DESCRIPTOR_LEN_INTERFACE: u8 = 9;
 pub(crate) const DESCRIPTOR_TYPE_ENDPOINT: u8 = 0x05;
 pub(crate) const DESCRIPTOR_LEN_ENDPOINT: u8 = 7;
 
+pub(crate) const DESCRIPTOR_TYPE_STRING: u8 = 0x03;
+
 /// USB defined language IDs for string descriptors.
 ///
 /// In practice, different language IDs are not used,
@@ -352,6 +354,13 @@ impl<'a> InterfaceGroup<'a> {
     pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting> {
         self.interfaces.iter().cloned()
     }
+
+    /// Get the descriptor for the first alt setting.
+    ///
+    /// There is guaranteed to be at least one alt setting or this would not have been found.
+    pub fn first_alt_setting(&self) -> InterfaceAltSetting<'a> {
+        self.interfaces[0].clone()
+    }
 }
 
 /// Information about a USB interface alternate setting, with access to associated endpoints and other descriptors.
@@ -547,6 +556,24 @@ pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iter
         buf = &buf[total_len..];
         Some(descriptors)
     })
+}
+
+pub(crate) fn validate_string_descriptor(data: &[u8]) -> bool {
+    data.len() >= 2 && data[0] as usize == data.len() && data[1] == DESCRIPTOR_TYPE_STRING
+}
+
+pub(crate) fn decode_string_descriptor(data: &[u8]) -> Result<String, ()> {
+    if !validate_string_descriptor(data) {
+        return Err(());
+    }
+
+    Ok(char::decode_utf16(
+        data[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes(c.try_into().unwrap())),
+    )
+    .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+    .collect::<String>())
 }
 
 /// Make public when fuzzing
