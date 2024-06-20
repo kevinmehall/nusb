@@ -14,7 +14,10 @@ use windows_sys::Win32::Devices::{
 };
 
 use crate::{
-    descriptors::{validate_config_descriptor, Configuration, DESCRIPTOR_TYPE_CONFIGURATION},
+    descriptors::{
+        decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
+        Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
+    },
     DeviceInfo, Error, InterfaceInfo,
 };
 
@@ -50,9 +53,17 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         .and_then(|s| s.into_string().ok());
 
     let serial_number = if info.device_desc.iSerialNumber != 0 {
-        (&instance_id)
-            .to_str()
-            .and_then(|s| s.rsplit_once("\\").map(|(_, s)| s.to_string()))
+        // Experimentally confirmed, the string descriptor is cached and this does
+        // not perform IO. However, the language ID list is not cached, so we
+        // have to assume 0x0409 (which will be right 99% of the time).
+        hub_port
+            .get_descriptor(
+                DESCRIPTOR_TYPE_STRING,
+                info.device_desc.iSerialNumber,
+                US_ENGLISH,
+            )
+            .ok()
+            .and_then(|data| decode_string_descriptor(&data).ok())
     } else {
         None
     };

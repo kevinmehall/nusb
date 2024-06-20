@@ -8,7 +8,7 @@ use std::{
     slice,
 };
 
-use log::{debug, warn};
+use log::debug;
 use windows_sys::Win32::{
     Devices::{
         Properties::DEVPKEY_Device_Address,
@@ -176,7 +176,7 @@ impl HubHandle {
                 Ok(vec)
             } else {
                 let err = GetLastError();
-                warn!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
+                debug!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
                 Err(match err {
                     ERROR_GEN_FAILURE => Error::new(
                         ErrorKind::Other,
