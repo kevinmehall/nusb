@@ -3,7 +3,10 @@ use std::{io::ErrorKind, sync::Arc, time::Duration};
 use log::error;
 
 use crate::{
-    descriptors::{ActiveConfigurationError, Configuration, InterfaceAltSetting},
+    descriptors::{
+        decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
+        Configuration, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
+    },
     platform,
     transfer::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
@@ -11,9 +14,6 @@ use crate::{
     },
     DeviceInfo, Error,
 };
-
-const STANDARD_REQUEST_GET_DESCRIPTOR: u8 = 0x06;
-const DESCRIPTOR_TYPE_STRING: u8 = 0x03;
 
 /// An opened USB device.
 ///
@@ -157,6 +157,7 @@ impl Device {
 
         #[cfg(not(target_os = "windows"))]
         {
+            const STANDARD_REQUEST_GET_DESCRIPTOR: u8 = 0x06;
             use crate::transfer::{ControlType, Recipient};
 
             let mut buf = vec![0; 4096];
@@ -187,7 +188,14 @@ impl Device {
         timeout: Duration,
     ) -> Result<impl Iterator<Item = u16>, Error> {
         let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)?;
-        validate_string_descriptor(&data)?;
+
+        if !validate_string_descriptor(&data) {
+            error!("String descriptor language list read {data:?}, not a valid string descriptor");
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "string descriptor data was invalid",
+            ));
+        }
 
         //TODO: Use array_chunks once stable
         let mut iter = data.into_iter().skip(2);
@@ -218,15 +226,9 @@ impl Device {
             ));
         }
         let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)?;
-        validate_string_descriptor(&data)?;
 
-        Ok(char::decode_utf16(
-            data[2..]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes(c.try_into().unwrap())),
-        )
-        .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
-        .collect::<String>())
+        decode_string_descriptor(&data)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "string descriptor data was invalid"))
     }
 
     /// Reset the device, forcing it to re-enumerate.
@@ -341,17 +343,6 @@ impl Device {
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
-}
-
-fn validate_string_descriptor(data: &[u8]) -> Result<(), Error> {
-    if data.len() < 2 || data[0] as usize != data.len() || data[1] != DESCRIPTOR_TYPE_STRING {
-        error!("String descriptor language list read {data:?}, not a valid string descriptor");
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "string descriptor data was invalid",
-        ));
-    }
-    Ok(())
 }
 
 /// An opened interface of a USB device.
