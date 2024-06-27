@@ -61,10 +61,13 @@ pub fn enum_root_hub(rootinst: DevInst) -> impl Iterator<Item = (DevInst, Vec<u3
                     })
                     .and_then(|d| DevInst::from_instance_id(&d))
                 {
-                    let port = get_port_number(hubinst).unwrap_or(0);
-                    tree.push_back(hub);
-                    tree.push_back(hubinst.children().collect());
-                    port_chain.push(port);
+                    if let Some(port_number) = get_port_number(hubinst) {
+                        if port_number != 0 {
+                            tree.push_back(hub);
+                            tree.push_back(hubinst.children().collect());
+                            port_chain.push(port_number);
+                        }
+                    }
                     break;
                 } else if let Some(devinst) = inst
                     .interfaces(GUID_DEVINTERFACE_USB_DEVICE)
@@ -75,10 +78,13 @@ pub fn enum_root_hub(rootinst: DevInst) -> impl Iterator<Item = (DevInst, Vec<u3
                     })
                     .and_then(|d| DevInst::from_instance_id(&d))
                 {
-                    let port = get_port_number(devinst).unwrap_or(0);
-                    port_chain.push(port);
-                    device_inst.push_back((devinst, port_chain.clone()));
-                    port_chain.pop();
+                    if let Some(port_number) = get_port_number(devinst) {
+                        if port_number != 0 {
+                            port_chain.push(port_number);
+                            device_inst.push_back((devinst, port_chain.clone()));
+                            port_chain.pop();
+                        }
+                    }
                 }
             } else {
                 port_chain.pop();

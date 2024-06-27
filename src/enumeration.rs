@@ -233,7 +233,7 @@ impl std::fmt::Debug for DeviceInfo {
 
         s.field("bus_number", &self.bus_number)
             .field("port_number", &self.port_number)
-            .field("port_numbers", &self.port_chain)
+            .field("port_chain", &self.port_chain)
             .field("device_address", &self.device_address)
             .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
             .field("product_id", &format_args!("0x{:04X}", self.product_id))
