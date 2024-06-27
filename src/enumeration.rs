@@ -14,7 +14,7 @@ use crate::{Device, Error};
 ///
 /// * Some fields are platform-specific
 ///     * Linux: `sysfs_path`
-///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
+///     * Windows: `instance_id`, `parent_instance_id`, `driver`
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
 pub struct DeviceInfo {
@@ -26,9 +26,6 @@ pub struct DeviceInfo {
 
     #[cfg(target_os = "windows")]
     pub(crate) parent_instance_id: OsString,
-
-    #[cfg(target_os = "windows")]
-    pub(crate) port_number: u32,
 
     #[cfg(target_os = "windows")]
     pub(crate) devinst: crate::platform::DevInst,
@@ -43,6 +40,8 @@ pub struct DeviceInfo {
     pub(crate) location_id: u32,
 
     pub(crate) bus_number: u8,
+    pub(crate) port_number: u32,
+    pub(crate) port_chain: Vec<u32>,
     pub(crate) device_address: u8,
 
     pub(crate) vendor_id: u16,
@@ -89,12 +88,6 @@ impl DeviceInfo {
         &self.parent_instance_id
     }
 
-    /// *(Windows-only)* Port number
-    #[cfg(target_os = "windows")]
-    pub fn port_number(&self) -> u32 {
-        self.port_number
-    }
-
     /// *(Windows-only)* Driver associated with the device as a whole
     #[cfg(target_os = "windows")]
     pub fn driver(&self) -> Option<&str> {
@@ -116,6 +109,16 @@ impl DeviceInfo {
     /// Number identifying the bus / host controller where the device is connected.
     pub fn bus_number(&self) -> u8 {
         self.bus_number
+    }
+
+    /// Port number
+    pub fn port_number(&self) -> u32 {
+        self.port_number
+    }
+
+    /// Port chain
+    pub fn port_chain(&self) -> impl Iterator<Item = &u32> {
+        self.port_chain.iter()
     }
 
     /// Number identifying the device within the bus.
@@ -229,6 +232,8 @@ impl std::fmt::Debug for DeviceInfo {
         let mut s = f.debug_struct("DeviceInfo");
 
         s.field("bus_number", &self.bus_number)
+            .field("port_number", &self.port_number)
+            .field("port_chain", &self.port_chain)
             .field("device_address", &self.device_address)
             .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
             .field("product_id", &format_args!("0x{:04X}", self.product_id))
@@ -253,7 +258,6 @@ impl std::fmt::Debug for DeviceInfo {
         {
             s.field("instance_id", &self.instance_id);
             s.field("parent_instance_id", &self.parent_instance_id);
-            s.field("port_number", &self.port_number);
             s.field("driver", &self.driver);
         }
 

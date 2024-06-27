@@ -166,7 +166,11 @@ impl<'a> Iterator for NulSepListIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(next_nul) = self.0.iter().copied().position(|x| x == 0) {
             let (i, next) = self.0.split_at(next_nul + 1);
-            self.0 = next;
+            self.0 = if next.is_empty() || next.first() == Some(&0) {
+                &[]
+            } else {
+                next
+            };
             Some(unsafe { WCStr::from_slice_unchecked(i) })
         } else {
             None

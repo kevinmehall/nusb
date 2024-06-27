@@ -77,8 +77,15 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
     debug!("probe device {path:?}");
+    let port_chain: Vec<u32> = path
+        .read_attr::<String>("devpath")?
+        .split('.')
+        .flat_map(|v| v.parse::<u32>())
+        .collect();
     Ok(DeviceInfo {
         bus_number: path.read_attr("busnum")?,
+        port_number: *port_chain.last().unwrap_or(&0),
+        port_chain,
         device_address: path.read_attr("devnum")?,
         vendor_id: path.read_attr_hex("idVendor")?,
         product_id: path.read_attr_hex("idProduct")?,
