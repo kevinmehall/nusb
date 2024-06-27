@@ -50,10 +50,13 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
     log::debug!("Probing device {registry_id}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
+    let location_id = get_integer_property(&device, "locationID")?;
     Some(DeviceInfo {
         registry_id,
         location_id: get_integer_property(&device, "locationID")?,
-        bus_number: 0, // TODO: does this exist on macOS?
+        bus_number: location_id >> 24, // ref libusb process_new_device
+        port_number: 0,                // TODO: ref libusb get_device_port
+        port_chain: vec![],            // TODO: ref libusb get_device_parent_sessionID
         device_address: get_integer_property(&device, "USB Address")?,
         vendor_id: get_integer_property(&device, "idVendor")?,
         product_id: get_integer_property(&device, "idProduct")?,

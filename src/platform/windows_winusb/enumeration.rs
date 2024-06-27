@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     ffi::{OsStr, OsString},
     io::ErrorKind,
 };
@@ -6,11 +7,14 @@ use std::{
 use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
-        DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
-        DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
+        DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
+        DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationInfo,
         DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
-    Usb::GUID_DEVINTERFACE_USB_DEVICE,
+    Usb::{
+        GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HOST_CONTROLLER,
+        GUID_DEVINTERFACE_USB_HUB,
+    },
 };
 
 use crate::{DeviceInfo, Error, InterfaceInfo};
@@ -22,22 +26,75 @@ use super::{
 };
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
+    let hubs = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HOST_CONTROLLER, None);
+    let devs: Vec<DeviceInfo> = hubs
         .iter()
         .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
         .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(probe_device)
+        .flat_map(|root| root.children())
+        .map(enum_root_hub)
+        .enumerate()
+        .flat_map(|bus| {
+            bus.1
+                .flat_map(move |d| probe_device(d.0, (bus.0 + 1) as u32, d.1))
+        })
         .collect();
     Ok(devs.into_iter())
 }
 
-pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
+pub fn enum_root_hub(rootinst: DevInst) -> impl Iterator<Item = (DevInst, Vec<u32>)> {
+    let mut device_inst = VecDeque::new();
+
+    let mut tree: VecDeque<VecDeque<DevInst>> = VecDeque::new();
+    let mut port_chain = Vec::new();
+
+    tree.push_back(rootinst.children().collect());
+    while let Some(mut hub) = tree.pop_back() {
+        loop {
+            if let Some(inst) = hub.pop_back() {
+                if let Some(hubinst) = inst
+                    .interfaces(GUID_DEVINTERFACE_USB_HUB)
+                    .iter()
+                    .next()
+                    .and_then(|i| {
+                        get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId)
+                    })
+                    .and_then(|d| DevInst::from_instance_id(&d))
+                {
+                    let port = get_port_number(hubinst).unwrap_or(0);
+                    tree.push_back(hub);
+                    tree.push_back(hubinst.children().collect());
+                    port_chain.push(port);
+                    break;
+                } else if let Some(devinst) = inst
+                    .interfaces(GUID_DEVINTERFACE_USB_DEVICE)
+                    .iter()
+                    .next()
+                    .and_then(|i| {
+                        get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId)
+                    })
+                    .and_then(|d| DevInst::from_instance_id(&d))
+                {
+                    let port = get_port_number(devinst).unwrap_or(0);
+                    port_chain.push(port);
+                    device_inst.push_back((devinst, port_chain.clone()));
+                    port_chain.pop();
+                }
+            } else {
+                port_chain.pop();
+                break;
+            }
+        }
+    }
+
+    device_inst.into_iter()
+}
+
+pub fn probe_device(devinst: DevInst, bus_number: u32, port_chain: Vec<u32>) -> Option<DeviceInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     debug!("Probing device {instance_id:?}");
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
-    let bus_number = devinst.get_property::<u32>(DEVPKEY_Device_BusNumber)?;
-    let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
 
     let hub_port = HubPort::by_child_devinst(devinst).ok()?;
     let info = hub_port.get_info().ok()?;
@@ -58,8 +115,6 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         .get_property::<OsString>(DEVPKEY_Device_Service)
         .and_then(|s| s.into_string().ok())
         .unwrap_or_default();
-
-    let location_paths = devinst.get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)?;
 
     let mut interfaces = if driver.eq_ignore_ascii_case("usbccgp") {
         devinst
@@ -93,10 +148,10 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         instance_id,
         parent_instance_id,
         devinst,
-        port_number,
         driver: Some(driver).filter(|s| !s.is_empty()),
-        location_paths,
         bus_number: bus_number as u8,
+        port_number: *port_chain.last().unwrap_or(&0),
+        port_chain,
         device_address: info.address,
         vendor_id: info.device_desc.idVendor,
         product_id: info.device_desc.idProduct,
@@ -187,6 +242,37 @@ pub(crate) fn find_device_interface_path(dev: DevInst, intf: u8) -> Result<WCStr
             format!("Device driver is {driver:?}, not WinUSB"),
         ));
     }
+}
+
+fn get_port_number(devinst: DevInst) -> Option<u32> {
+    // Find Port_#xxxx
+    // Port_#0002.Hub_#000D
+    if let Some(location_info) = devinst.get_property::<OsString>(DEVPKEY_Device_LocationInfo) {
+        let s = location_info.to_string_lossy();
+        if &s[0..6] == "Port_#" {
+            if let Ok(n) = s[6..10].parse::<u32>() {
+                return Some(n);
+            }
+        }
+    }
+    // Find last #USB(x)
+    // PCIROOT(B2)#PCI(0300)#PCI(0000)#USBROOT(0)#USB(1)#USB(2)#USBMI(3)
+    if let Some(location_paths) =
+        devinst.get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
+    {
+        for location_path in location_paths {
+            let s = location_path.to_string_lossy();
+            for b in s.split('#').rev() {
+                if b.contains("USB(") {
+                    if let Ok(n) = b[5..b.len()].parse::<u32>() {
+                        return Some(n);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    devinst.get_property::<u32>(DEVPKEY_Device_Address)
 }
 
 fn get_interface_number(intf_dev: DevInst) -> Option<u8> {
