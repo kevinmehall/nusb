@@ -8,6 +8,7 @@ authors = ["Kevin Mehall <km@kevinmehall.net>"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/kevinmehall/nusb"
+rust-version = "1.74"
 
 [dependencies]
 atomic-waker = "1.1.2"
