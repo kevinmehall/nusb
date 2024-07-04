@@ -21,11 +21,17 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ['stable', '1.74']
 
     runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v3
+    - name: Install toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        override: true
     - name: Build
       run: cargo build --verbose
     - name: Run tests
