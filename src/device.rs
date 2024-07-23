@@ -62,22 +62,32 @@ impl Device {
         Ok(Interface { backend })
     }
 
-    /// Detach kernel drivers for the specified interface. The drivers will be
-    /// reattached on Drop.
+    /// Detach kernel drivers for the specified interface.
     ///
     /// ### Platform notes
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
-    pub fn detach_kernel_driver(&self, interface: u8) -> Result<DetachedInterface, Error> {
+    pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
         let interface = interface;
-
         #[cfg(target_os = "linux")]
-        let backend = self.backend.detach_kernel_driver(interface)?;
-        #[cfg(not(target_os = "linux"))]
-        let backend = Arc::new(());
+        self.backend.detach_kernel_driver(interface)?;
 
-        Ok(DetachedInterface { _backend: backend })
+        Ok(())
+    }
+
+    /// Attach kernel drivers for the specified interface.
+    ///
+    /// ### Platform notes
+    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
+    /// no effect.
+    pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+        let interface = interface;
+        #[cfg(target_os = "linux")]
+        self.backend.attach_kernel_driver(interface)?;
+
+        Ok(())
     }
 
     /// Get information about the active configuration.
@@ -577,18 +587,6 @@ impl Interface {
             .flat_map(|i| i.interface_alt_settings())
             .filter(|g| g.interface_number() == self.backend.interface_number)
     }
-}
-
-/// A detached interface of a USB device.
-///
-/// Obtain a `DetachedInterface` with the [`Device::detach_kernel_driver`] method.
-///
-/// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
-/// use in multiple places in your program. The interface is released when all clones
-/// are dropped.
-#[derive(Clone)]
-pub struct DetachedInterface {
-    _backend: Arc<platform::DetachedInterface>,
 }
 
 #[test]

@@ -8,7 +8,7 @@ fn main() {
         .expect("device should be connected");
 
     let device = di.open().unwrap();
-    let interface = device.detach_kernel_driver(0).unwrap();
-    sleep(Duration::from_secs(1));
-    drop(interface);
+    device.detach_kernel_driver(0).unwrap();
+    sleep(Duration::from_secs(10));
+    device.attach_kernel_driver(0).unwrap();
 }
