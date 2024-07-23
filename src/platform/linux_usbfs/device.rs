@@ -250,6 +250,17 @@ impl LinuxDevice {
         }))
     }
 
+    pub(crate) fn detach_kernel_driver(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<Arc<LinuxDetachedInterface>, Error> {
+        usbfs::detach_kernel_driver(&self.fd, interface_number)?;
+        Ok(Arc::new(LinuxDetachedInterface {
+            device: self.clone(),
+            interface_number,
+        }))
+    }
+
     pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
         let ep = unsafe { (*urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
@@ -357,5 +368,20 @@ impl Drop for LinuxInterface {
                 self.interface_number, self.device.events_id
             );
         }
+    }
+}
+
+pub(crate) struct LinuxDetachedInterface {
+    pub(crate) interface_number: u8,
+    pub(crate) device: Arc<LinuxDevice>,
+}
+
+impl Drop for LinuxDetachedInterface {
+    fn drop(&mut self) {
+        let res = usbfs::attach_kernel_driver(&self.device.fd, self.interface_number);
+        debug!(
+            "Reattached kernel drivers for interface {} on device {}: {res:?}",
+            self.interface_number, self.device.events_id
+        );
     }
 }

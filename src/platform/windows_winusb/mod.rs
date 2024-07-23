@@ -6,6 +6,7 @@ mod events;
 mod device;
 pub(crate) use device::WindowsDevice as Device;
 pub(crate) use device::WindowsInterface as Interface;
+pub(crate) type DetachedInterface = ();
 
 mod transfer;
 pub(crate) use transfer::TransferData;

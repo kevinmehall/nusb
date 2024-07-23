@@ -57,8 +57,7 @@ pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result
 
         dc.driver[0..6].copy_from_slice(b"usbfs\0");
 
-        let ctl =
-            ioctl::Setter::<ioctl::ReadOpcode<b'U', 27, DetachAndClaim>, DetachAndClaim>::new(dc);
+        let ctl = ioctl::Setter::<opcodes::USBDEVFS_DISCONNECT_CLAIM, DetachAndClaim>::new(dc);
 
         ioctl::ioctl(&fd, ctl)
     }
@@ -71,15 +70,43 @@ struct UsbFsIoctl {
     data: *mut c_void,
 }
 
-pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+/// Opcodes used in ioctl with the usb device fs.
+///
+/// Taken from https://github.com/torvalds/linux/blob/e9680017b2dc8686a908ea1b51941a91b6da9f1d/include/uapi/linux/usbdevice_fs.h#L187
+// TODO: Move the rest of the opcodes into here?
+#[allow(non_camel_case_types)]
+mod opcodes {
+    use super::*;
+
+    // We repeat the USBDEVFS_ prefix to help keep the same names as what linux uses.
+    // This makes the code more searchable.
+
+    pub type USBDEVFS_IOCTL = ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>;
+    pub type USBDEVFS_DISCONNECT = ioctl::NoneOpcode<b'U', 22, ()>;
+    pub type USBDEVFS_CONNECT = ioctl::NoneOpcode<b'U', 23, ()>;
+    pub type USBDEVFS_DISCONNECT_CLAIM = ioctl::ReadOpcode<b'U', 27, DetachAndClaim>;
+}
+
+pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    let command = UsbFsIoctl {
+        interface: interface.into(),
+        ioctl_code: opcodes::USBDEVFS_DISCONNECT::OPCODE.raw(),
+        data: std::ptr::null_mut(),
+    };
     unsafe {
-        let command = UsbFsIoctl {
-            interface: interface.into(),
-            ioctl_code: ioctl::NoneOpcode::<b'U', 23, ()>::OPCODE.raw() as c_uint, // IOCTL_USBFS_CONNECT
-            data: std::ptr::null_mut(),
-        };
-        let ctl =
-            ioctl::Setter::<ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>, UsbFsIoctl>::new(command);
+        let ctl = ioctl::Setter::<opcodes::USBDEVFS_IOCTL, UsbFsIoctl>::new(command);
+        ioctl::ioctl(fd, ctl)
+    }
+}
+
+pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+    let command = UsbFsIoctl {
+        interface: interface.into(),
+        ioctl_code: opcodes::USBDEVFS_CONNECT::OPCODE.raw(),
+        data: std::ptr::null_mut(),
+    };
+    unsafe {
+        let ctl = ioctl::Setter::<opcodes::USBDEVFS_IOCTL, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
     }
 }
