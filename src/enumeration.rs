@@ -259,8 +259,11 @@ impl std::fmt::Debug for DeviceInfo {
 
         #[cfg(target_os = "macos")]
         {
-            s.field("location_id", &self.location_id);
-            s.field("registry_entry_id", &self.registry_id);
+            s.field("location_id", &format_args!("0x{:08X}", self.location_id));
+            s.field(
+                "registry_entry_id",
+                &format_args!("0x{:08X}", self.registry_id),
+            );
         }
 
         s.field("interfaces", &self.interfaces);

@@ -47,7 +47,7 @@ pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Erro
 
 fn probe_device(device: IoService) -> Option<DeviceInfo> {
     let registry_id = get_id(&device)?;
-    log::debug!("Probing device {registry_id}");
+    log::debug!("Probing device {registry_id:08x}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
