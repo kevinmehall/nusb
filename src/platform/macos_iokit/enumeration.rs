@@ -47,20 +47,20 @@ pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Erro
 
 fn probe_device(device: IoService) -> Option<DeviceInfo> {
     let registry_id = get_id(&device)?;
-    log::debug!("Probing device {registry_id}");
+    log::debug!("Probing device {registry_id:08x}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
         registry_id,
-        location_id: get_integer_property(&device, "locationID")?,
+        location_id: get_integer_property(&device, "locationID")? as u32,
         bus_number: 0, // TODO: does this exist on macOS?
-        device_address: get_integer_property(&device, "USB Address")?,
-        vendor_id: get_integer_property(&device, "idVendor")?,
-        product_id: get_integer_property(&device, "idProduct")?,
-        device_version: get_integer_property(&device, "bcdDevice")?,
-        class: get_integer_property(&device, "bDeviceClass")?,
-        subclass: get_integer_property(&device, "bDeviceSubClass")?,
-        protocol: get_integer_property(&device, "bDeviceProtocol")?,
+        device_address: get_integer_property(&device, "USB Address")? as u8,
+        vendor_id: get_integer_property(&device, "idVendor")? as u16,
+        product_id: get_integer_property(&device, "idProduct")? as u16,
+        device_version: get_integer_property(&device, "bcdDevice")? as u16,
+        class: get_integer_property(&device, "bDeviceClass")? as u8,
+        subclass: get_integer_property(&device, "bDeviceSubClass")? as u8,
+        protocol: get_integer_property(&device, "bDeviceProtocol")? as u8,
         speed: get_integer_property(&device, "Device Speed").and_then(map_speed),
         manufacturer_string: get_string_property(&device, "USB Vendor Name"),
         product_string: get_string_property(&device, "USB Product Name"),
@@ -68,10 +68,10 @@ fn probe_device(device: IoService) -> Option<DeviceInfo> {
         interfaces: get_children(&device).map_or(Vec::new(), |iter| {
             iter.flat_map(|child| {
                 Some(InterfaceInfo {
-                    interface_number: get_integer_property(&child, "bInterfaceNumber")?,
-                    class: get_integer_property(&child, "bInterfaceClass")?,
-                    subclass: get_integer_property(&child, "bInterfaceSubClass")?,
-                    protocol: get_integer_property(&child, "bInterfaceProtocol")?,
+                    interface_number: get_integer_property(&child, "bInterfaceNumber")? as u8,
+                    class: get_integer_property(&child, "bInterfaceClass")? as u8,
+                    subclass: get_integer_property(&child, "bInterfaceSubClass")? as u8,
+                    protocol: get_integer_property(&child, "bInterfaceProtocol")? as u8,
                     interface_string: get_string_property(&child, "kUSBString")
                         .or_else(|| get_string_property(&child, "USB Interface Name")),
                 })
@@ -127,10 +127,12 @@ fn get_string_property(device: &IoService, property: &'static str) -> Option<Str
     get_property::<CFString>(device, property).map(|s| s.to_string())
 }
 
-fn get_integer_property<T: TryFrom<i64>>(device: &IoService, property: &'static str) -> Option<T> {
-    get_property::<CFNumber>(device, property)
-        .and_then(|n| n.to_i64())
-        .and_then(|n| n.try_into().ok())
+fn get_integer_property(device: &IoService, property: &'static str) -> Option<i64> {
+    let n = get_property::<CFNumber>(device, property)?;
+    n.to_i64().or_else(|| {
+        debug!("failed to convert {property} value {n:?} to i64");
+        None
+    })
 }
 
 fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
@@ -147,7 +149,7 @@ fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
     }
 }
 
-fn map_speed(speed: u32) -> Option<Speed> {
+fn map_speed(speed: i64) -> Option<Speed> {
     // https://developer.apple.com/documentation/iokit/1425357-usbdevicespeed
     match speed {
         0 => Some(Speed::Low),
