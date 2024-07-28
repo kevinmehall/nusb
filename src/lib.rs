@@ -177,6 +177,13 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 ///     }
 /// }
 /// ```
+///
+/// ### Platform-specific notes:
+///
+///   * On Windows, the interfaces of a composite device might not be ready
+///     when the `Connected` event is emitted. If you are immediately opening the device
+///     and claiming an interface when receiving a `Connected` event,
+///     you should retry after a short delay if opening or claiming fails.
 pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
     Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
 }
