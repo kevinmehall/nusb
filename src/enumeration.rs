@@ -48,6 +48,7 @@ pub struct DeviceInfo {
 
     pub(crate) bus_number: u8,
     pub(crate) device_address: u8,
+    pub(crate) port_chain: Option<Vec<u8>>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
@@ -120,6 +121,19 @@ impl DeviceInfo {
     #[cfg(target_os = "windows")]
     pub fn port_number(&self) -> u32 {
         self.port_number
+    }
+
+    /// Path of port numbers identifying the physical port where the device is
+    /// connected.
+    ///
+    /// The first value is the bus number, and subsequent values represent the
+    /// port used on each hub on the path to this device. The path is expected
+    /// to remain stable across device insertions or reboots.
+    ///
+    /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
+    /// physical port may be identified differently depending on speed.
+    pub fn port_chain(&self) -> Option<&[u8]> {
+        self.port_chain.as_deref()
     }
 
     /// *(Windows-only)* Driver associated with the device as a whole
@@ -263,6 +277,7 @@ impl std::fmt::Debug for DeviceInfo {
 
         s.field("bus_number", &self.bus_number)
             .field("device_address", &self.device_address)
+            .field("port_chain", &format_args!("{:?}", self.port_chain))
             .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
             .field("product_id", &format_args!("0x{:04X}", self.product_id))
             .field(
