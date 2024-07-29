@@ -12,11 +12,17 @@ mod device;
 pub(crate) use device::MacDevice as Device;
 pub(crate) use device::MacInterface as Interface;
 
+mod hotplug;
+pub(crate) use hotplug::MacHotplugWatch as HotplugWatch;
+
 use crate::transfer::TransferError;
 
 mod iokit;
 mod iokit_c;
 mod iokit_usb;
+
+/// Device ID is the registry entry ID
+pub type DeviceId = u64;
 
 fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
     #[allow(non_upper_case_globals)]

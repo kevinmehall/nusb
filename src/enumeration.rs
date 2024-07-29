@@ -6,6 +6,10 @@ use crate::platform::SysfsPath;
 
 use crate::{Device, Error};
 
+/// Opaque device identifier
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+pub struct DeviceId(pub(crate) crate::platform::DeviceId);
+
 /// Information about a device that can be obtained without opening it.
 ///
 /// Found in the results of [`crate::list_devices`].
@@ -63,6 +67,27 @@ pub struct DeviceInfo {
 }
 
 impl DeviceInfo {
+    /// Opaque identifier for the device.
+    pub fn id(&self) -> DeviceId {
+        #[cfg(target_os = "windows")]
+        {
+            DeviceId(self.devinst)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            DeviceId(crate::platform::DeviceId {
+                bus: self.bus_number,
+                addr: self.device_address,
+            })
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            DeviceId(self.registry_id)
+        }
+    }
+
     /// *(Linux-only)* Sysfs path for the device.
     #[doc(hidden)]
     #[deprecated = "use `sysfs_path()` instead"]
