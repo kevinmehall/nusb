@@ -167,7 +167,13 @@ impl<'a> Iterator for NulSepListIter<'a> {
         if let Some(next_nul) = self.0.iter().copied().position(|x| x == 0) {
             let (i, next) = self.0.split_at(next_nul + 1);
             self.0 = next;
-            Some(unsafe { WCStr::from_slice_unchecked(i) })
+
+            if i.len() <= 1 {
+                // Empty element (double `\0`) terminates the list
+                None
+            } else {
+                Some(unsafe { WCStr::from_slice_unchecked(i) })
+            }
         } else {
             None
         }
