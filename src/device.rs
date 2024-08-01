@@ -68,10 +68,9 @@ impl Device {
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-        let interface = interface;
         #[cfg(target_os = "linux")]
         self.backend.detach_kernel_driver(interface)?;
+        let _ = interface;
 
         Ok(())
     }
@@ -82,10 +81,9 @@ impl Device {
     /// This function can only attach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-        let interface = interface;
         #[cfg(target_os = "linux")]
         self.backend.attach_kernel_driver(interface)?;
+        let _ = interface;
 
         Ok(())
     }

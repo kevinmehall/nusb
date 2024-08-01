@@ -73,24 +73,29 @@ struct UsbFsIoctl {
 /// Opcodes used in ioctl with the usb device fs.
 ///
 /// Taken from https://github.com/torvalds/linux/blob/e9680017b2dc8686a908ea1b51941a91b6da9f1d/include/uapi/linux/usbdevice_fs.h#L187
-// TODO: Move the rest of the opcodes into here?
+// We repeat the USBDEVFS_ prefix to help keep the same names as what linux uses.
+// This makes the code more searchable.
+// TODO: Move the rest of the opcodes into here.
 #[allow(non_camel_case_types)]
 mod opcodes {
     use super::*;
 
-    // We repeat the USBDEVFS_ prefix to help keep the same names as what linux uses.
-    // This makes the code more searchable.
-
     pub type USBDEVFS_IOCTL = ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>;
-    pub type USBDEVFS_DISCONNECT = ioctl::NoneOpcode<b'U', 22, ()>;
-    pub type USBDEVFS_CONNECT = ioctl::NoneOpcode<b'U', 23, ()>;
     pub type USBDEVFS_DISCONNECT_CLAIM = ioctl::ReadOpcode<b'U', 27, DetachAndClaim>;
+
+    /// These opcodes are nested inside a [`USBDEVFS_IOCTL`] operation.
+    pub mod nested {
+        use super::*;
+
+        pub type USBDEVFS_DISCONNECT = ioctl::NoneOpcode<b'U', 22, ()>;
+        pub type USBDEVFS_CONNECT = ioctl::NoneOpcode<b'U', 23, ()>;
+    }
 }
 
 pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
-        ioctl_code: opcodes::USBDEVFS_DISCONNECT::OPCODE.raw(),
+        ioctl_code: opcodes::nested::USBDEVFS_DISCONNECT::OPCODE.raw(),
         data: std::ptr::null_mut(),
     };
     unsafe {
@@ -102,7 +107,7 @@ pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
 pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
-        ioctl_code: opcodes::USBDEVFS_CONNECT::OPCODE.raw(),
+        ioctl_code: opcodes::nested::USBDEVFS_CONNECT::OPCODE.raw(),
         data: std::ptr::null_mut(),
     };
     unsafe {
