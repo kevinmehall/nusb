@@ -1,19 +1,23 @@
 use std::{
+    collections::{btree_map::Entry, BTreeMap},
     ffi::c_void,
     io::{self, ErrorKind},
     mem::size_of_val,
-    os::windows::prelude::OwnedHandle,
+    os::windows::{
+        io::{AsRawHandle, RawHandle},
+        prelude::OwnedHandle,
+    },
     ptr::null_mut,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use log::{debug, error, info, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
-        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_ResetPipe,
-        WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy, PIPE_TRANSFER_TIMEOUT,
-        WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface, WinUsb_Initialize,
+        WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy,
+        PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, FALSE, TRUE},
 };
@@ -25,9 +29,11 @@ use crate::{
 };
 
 use super::{
-    enumeration::find_device_interface_path,
+    enumeration::{
+        find_usbccgp_child, get_driver_name, get_usbccgp_winusb_device_path, get_winusb_device_path,
+    },
     hub::HubPort,
-    util::{create_file, raw_handle},
+    util::{create_file, raw_handle, WCStr},
     DevInst,
 };
 
@@ -35,6 +41,7 @@ pub(crate) struct WindowsDevice {
     config_descriptors: Vec<Vec<u8>>,
     active_config: u8,
     devinst: DevInst,
+    handles: Mutex<BTreeMap<u8, WinusbFileHandle>>,
 }
 
 impl WindowsDevice {
@@ -66,6 +73,7 @@ impl WindowsDevice {
             config_descriptors,
             active_config: connection_info.active_config,
             devinst: d.devinst,
+            handles: Mutex::new(BTreeMap::new()),
         }))
     }
 
@@ -104,15 +112,99 @@ impl WindowsDevice {
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
-        let path = find_device_interface_path(self.devinst, interface_number)?;
+        let driver = get_driver_name(self.devinst);
 
-        log::debug!(
-            "Claiming device {:?} interface {interface_number} with interface path `{path}`",
-            self.devinst
-        );
+        let mut handles = self.handles.lock().unwrap();
 
+        if driver.eq_ignore_ascii_case("winusb") {
+            match handles.entry(0) {
+                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
+                Entry::Vacant(e) => {
+                    let path = get_winusb_device_path(self.devinst)?;
+                    let mut handle = WinusbFileHandle::new(&path, 0)?;
+                    let intf = handle.claim_interface(self, interface_number)?;
+                    e.insert(handle);
+                    Ok(intf)
+                }
+            }
+        } else if driver.eq_ignore_ascii_case("usbccgp") {
+            let (first_interface, child_dev) =
+                find_usbccgp_child(self.devinst, interface_number)
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
+
+            if first_interface != interface_number {
+                debug!("Guessing that interface {interface_number} is an associated interface of {first_interface}");
+            }
+
+            match handles.entry(first_interface) {
+                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
+                Entry::Vacant(e) => {
+                    let path = get_usbccgp_winusb_device_path(child_dev)?;
+                    let mut handle = WinusbFileHandle::new(&path, first_interface)?;
+                    let intf = handle.claim_interface(self, interface_number)?;
+                    e.insert(handle);
+                    Ok(intf)
+                }
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("Device driver is {driver:?}, not WinUSB or USBCCGP"),
+            ))
+        }
+    }
+
+    pub(crate) fn detach_and_claim_interface(
+        self: &Arc<Self>,
+        interface: u8,
+    ) -> Result<Arc<WindowsInterface>, Error> {
+        self.claim_interface(interface)
+    }
+}
+
+struct BitSet256([u64; 4]);
+
+impl BitSet256 {
+    fn new() -> Self {
+        Self([0; 4])
+    }
+
+    fn idx(bit: u8) -> usize {
+        (bit / 64) as usize
+    }
+
+    fn mask(bit: u8) -> u64 {
+        1u64 << (bit % 64)
+    }
+
+    fn is_set(&mut self, bit: u8) -> bool {
+        self.0[Self::idx(bit)] & Self::mask(bit) != 0
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0 == [0; 4]
+    }
+
+    fn set(&mut self, bit: u8) {
+        self.0[Self::idx(bit)] |= Self::mask(bit)
+    }
+
+    fn clear(&mut self, bit: u8) {
+        self.0[Self::idx(bit)] &= !Self::mask(bit)
+    }
+}
+
+/// A file handle and the WinUSB handle for the first interface.
+pub(crate) struct WinusbFileHandle {
+    first_interface: u8,
+    handle: OwnedHandle,
+    winusb_handle: WINUSB_INTERFACE_HANDLE,
+    claimed_interfaces: BitSet256,
+}
+
+impl WinusbFileHandle {
+    fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
         let handle = create_file(&path)?;
-
         super::events::register(&handle)?;
 
         let winusb_handle = unsafe {
@@ -124,27 +216,124 @@ impl WindowsDevice {
             h
         };
 
-        Ok(Arc::new(WindowsInterface {
+        debug!("Opened WinUSB handle for {path} (interface {first_interface})");
+
+        Ok(WinusbFileHandle {
+            first_interface,
             handle,
-            device: self.clone(),
+            winusb_handle,
+            claimed_interfaces: BitSet256::new(),
+        })
+    }
+
+    fn claim_interface(
+        &mut self,
+        device: &Arc<WindowsDevice>,
+        interface_number: u8,
+    ) -> Result<Arc<WindowsInterface>, Error> {
+        assert!(interface_number >= self.first_interface);
+
+        if self.claimed_interfaces.is_set(interface_number) {
+            return Err(Error::new(
+                ErrorKind::AddrInUse,
+                "Interface is already claimed",
+            ));
+        }
+
+        let winusb_handle = if self.first_interface == interface_number {
+            self.winusb_handle
+        } else {
+            unsafe {
+                let mut out_handle = 0;
+                let idx = interface_number - self.first_interface - 1;
+                if WinUsb_GetAssociatedInterface(self.winusb_handle, idx, &mut out_handle) == FALSE
+                {
+                    error!(
+                        "WinUsb_GetAssociatedInterface for {} on {} failed: {:?}",
+                        interface_number,
+                        self.first_interface,
+                        io::Error::last_os_error()
+                    );
+                    return Err(io::Error::last_os_error());
+                }
+                out_handle
+            }
+        };
+
+        log::debug!(
+            "Claiming interface {interface_number} using handle for {}",
+            self.first_interface
+        );
+
+        self.claimed_interfaces.set(interface_number);
+
+        Ok(Arc::new(WindowsInterface {
+            handle: self.handle.as_raw_handle(),
+            device: device.clone(),
             interface_number,
+            first_interface_number: self.first_interface,
             winusb_handle,
         }))
     }
+}
 
-    pub(crate) fn detach_and_claim_interface(
-        self: &Arc<Self>,
-        interface: u8,
-    ) -> Result<Arc<WindowsInterface>, Error> {
-        self.claim_interface(interface)
+impl Drop for WinusbFileHandle {
+    fn drop(&mut self) {
+        log::debug!(
+            "Closing WinUSB handle for interface {}",
+            self.first_interface
+        );
+        unsafe {
+            WinUsb_Free(self.winusb_handle);
+        }
     }
 }
 
 pub(crate) struct WindowsInterface {
-    pub(crate) handle: OwnedHandle,
+    pub(crate) handle: RawHandle,
     pub(crate) device: Arc<WindowsDevice>,
+    pub(crate) first_interface_number: u8,
     pub(crate) interface_number: u8,
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
+}
+
+unsafe impl Send for WindowsInterface {}
+unsafe impl Sync for WindowsInterface {}
+
+impl Drop for WindowsInterface {
+    fn drop(&mut self) {
+        // The WinUSB handle for the first interface is owned by WinusbFileHandle
+        // because it is used to open subsequent interfaces.
+        let is_first_interface = self.interface_number == self.first_interface_number;
+        if !is_first_interface {
+            log::debug!(
+                "Closing WinUSB handle for associated interface {}",
+                self.interface_number
+            );
+            unsafe {
+                WinUsb_Free(self.winusb_handle);
+            }
+        }
+
+        let mut handles = self.device.handles.lock().unwrap();
+        let Entry::Occupied(mut entry) = handles.entry(self.first_interface_number) else {
+            panic!("missing handle that should be open")
+        };
+
+        entry
+            .get_mut()
+            .claimed_interfaces
+            .clear(self.interface_number);
+
+        if entry.get().claimed_interfaces.is_empty() {
+            entry.remove();
+        } else if is_first_interface {
+            log::debug!(
+                "Released interface {}, but retaining handle for shared use",
+                self.interface_number
+            );
+        }
+    }
 }
 
 impl WindowsInterface {
@@ -287,14 +476,6 @@ impl WindowsInterface {
             } else {
                 Err(io::Error::last_os_error())
             }
-        }
-    }
-}
-
-impl Drop for WindowsInterface {
-    fn drop(&mut self) {
-        unsafe {
-            WinUsb_Free(self.winusb_handle);
         }
     }
 }
