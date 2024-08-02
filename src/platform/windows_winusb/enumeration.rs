@@ -30,25 +30,16 @@ use super::{
 };
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    let bus_devs = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HOST_CONTROLLER, None)
-        .iter()
-        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
-        .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(|d| d.children())
-        .map(|d| d.instance_id().to_string())
-        .enumerate()
-        .map(|v| (v.1, (v.0 + 1) as u8))
-        .collect::<HashMap<String, u8>>();
     let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
         .iter()
         .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
         .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(|i| probe_device(i, &bus_devs))
+        .flat_map(probe_device)
         .collect();
     Ok(devs.into_iter())
 }
 
-pub fn probe_device(devinst: DevInst, bus_devs: &HashMap<String, u8>) -> Option<DeviceInfo> {
+pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     debug!("Probing device {instance_id:?}");
 
@@ -107,7 +98,17 @@ pub fn probe_device(devinst: DevInst, bus_devs: &HashMap<String, u8>) -> Option<
 
     interfaces.sort_unstable_by_key(|i| i.interface_number);
 
-    let (bus_number, port_chain) = get_port_chain(devinst, bus_devs);
+    let bus_devs = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HOST_CONTROLLER, None)
+        .iter()
+        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
+        .flat_map(|d| DevInst::from_instance_id(&d))
+        .flat_map(|d| d.children())
+        .map(|d| d.instance_id().to_string())
+        .enumerate()
+        .map(|v| (v.1, (v.0 + 1) as u8))
+        .collect::<HashMap<String, u8>>();
+
+    let (bus_number, port_chain) = get_port_chain(devinst, &bus_devs);
     let port_chain = port_chain.collect::<Vec<u32>>();
 
     Some(DeviceInfo {
