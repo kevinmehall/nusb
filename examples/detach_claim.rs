@@ -1,4 +1,5 @@
-//! Detach the kernel driver for an FTDI device and then reattach it.
+//! Detach the kernel driver for an FTDI device, claim the USB interface, and
+//! then reattach it.
 use std::{thread::sleep, time::Duration};
 fn main() {
     env_logger::init();

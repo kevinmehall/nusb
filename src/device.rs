@@ -62,6 +62,32 @@ impl Device {
         Ok(Interface { backend })
     }
 
+    /// Detach kernel drivers for the specified interface.
+    ///
+    /// ### Platform notes
+    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
+    /// no effect.
+    pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        self.backend.detach_kernel_driver(interface)?;
+        let _ = interface;
+
+        Ok(())
+    }
+
+    /// Attach kernel drivers for the specified interface.
+    ///
+    /// ### Platform notes
+    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
+    /// no effect.
+    pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        self.backend.attach_kernel_driver(interface)?;
+        let _ = interface;
+
+        Ok(())
+    }
+
     /// Get information about the active configuration.
     ///
     /// This returns cached data and does not perform IO. However, it can fail if the
