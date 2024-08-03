@@ -1,7 +1,8 @@
-use std::io::ErrorKind;
+use std::{collections::VecDeque, io::ErrorKind};
 
 use core_foundation::{
     base::{CFType, TCFType},
+    data::CFData,
     number::CFNumber,
     string::CFString,
     ConcreteCFType,
@@ -9,8 +10,9 @@ use core_foundation::{
 use io_kit_sys::{
     kIOMasterPortDefault, kIORegistryIterateParents, kIORegistryIterateRecursively,
     keys::kIOServicePlane, ret::kIOReturnSuccess, usb::lib::kIOUSBDeviceClassName,
-    IORegistryEntryGetChildIterator, IORegistryEntryGetRegistryEntryID,
-    IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
+    IORegistryEntryGetChildIterator, IORegistryEntryGetParentEntry,
+    IORegistryEntryGetRegistryEntryID, IORegistryEntrySearchCFProperty,
+    IOServiceGetMatchingServices, IOServiceMatching,
 };
 use log::debug;
 
@@ -50,10 +52,14 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     log::debug!("Probing device {registry_id:08x}");
 
     // Can run `ioreg -p IOUSB -l` to see all properties
+    let location_id = get_integer_property(&device, "locationID")? as u32;
+    let port_chain: Vec<u32> = get_port_chain(&device).collect();
     Some(DeviceInfo {
         registry_id,
-        location_id: get_integer_property(&device, "locationID")? as u32,
-        bus_number: 0, // TODO: does this exist on macOS?
+        location_id,
+        bus_number: (location_id >> 24) as u8,
+        port_number: *port_chain.last().unwrap_or(&0),
+        port_chain,
         device_address: get_integer_property(&device, "USB Address")? as u8,
         vendor_id: get_integer_property(&device, "idVendor")? as u16,
         product_id: get_integer_property(&device, "idProduct")? as u16,
@@ -127,6 +133,10 @@ fn get_string_property(device: &IoService, property: &'static str) -> Option<Str
     get_property::<CFString>(device, property).map(|s| s.to_string())
 }
 
+fn get_data_property(device: &IoService, property: &'static str) -> Option<Vec<u8>> {
+    get_property::<CFData>(device, property).map(|d| d.to_vec())
+}
+
 fn get_integer_property(device: &IoService, property: &'static str) -> Option<i64> {
     let n = get_property::<CFNumber>(device, property)?;
     n.to_i64().or_else(|| {
@@ -147,6 +157,76 @@ fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
 
         Ok(IoServiceIterator::new(iterator))
     }
+}
+
+fn get_parent(device: &IoService) -> Result<IoService, Error> {
+    unsafe {
+        let mut handle = 0;
+        let r = IORegistryEntryGetParentEntry(device.get(), kIOServicePlane as *mut _, &mut handle);
+        if r != kIOReturnSuccess {
+            debug!("IORegistryEntryGetParentEntry failed: {r}");
+            return Err(Error::from_raw_os_error(r));
+        }
+
+        Ok(IoService::new(handle))
+    }
+}
+
+fn get_port_number(device: &IoService) -> Option<u32> {
+    get_integer_property(device, "PortNum").map_or_else(
+        || {
+            if let Ok(parent) = get_parent(device) {
+                return get_data_property(&parent, "port")
+                    .map(|d| u32::from_ne_bytes(d[0..4].try_into().unwrap()));
+            }
+            None
+        },
+        |v| Some(v as u32),
+    )
+}
+
+fn get_port_chain(device: &IoService) -> impl Iterator<Item = u32> {
+    let mut port_chain = VecDeque::new();
+
+    if let Some(port_number) = get_port_number(device) {
+        port_chain.push_back(port_number);
+    }
+
+    if let Ok(mut hub) = get_parent(device) {
+        loop {
+            let port_number = match get_port_number(&hub) {
+                Some(p) => p,
+                None => break,
+            };
+            if port_number == 0 {
+                break;
+            }
+            port_chain.push_front(port_number);
+
+            let session_id = match get_integer_property(&hub, "sessionID") {
+                Some(session_id) => session_id,
+                None => break,
+            };
+
+            hub = match get_parent(&hub) {
+                Ok(hub) => hub,
+                Err(_) => break,
+            };
+
+            // Ignore the same sessionID
+            if session_id
+                == match get_integer_property(&hub, "sessionID") {
+                    Some(session_id) => session_id,
+                    None => break,
+                }
+            {
+                port_chain.pop_front();
+                continue;
+            }
+        }
+    }
+
+    port_chain.into_iter()
 }
 
 fn map_speed(speed: i64) -> Option<Speed> {
