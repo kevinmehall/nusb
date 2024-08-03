@@ -257,6 +257,20 @@ impl LinuxDevice {
         }))
     }
 
+    pub(crate) fn detach_kernel_driver(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<(), Error> {
+        usbfs::detach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
+    }
+
+    pub(crate) fn attach_kernel_driver(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<(), Error> {
+        usbfs::attach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
+    }
+
     pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
         let ep = unsafe { (*urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
