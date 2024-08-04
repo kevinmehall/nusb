@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::debug;
+use log::warn;
 
 use crate::enumeration::InterfaceInfo;
 use crate::DeviceInfo;
@@ -67,11 +68,24 @@ const SYSFS_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(fs::read_dir(SYSFS_PREFIX)?.flat_map(|entry| {
-        let res = probe_device(SysfsPath(entry.ok()?.path()));
-        if let Err(x) = &res {
-            debug!("failed to probe, skipping: {x}")
+        let path = entry.ok()?.path();
+        let name = path.file_name()?;
+
+        // Device names look like `1-6` or `1-6.4.2`
+        // We'll ignore:
+        //  * root hubs (`usb1`) -- they're not useful to talk to and are not exposed on other platforms
+        //  * interfaces (`1-6:1.0`)
+        if !name
+            .as_encoded_bytes()
+            .iter()
+            .all(|c| matches!(c, b'0'..=b'9' | b'-' | b'.'))
+        {
+            return None;
         }
-        res.ok()
+
+        probe_device(SysfsPath(path))
+            .inspect_err(|e| warn!("{e}; ignoring device"))
+            .ok()
     }))
 }
 
