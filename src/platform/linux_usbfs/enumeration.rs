@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use log::debug;
+use log::warn;
 
 use crate::enumeration::InterfaceInfo;
 use crate::DeviceInfo;
@@ -14,26 +15,59 @@ use crate::Speed;
 #[derive(Debug, Clone)]
 pub struct SysfsPath(pub(crate) PathBuf);
 
-impl SysfsPath {
-    pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, io::Error>
-    where
-        T: FromStr,
-        T::Err: std::error::Error + Send + Sync + 'static,
-    {
-        let attr_path = self.0.join(attr);
-        let read_res = fs::read_to_string(&attr_path);
-        debug!("sysfs read {attr_path:?}: {read_res:?}");
+#[derive(Debug)]
+pub struct SysfsError(PathBuf, SysfsErrorKind);
 
-        read_res?
-            .trim()
-            .parse()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+#[derive(Debug)]
+enum SysfsErrorKind {
+    Io(io::Error),
+    Parse(String),
+}
+
+impl std::fmt::Display for SysfsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed to read sysfs attribute {}: ", self.0.display())?;
+        match &self.1 {
+            SysfsErrorKind::Io(e) => write!(f, "{e}"),
+            SysfsErrorKind::Parse(v) => write!(f, "couldn't parse value {:?}", v.trim()),
+        }
+    }
+}
+
+impl std::error::Error for SysfsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.1 {
+            SysfsErrorKind::Io(ref e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<SysfsError> for io::Error {
+    fn from(value: SysfsError) -> Self {
+        io::Error::other(Box::new(value))
+    }
+}
+
+impl SysfsPath {
+    fn parse_attr<T, E>(
+        &self,
+        attr: &str,
+        parse: impl FnOnce(&str) -> Result<T, E>,
+    ) -> Result<T, SysfsError> {
+        let attr_path = self.0.join(attr);
+        fs::read_to_string(&attr_path)
+            .map_err(SysfsErrorKind::Io)
+            .and_then(|v| parse(v.trim()).map_err(|_| SysfsErrorKind::Parse(v)))
+            .map_err(|e| SysfsError(attr_path, e))
     }
 
-    fn read_attr_hex<T: FromHexStr>(&self, attr: &str) -> Result<T, io::Error> {
-        let s = self.read_attr::<String>(attr)?;
-        T::from_hex_str(&s)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid hex str"))
+    pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, SysfsError> {
+        self.parse_attr(attr, |s| s.parse())
+    }
+
+    fn read_attr_hex<T: FromHexStr>(&self, attr: &str) -> Result<T, SysfsError> {
+        self.parse_attr(attr, |s| T::from_hex_str(s))
     }
 
     fn children(&self) -> impl Iterator<Item = SysfsPath> {
@@ -67,16 +101,29 @@ const SYSFS_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(fs::read_dir(SYSFS_PREFIX)?.flat_map(|entry| {
-        let res = probe_device(SysfsPath(entry.ok()?.path()));
-        if let Err(x) = &res {
-            debug!("failed to probe, skipping: {x}")
+        let path = entry.ok()?.path();
+        let name = path.file_name()?;
+
+        // Device names look like `1-6` or `1-6.4.2`
+        // We'll ignore:
+        //  * root hubs (`usb1`) -- they're not useful to talk to and are not exposed on other platforms
+        //  * interfaces (`1-6:1.0`)
+        if !name
+            .as_encoded_bytes()
+            .iter()
+            .all(|c| matches!(c, b'0'..=b'9' | b'-' | b'.'))
+        {
+            return None;
         }
-        res.ok()
+
+        probe_device(SysfsPath(path))
+            .inspect_err(|e| warn!("{e}; ignoring device"))
+            .ok()
     }))
 }
 
-pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, Error> {
-    debug!("probe device {path:?}");
+pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
+    debug!("Probing device {:?}", path.0);
     Ok(DeviceInfo {
         bus_number: path.read_attr("busnum")?,
         device_address: path.read_attr("devnum")?,
