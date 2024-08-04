@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use log::{debug, error};
+use log::{debug, error, warn};
 use rustix::event::epoll;
 use rustix::fd::AsFd;
 use rustix::{
@@ -51,8 +51,8 @@ impl LinuxDevice {
         let active_config = d.path.read_attr("bConfigurationValue")?;
 
         let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
-        debug!("Opening usbfs device {}", path.display());
-        let fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
+        let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+            .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
 
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
@@ -229,7 +229,12 @@ impl LinuxDevice {
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::claim_interface(&self.fd, interface_number)?;
+        usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
+            warn!(
+                "Failed to claim interface {interface_number} on device id {dev}: {e}",
+                dev = self.events_id
+            )
+        })?;
         debug!(
             "Claimed interface {interface_number} on device id {dev}",
             dev = self.events_id

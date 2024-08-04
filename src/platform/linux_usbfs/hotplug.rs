@@ -1,5 +1,5 @@
 use libc::{sockaddr, sockaddr_nl, socklen_t, AF_NETLINK, MSG_DONTWAIT};
-use log::{debug, error, warn};
+use log::{error, trace, warn};
 use rustix::{
     fd::{AsFd, AsRawFd, OwnedFd},
     net::{netlink, socket_with, AddressFamily, SocketFlags, SocketType},
@@ -127,7 +127,7 @@ fn parse_packet(buf: &[u8]) -> Option<HotplugEvent> {
     let mut devpath = None;
 
     for (k, v) in parse_properties(properties_buf) {
-        debug!("uevent property {k} = {v}");
+        trace!("uevent property {k} = {v}");
         match k {
             "SUBSYSTEM" if v != "usb" => return None,
             "DEVTYPE" if v != "usb_device" => return None,
@@ -161,7 +161,7 @@ fn parse_packet(buf: &[u8]) -> Option<HotplugEvent> {
         match probe_device(SysfsPath(path.clone())) {
             Ok(d) => Some(HotplugEvent::Connected(d)),
             Err(e) => {
-                error!("Failed to probe device {path:?}: {e}");
+                warn!("Failed to probe device {path:?}: {e}");
                 None
             }
         }
