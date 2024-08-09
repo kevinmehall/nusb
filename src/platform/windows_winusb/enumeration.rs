@@ -112,7 +112,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         class: info.device_desc.bDeviceClass,
         subclass: info.device_desc.bDeviceSubClass,
         protocol: info.device_desc.bDeviceProtocol,
-        max_packet_size: info.device_desc.bMaxPacketSize0,
+        max_packet_size_0: info.device_desc.bMaxPacketSize0,
         speed: info.speed,
         manufacturer_string: None,
         product_string,
