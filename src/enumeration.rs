@@ -57,6 +57,8 @@ pub struct DeviceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
 
+    pub(crate) max_packet_size: u8,
+
     pub(crate) speed: Option<Speed>,
 
     pub(crate) manufacturer_string: Option<String>,
@@ -187,6 +189,12 @@ impl DeviceInfo {
         self.protocol
     }
 
+    /// Maximum packet size for endpoint zero.
+    #[doc(alias = "bMaxPacketSize0")]
+    pub fn max_packet_size(&self) -> u8 {
+        self.max_packet_size
+    }
+
     /// Connection speed
     pub fn speed(&self) -> Option<Speed> {
         self.speed
@@ -264,6 +272,7 @@ impl std::fmt::Debug for DeviceInfo {
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
+            .field("max_packet_size", &self.max_packet_size)
             .field("speed", &self.speed)
             .field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)

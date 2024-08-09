@@ -133,6 +133,7 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
         class: path.read_attr_hex("bDeviceClass")?,
         subclass: path.read_attr_hex("bDeviceSubClass")?,
         protocol: path.read_attr_hex("bDeviceProtocol")?,
+        max_packet_size: path.read_attr("bMaxPacketSize0")?,
         speed: path
             .read_attr::<String>("speed")
             .ok()
