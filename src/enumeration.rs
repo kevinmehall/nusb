@@ -51,7 +51,7 @@ pub struct DeviceInfo {
 
     pub(crate) bus_id: String,
     pub(crate) device_address: u8,
-    pub(crate) port_chain: Option<Vec<u8>>,
+    pub(crate) port_chain: Vec<u8>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
@@ -141,8 +141,8 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    pub fn port_chain(&self) -> Option<&[u8]> {
-        self.port_chain.as_deref()
+    pub fn port_chain(&self) -> &[u8] {
+        &self.port_chain
     }
 
     /// *(Windows-only)* Driver associated with the device as a whole

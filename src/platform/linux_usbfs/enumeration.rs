@@ -128,11 +128,16 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     let busnum = path.read_attr("busnum")?;
     let device_address = path.read_attr("devnum")?;
 
-    let port_chain = path.read_attr::<String>("devpath").ok().and_then(|p| {
-        p.split('.')
-            .map(|v| v.parse::<u8>().ok())
-            .collect::<Option<Vec<u8>>>()
-    });
+    let port_chain = path
+        .read_attr::<String>("devpath")
+        .ok()
+        .and_then(|p| {
+            p.split('.')
+                .map(|v| v.parse::<u8>().ok())
+                .collect::<Option<Vec<u8>>>()
+        })
+        .unwrap_or_default();
+
     Ok(DeviceInfo {
         busnum,
         bus_id: format!("{busnum:03}"),

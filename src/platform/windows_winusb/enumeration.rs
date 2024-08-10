@@ -111,7 +111,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         parent_instance_id,
         devinst,
         port_number,
-        port_chain: Some(port_chain),
+        port_chain,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
         device_address: info.address,
