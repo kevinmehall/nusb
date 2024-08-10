@@ -32,6 +32,9 @@ pub struct DeviceInfo {
     pub(crate) instance_id: OsString,
 
     #[cfg(target_os = "windows")]
+    pub(crate) location_paths: Vec<OsString>,
+
+    #[cfg(target_os = "windows")]
     pub(crate) parent_instance_id: OsString,
 
     #[cfg(target_os = "windows")]
@@ -120,6 +123,12 @@ impl DeviceInfo {
     #[cfg(target_os = "windows")]
     pub fn instance_id(&self) -> &OsStr {
         &self.instance_id
+    }
+
+    /// *(Windows-only)* Location paths property
+    #[cfg(target_os = "windows")]
+    pub fn location_paths(&self) -> &[OsString] {
+        &self.location_paths
     }
 
     /// *(Windows-only)* Instance ID path of the parent hub
@@ -312,6 +321,7 @@ impl std::fmt::Debug for DeviceInfo {
         {
             s.field("instance_id", &self.instance_id);
             s.field("parent_instance_id", &self.parent_instance_id);
+            s.field("location_paths", &self.location_paths);
             s.field("port_number", &self.port_number);
             s.field("driver", &self.driver);
         }

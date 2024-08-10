@@ -108,6 +108,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
     Some(DeviceInfo {
         instance_id,
+        location_paths,
         parent_instance_id,
         devinst,
         port_number,
