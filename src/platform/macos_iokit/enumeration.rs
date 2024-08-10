@@ -55,7 +55,7 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     Some(DeviceInfo {
         registry_id,
         location_id,
-        bus_number: (location_id >> 24) as u8,
+        bus_id: format!("{:02x}", (location_id >> 24) as u8),
         device_address: get_integer_property(&device, "USB Address")? as u8,
         port_chain: Some(parse_location_id(location_id)),
         vendor_id: get_integer_property(&device, "idVendor")? as u16,

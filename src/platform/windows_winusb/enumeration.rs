@@ -6,9 +6,9 @@ use std::{
 use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
-        DEVPKEY_Device_Address, DEVPKEY_Device_BusNumber, DEVPKEY_Device_BusReportedDeviceDesc,
-        DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
-        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
+        DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationPaths,
+        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
     Usb::GUID_DEVINTERFACE_USB_DEVICE,
 };
@@ -42,7 +42,6 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     debug!("Probing device {instance_id:?}");
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
-    let bus_number = devinst.get_property::<u32>(DEVPKEY_Device_BusNumber)? as u8;
     let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
 
     let hub_port = HubPort::by_child_devinst(devinst).ok()?;
@@ -98,18 +97,23 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
     interfaces.sort_unstable_by_key(|i| i.interface_number);
 
-    let port_chain = devinst
+    let location_paths = devinst
         .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
-        .and_then(|s| s.iter().find_map(|p| parse_location_path(p)));
+        .unwrap_or_default();
+
+    let (bus_id, port_chain) = location_paths
+        .iter()
+        .find_map(|p| parse_location_path(p))
+        .unwrap_or_default();
 
     Some(DeviceInfo {
         instance_id,
         parent_instance_id,
         devinst,
         port_number,
-        port_chain,
+        port_chain: Some(port_chain),
         driver: Some(driver).filter(|s| !s.is_empty()),
-        bus_number: bus_number as u8,
+        bus_id,
         device_address: info.address,
         vendor_id: info.device_desc.idVendor,
         product_id: info.device_desc.idProduct,
@@ -293,8 +297,13 @@ fn test_parse_compatible_id() {
     );
 }
 
-fn parse_location_path(s: &OsStr) -> Option<Vec<u8>> {
-    let (_, mut s) = s.to_str()?.split_once("#USBROOT(")?;
+fn parse_location_path(s: &OsStr) -> Option<(String, Vec<u8>)> {
+    let s = s.to_str()?;
+
+    let usbroot = "#USBROOT(";
+    let start_i = s.find(usbroot)?;
+    let close_i = s[start_i + usbroot.len()..].find(')')?;
+    let (bus, mut s) = s.split_at(start_i + usbroot.len() + close_i + 1);
 
     let mut path = vec![];
 
@@ -304,7 +313,7 @@ fn parse_location_path(s: &OsStr) -> Option<Vec<u8>> {
         s = next;
     }
 
-    Some(path)
+    Some((bus.to_owned(), path))
 }
 
 #[test]
@@ -313,13 +322,16 @@ fn test_parse_location_path() {
         parse_location_path(OsStr::new(
             "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(23)#USB(2)#USB(1)#USB(3)#USB(4)"
         )),
-        Some(vec![23, 2, 1, 3, 4])
+        Some((
+            "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)".into(),
+            vec![23, 2, 1, 3, 4]
+        ))
     );
     assert_eq!(
         parse_location_path(OsStr::new(
-            "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(16)"
+            "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(1)#USB(16)"
         )),
-        Some(vec![16])
+        Some(("PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(1)".into(), vec![16]))
     );
     assert_eq!(
         parse_location_path(OsStr::new(

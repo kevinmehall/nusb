@@ -46,7 +46,7 @@ pub(crate) struct LinuxDevice {
 
 impl LinuxDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
-        let busnum = d.bus_number();
+        let busnum = d.busnum();
         let devnum = d.device_address();
         let active_config = d.path.read_attr("bConfigurationValue")?;
 

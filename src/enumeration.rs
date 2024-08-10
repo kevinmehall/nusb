@@ -25,6 +25,9 @@ pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
 
+    #[cfg(target_os = "linux")]
+    pub(crate) busnum: u8,
+
     #[cfg(target_os = "windows")]
     pub(crate) instance_id: OsString,
 
@@ -46,7 +49,7 @@ pub struct DeviceInfo {
     #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
-    pub(crate) bus_number: u8,
+    pub(crate) bus_id: String,
     pub(crate) device_address: u8,
     pub(crate) port_chain: Option<Vec<u8>>,
 
@@ -80,7 +83,7 @@ impl DeviceInfo {
         #[cfg(target_os = "linux")]
         {
             DeviceId(crate::platform::DeviceId {
-                bus: self.bus_number,
+                bus: self.busnum,
                 addr: self.device_address,
             })
         }
@@ -103,6 +106,14 @@ impl DeviceInfo {
     #[cfg(target_os = "linux")]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
+    }
+
+    /// *(Linux-only)* Bus number.
+    ///
+    /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
+    #[cfg(target_os = "linux")]
+    pub fn busnum(&self) -> u8 {
+        self.busnum
     }
 
     /// *(Windows-only)* Instance ID path of this device
@@ -152,9 +163,9 @@ impl DeviceInfo {
         self.registry_id
     }
 
-    /// Number identifying the bus / host controller where the device is connected.
-    pub fn bus_number(&self) -> u8 {
-        self.bus_number
+    /// Identifier for the bus / host controller where the device is connected.
+    pub fn bus_id(&self) -> &str {
+        &self.bus_id
     }
 
     /// Number identifying the device within the bus.
@@ -273,7 +284,7 @@ impl std::fmt::Debug for DeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("DeviceInfo");
 
-        s.field("bus_number", &self.bus_number)
+        s.field("bus_id", &self.bus_id)
             .field("device_address", &self.device_address)
             .field("port_chain", &format_args!("{:?}", self.port_chain))
             .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
@@ -294,6 +305,7 @@ impl std::fmt::Debug for DeviceInfo {
         #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
+            s.field("busnum", &self.busnum);
         }
 
         #[cfg(target_os = "windows")]

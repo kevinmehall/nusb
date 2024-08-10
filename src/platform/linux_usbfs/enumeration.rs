@@ -125,7 +125,7 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     debug!("Probing device {:?}", path.0);
 
-    let bus_number = path.read_attr("busnum")?;
+    let busnum = path.read_attr("busnum")?;
     let device_address = path.read_attr("devnum")?;
 
     let port_chain = path.read_attr::<String>("devpath").ok().and_then(|p| {
@@ -134,7 +134,8 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
             .collect::<Option<Vec<u8>>>()
     });
     Ok(DeviceInfo {
-        bus_number,
+        busnum,
+        bus_id: format!("{busnum:03}"),
         device_address,
         port_chain,
         vendor_id: path.read_attr_hex("idVendor")?,
