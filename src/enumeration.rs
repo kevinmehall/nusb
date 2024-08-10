@@ -123,12 +123,10 @@ impl DeviceInfo {
         self.port_number
     }
 
-    /// Path of port numbers identifying the physical port where the device is
-    /// connected.
+    /// Path of port numbers identifying the port where the device is connected.
     ///
-    /// The first value is the bus number, and subsequent values represent the
-    /// port used on each hub on the path to this device. The path is expected
-    /// to remain stable across device insertions or reboots.
+    /// Together with the bus ID, it identifies a physical port. The path is
+    ///  expected to remain stable across device insertions or reboots.
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.

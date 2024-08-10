@@ -100,7 +100,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
     let port_chain = devinst
         .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
-        .and_then(|s| s.iter().find_map(|p| parse_location_path(bus_number, p)));
+        .and_then(|s| s.iter().find_map(|p| parse_location_path(p)));
 
     Some(DeviceInfo {
         instance_id,
@@ -293,10 +293,10 @@ fn test_parse_compatible_id() {
     );
 }
 
-fn parse_location_path(bus_num: u8, s: &OsStr) -> Option<Vec<u8>> {
+fn parse_location_path(s: &OsStr) -> Option<Vec<u8>> {
     let (_, mut s) = s.to_str()?.split_once("#USBROOT(")?;
 
-    let mut path = vec![bus_num];
+    let mut path = vec![];
 
     while let Some((_, next)) = s.split_once("#USB(") {
         let (port_num, next) = next.split_once(")")?;
@@ -310,26 +310,21 @@ fn parse_location_path(bus_num: u8, s: &OsStr) -> Option<Vec<u8>> {
 #[test]
 fn test_parse_location_path() {
     assert_eq!(
-        parse_location_path(
-            0,
-            OsStr::new(
-                "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(23)#USB(2)#USB(1)#USB(3)#USB(4)"
-            )
-        ),
-        Some(vec![0, 23, 2, 1, 3, 4])
+        parse_location_path(OsStr::new(
+            "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(23)#USB(2)#USB(1)#USB(3)#USB(4)"
+        )),
+        Some(vec![23, 2, 1, 3, 4])
     );
     assert_eq!(
-        parse_location_path(
-            0,
-            OsStr::new("PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(16)")
-        ),
-        Some(vec![0, 16])
+        parse_location_path(OsStr::new(
+            "PCIROOT(0)#PCI(0201)#PCI(0000)#USBROOT(0)#USB(16)"
+        )),
+        Some(vec![16])
     );
     assert_eq!(
-        parse_location_path(
-            0,
-            OsStr::new("ACPI(_SB_)#ACPI(PCI0)#ACPI(S11_)#ACPI(S00_)#ACPI(RHUB)#ACPI(HS04)")
-        ),
+        parse_location_path(OsStr::new(
+            "ACPI(_SB_)#ACPI(PCI0)#ACPI(S11_)#ACPI(S00_)#ACPI(RHUB)#ACPI(HS04)"
+        )),
         None
     );
 }

@@ -166,8 +166,7 @@ fn map_speed(speed: i64) -> Option<Speed> {
 }
 
 fn parse_location_id(id: u32) -> Vec<u8> {
-    let bus_num = id >> 24;
-    let mut chain = vec![bus_num as u8];
+    let mut chain = vec![];
     let mut shift = id << 8;
 
     while shift != 0 {
@@ -181,9 +180,9 @@ fn parse_location_id(id: u32) -> Vec<u8> {
 
 #[test]
 fn test_parse_location_id() {
-    assert_eq!(parse_location_id(0x01234567), vec![1, 2, 3, 4, 5, 6, 7]);
-    assert_eq!(parse_location_id(0xff875000), vec![255, 8, 7, 5]);
-    assert_eq!(parse_location_id(0x08400000), vec![8, 4]);
-    assert_eq!(parse_location_id(0x02040100), vec![2, 0, 4, 0, 1]);
-    assert_eq!(parse_location_id(0), vec![0]);
+    assert_eq!(parse_location_id(0x01234567), vec![2, 3, 4, 5, 6, 7]);
+    assert_eq!(parse_location_id(0xff875000), vec![8, 7, 5]);
+    assert_eq!(parse_location_id(0x08400000), vec![4]);
+    assert_eq!(parse_location_id(0x02040100), vec![0, 4, 0, 1]);
+    assert_eq!(parse_location_id(0), vec![]);
 }

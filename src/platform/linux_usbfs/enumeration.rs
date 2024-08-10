@@ -1,6 +1,5 @@
 use std::fs;
 use std::io;
-use std::iter;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -130,11 +129,10 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     let device_address = path.read_attr("devnum")?;
 
     let port_chain = path.read_attr::<String>("devpath").ok().and_then(|p| {
-        iter::once(Some(bus_number))
-            .chain(p.split('.').map(|v| v.parse::<u8>().ok()))
+        p.split('.')
+            .map(|v| v.parse::<u8>().ok())
             .collect::<Option<Vec<u8>>>()
     });
-
     Ok(DeviceInfo {
         bus_number,
         device_address,
