@@ -10,7 +10,7 @@ fn main() {
 fn inspect_device(dev: DeviceInfo) {
     println!(
         "Device {:03}.{:03} ({:04x}:{:04x}) {} {}",
-        dev.bus_number(),
+        dev.bus_id(),
         dev.device_address(),
         dev.vendor_id(),
         dev.product_id(),

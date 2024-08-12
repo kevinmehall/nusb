@@ -49,12 +49,15 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     let registry_id = get_registry_id(&device)?;
     log::debug!("Probing device {registry_id:08x}");
 
+    let location_id = get_integer_property(&device, "locationID")? as u32;
+
     // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
         registry_id,
-        location_id: get_integer_property(&device, "locationID")? as u32,
-        bus_number: 0, // TODO: does this exist on macOS?
+        location_id,
+        bus_id: format!("{:02x}", (location_id >> 24) as u8),
         device_address: get_integer_property(&device, "USB Address")? as u8,
+        port_chain: parse_location_id(location_id),
         vendor_id: get_integer_property(&device, "idVendor")? as u16,
         product_id: get_integer_property(&device, "idProduct")? as u16,
         device_version: get_integer_property(&device, "bcdDevice")? as u16,
@@ -160,4 +163,26 @@ fn map_speed(speed: i64) -> Option<Speed> {
         4 | 5 => Some(Speed::SuperPlus),
         _ => None,
     }
+}
+
+fn parse_location_id(id: u32) -> Vec<u8> {
+    let mut chain = vec![];
+    let mut shift = id << 8;
+
+    while shift != 0 {
+        let port = shift >> 28;
+        chain.push(port as u8);
+        shift = shift << 4;
+    }
+
+    chain
+}
+
+#[test]
+fn test_parse_location_id() {
+    assert_eq!(parse_location_id(0x01234567), vec![2, 3, 4, 5, 6, 7]);
+    assert_eq!(parse_location_id(0xff875000), vec![8, 7, 5]);
+    assert_eq!(parse_location_id(0x08400000), vec![4]);
+    assert_eq!(parse_location_id(0x02040100), vec![0, 4, 0, 1]);
+    assert_eq!(parse_location_id(0), vec![]);
 }
