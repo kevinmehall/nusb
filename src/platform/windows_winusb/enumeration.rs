@@ -8,9 +8,10 @@ use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
         DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationPaths,
-        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_Parent, DEVPKEY_Device_Service, DEVPKEY_Device_Manufacturer,
+        DEVPKEY_Device_DeviceDesc,
     },
-    Usb::GUID_DEVINTERFACE_USB_DEVICE,
+    Usb::{GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB},
 };
 
 use crate::{
@@ -37,6 +38,16 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(devs.into_iter())
 }
 
+pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
+        .iter()
+        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
+        .flat_map(|d| DevInst::from_instance_id(&d))
+        .flat_map(probe_root_hub)
+        .collect();
+    Ok(devs.into_iter())
+}
+
 pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     debug!("Probing device {instance_id:?}");
@@ -49,6 +60,9 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
     let product_string = devinst
         .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
+        .and_then(|s| s.into_string().ok());
+    let manufacturer_string = devinst
+        .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
         .and_then(|s| s.into_string().ok());
 
     let serial_number = if info.device_desc.iSerialNumber != 0 {
@@ -124,10 +138,64 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         protocol: info.device_desc.bDeviceProtocol,
         max_packet_size_0: info.device_desc.bMaxPacketSize0,
         speed: info.speed,
-        manufacturer_string: None,
+        manufacturer_string,
         product_string,
         serial_number,
         interfaces,
+    })
+}
+
+pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
+    let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
+    // Skip non-root hubs - ID will not parse
+    let (device_version, serial_number) = parse_root_hub_id(&instance_id)?;
+
+    debug!("Probing root_hub {instance_id:?}");
+
+    let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
+    let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
+    let (vendor_id, product_id, _, _, _) = parse_host_controller_id(parent_instance_id.as_os_str()).unwrap_or_default();
+
+    let product_string = devinst
+        .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)
+        .and_then(|s| s.into_string().ok());
+    let manufacturer_string = devinst
+        .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
+        .and_then(|s| s.into_string().ok());
+
+    let driver = get_driver_name(devinst);
+
+    let location_paths = devinst
+        .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
+        .unwrap_or_default();
+
+    let (bus_id, port_chain) = location_paths
+        .iter()
+        .find_map(|p| parse_location_path(p))
+        .unwrap_or_default();
+
+    Some(DeviceInfo {
+        instance_id,
+        location_paths,
+        parent_instance_id,
+        devinst,
+        port_number,
+        port_chain,
+        driver: Some(driver).filter(|s| !s.is_empty()),
+        bus_id,
+        device_address: 0,
+        vendor_id,
+        product_id,
+        device_version,
+        class: 0x09,
+        subclass: 0x0,
+        protocol: if device_version >= 0x0200 { 0x01 } else { 0x00 }, // not perfect as don't know if single-TT or multi-TT
+        max_packet_size_0: 64, // always 64 bytes for hubs
+        speed: None,
+        manufacturer_string,
+        product_string,
+        serial_number,
+        interfaces: Vec::new(),
     })
 }
 
@@ -340,4 +408,51 @@ fn test_parse_location_path() {
         )),
         None
     );
+}
+
+
+/// Parse device version and ID from Root Hub instance ID
+fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
+    let s = s.to_str()?;
+    let s = s.strip_prefix("USB\\ROOT_HUB")?;
+    let (version, i) = u16::from_str_radix(s.get(0..2).unwrap_or("10"), 10)
+        .map(|v| ((v / 10) << 8 | v % 10 << 4, 2)) // convert to BCD
+        .unwrap_or((0x0100, 0)); // default USB 1.0
+    let id = s.get(i..).map(|v| v.strip_prefix("\\").map(|s| s.to_owned())).flatten();
+    Some((version, id))
+}
+
+#[test]
+fn test_parse_root_hub_id() {
+    assert_eq!(parse_root_hub_id(OsStr::new("")), None);
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")), Some((0x0100, None)));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")), Some((0x0100, Some("4&2FB9F669&0".to_string()))));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB20")), Some((0x0200, None)));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB31")), Some((0x0310, None)));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB30\\4&2FB9F669&0")), Some((0x0300, Some("4&2FB9F669&0".to_string()))));
+}
+
+/// Parse VID, PID, revision, subsys and ID from a Host Controller ID: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/identifiers-for-pci-devices
+///
+/// The subsys is a 32-bit value with SID in the high 16 bits and CID in the low 16 bits.
+fn parse_host_controller_id(s: &OsStr) -> Option<(u16, u16, u8, u32, Option<String>)> {
+    let s = s.to_str()?;
+    let s = s.strip_prefix("PCI\\VEN_")?;
+    let vid = u16::from_str_radix(s.get(0..4)?, 16).ok()?;
+    let s = s.get(4..)?.strip_prefix("&DEV_")?;
+    let pid = u16::from_str_radix(s.get(0..4)?, 16).ok()?;
+    let s = s.get(4..)?.strip_prefix("&SUBSYS_")?;
+    let sidcid = u32::from_str_radix(s.get(0..8)?, 16).ok()?;
+    let s = s.get(8..)?.strip_prefix("&REV_")?;
+    let rev = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
+    let id = s.get(2..)?.strip_prefix("\\").map(|s| s.to_owned());
+    Some((vid, pid, rev, sidcid, id))
+}
+
+#[test]
+fn test_parse_host_controller_id() {
+    assert_eq!(parse_host_controller_id(OsStr::new("")), None);
+    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02\\3&11583659&0&E8")), Some((0x8086, 0x2658, 2, 0x04001AB8, Some("3&11583659&0&E8".to_string()))));
+    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658")), None);
+    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02")), Some((0x8086, 0x2658, 2, 0x04001AB8, None)));
 }

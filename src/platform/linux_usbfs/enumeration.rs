@@ -122,6 +122,24 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     }))
 }
 
+pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    Ok(fs::read_dir(SYSFS_PREFIX)?
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let name = path.file_name()?;
+
+            // root hubs are named `usbX` where X is the bus number
+            if !name.to_string_lossy().starts_with("usb") {
+                return None;
+            }
+
+            probe_device(SysfsPath(path))
+                .inspect_err(|e| warn!("{e}; ignoring root hub"))
+                .ok()
+        })
+    )
+}
+
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     debug!("Probing device {:?}", path.0);
 

@@ -17,10 +17,15 @@ use log::debug;
 use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
 
 use super::iokit::{IoService, IoServiceIterator};
+#[allow(non_upper_case_globals)]
+/// IOKit class name for PCI USB high-speed controllers
+// AppleUSBEHI (full-speed) and others?
+const kAppleUSBXHCI: *const ::std::os::raw::c_char =
+    b"AppleUSBXHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
 
-fn usb_service_iter() -> Result<IoServiceIterator, Error> {
+fn usb_service_iter(service: *const ::std::os::raw::c_char) -> Result<IoServiceIterator, Error> {
     unsafe {
-        let dictionary = IOServiceMatching(kIOUSBDeviceClassName);
+        let dictionary = IOServiceMatching(service);
         if dictionary.is_null() {
             return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
         }
@@ -36,11 +41,15 @@ fn usb_service_iter() -> Result<IoServiceIterator, Error> {
 }
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(usb_service_iter()?.filter_map(probe_device))
+    Ok(usb_service_iter(kIOUSBDeviceClassName)?.filter_map(probe_device))
+}
+
+pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    Ok(usb_service_iter(kAppleUSBXHCI)?.filter_map(probe_root_hub))
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
-    usb_service_iter()?
+    usb_service_iter(kIOUSBDeviceClassName)?
         .find(|dev| get_registry_id(dev) == Some(registry_id))
         .ok_or(Error::new(ErrorKind::NotFound, "not found by registry id"))
 }
@@ -82,6 +91,50 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
             })
             .collect()
         }),
+    })
+}
+
+pub(crate) fn probe_root_hub(device: IoService) -> Option<DeviceInfo> {
+    let registry_id = get_registry_id(&device)?;
+    log::debug!("Probing root_hub {registry_id:08x}");
+
+    let location_id = get_integer_property(&device, "locationID")? as u32;
+    // "IOPCIPrimaryMatch" = "0x15e98086 0x15ec8086 0x15f08086 0x0b278086"
+    // extracted matching from `system_profiler SPUSBDataType -json`
+    let (vid, pid) = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
+        let parts = pci.split_whitespace().collect::<Vec<_>>();
+        match parts.get(2) {
+            Some(s) => {
+                let pid = u16::from_str_radix(&s[2..6], 16).unwrap_or(0x0000);
+                let vid = u16::from_str_radix(&s[6..10], 16).unwrap_or(0x0000);
+                (vid, pid)
+            }
+            None => (0x0000, 0x0000)
+        }
+    } else {
+        debug!("Root hub does not have IOPCIPrimaryMatch property");
+        (0x0000, 0x0000)
+    };
+
+    // Can run `ioreg -rc AppleUSBXHCI -d 1` to see all properties
+    Some(DeviceInfo {
+        registry_id,
+        location_id,
+        bus_id: format!("{:02x}", (location_id >> 24) as u8),
+        device_address: 0,
+        port_chain: parse_location_id(location_id),
+        vendor_id: vid,
+        product_id: pid,
+        device_version: 0, // TODO parse from a key value?
+        class: 0x09,
+        subclass: 0x00,
+        protocol: 0x01, // TODO depends on speed
+        max_packet_size_0: 64,
+        speed: None,
+        manufacturer_string: get_string_property(&device, "IOProviderClass"),
+        product_string: get_string_property(&device, "IOClass"),
+        serial_number: None,
+        interfaces: Vec::new()
     })
 }
 

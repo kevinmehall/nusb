@@ -149,6 +149,29 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
 }
 
+/// Get an iterator listing the root hubs.
+///
+/// ### Example
+///
+/// ```no_run
+/// use nusb;
+/// let hub = nusb::list_root_hubs().unwrap()
+///    .find(|dev| dev.vendor_id() == 0x1d6b)
+///    .expect("Linux Foundation root hub not found");
+/// ```
+///
+/// ### Platform-specific notes
+/// * On non-Linux platforms, the data is a combination of Host Controller and Root Hub information (where available):
+///     - vendor_id -> Host Controller Vendor ID
+///     - product_id -> Host Controller Product ID
+///     - device_version -> Windows: parsed from instance ID, macOS: missing
+///     - manufacturer_string -> Windows: Root Hub Manufacturer, macOS: IOProviderClass
+///     - product_string -> Windows: Root Hub Product, macOS: IOClass
+///     - serial_number -> Windows: parsed from end of instance ID, macOS: missing
+pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    platform::list_root_hubs()
+}
+
 /// Get a [`Stream`][`futures_core::Stream`] that yields an
 /// [event][`hotplug::HotplugEvent`] when a USB device is connected or
 /// disconnected from the system.
