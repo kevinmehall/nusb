@@ -149,7 +149,8 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
 }
 
-/// Get an iterator listing the root hubs.
+/// Get an iterator listing the root hubs; psuedo devices that can be
+/// considered buses on a Host Controller.
 ///
 /// ### Example
 ///
@@ -161,13 +162,30 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 /// ```
 ///
 /// ### Platform-specific notes
+///
+/// Root hubs are not actual devices, but an abstration to the physical Host
+/// Controller they are attached to:
+///
+/// * On Linux, the data is obtained from the sysfs filesystem root hub 'device':
+///    - vendor_id -> constant Linux root hub ID (0x1d6b)
+///    - product_id -> compresponds to the hub speed (0x001 for USB1.1, 0x0002 for USB2, 0x0003 for USB3 etc.)
+///    - manufacturer_string -> kernel generated string, normally the kernel build and HCI driver
+///    - product_string -> kernel generated string, normally the type of Host Controller
+///    - device_version -> normally the kernel version
+///    - serial_number -> normally sysfs kernel name of the PCI Host Controller
+///    - class -> 0x09 (Hub)
+///    - subclass -> 0x00 (Unused)
+///    - protocol -> based on hub speed
 /// * On non-Linux platforms, the data is a combination of Host Controller and Root Hub information (where available):
 ///     - vendor_id -> Host Controller Vendor ID
 ///     - product_id -> Host Controller Product ID
-///     - device_version -> Windows: parsed from instance ID, macOS: missing
+///     - device_version -> Windows: USB version parsed from instance ID, macOS: missing
 ///     - manufacturer_string -> Windows: Root Hub Manufacturer, macOS: IOProviderClass
 ///     - product_string -> Windows: Root Hub Product, macOS: IOClass
 ///     - serial_number -> Windows: parsed from end of instance ID, macOS: missing
+///     - class -> 0x09 (Hub)
+///     - subclass -> 0x00 (Unused)
+///     - protocol -> parsed from information available but maybe inaccurate
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_root_hubs()
 }

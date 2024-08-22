@@ -174,6 +174,14 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
         .find_map(|p| parse_location_path(p))
         .unwrap_or_default();
 
+    // not perfect as don't know if single-TT or multi-TT
+    let protocol = match device_version & 0xFF00 {
+        0x0100 => 0x00,
+        0x0200 => 0x01,
+        0x0300 => 0x03,
+        x => (x >> 8) as u8,
+    };
+
     Some(DeviceInfo {
         instance_id,
         location_paths,
@@ -189,7 +197,7 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
         device_version,
         class: 0x09,
         subclass: 0x0,
-        protocol: if device_version >= 0x0200 { 0x01 } else { 0x00 }, // not perfect as don't know if single-TT or multi-TT
+        protocol,
         max_packet_size_0: 64, // always 64 bytes for hubs
         speed: None,
         manufacturer_string,

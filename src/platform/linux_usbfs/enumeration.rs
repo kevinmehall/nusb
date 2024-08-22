@@ -149,6 +149,7 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     let port_chain = path
         .read_attr::<String>("devpath")
         .ok()
+        .filter(|p| p != "0") // root hub should be empty but devpath is 0
         .and_then(|p| {
             p.split('.')
                 .map(|v| v.parse::<u8>().ok())
