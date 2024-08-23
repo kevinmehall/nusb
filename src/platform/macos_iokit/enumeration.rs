@@ -69,13 +69,20 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
-    Ok(usb_service_iter(kAppleUSBXHCI)?.filter_map(|h| probe_root_hub(h, AppleUSBController::XHCI))
-        .chain(usb_service_iter(kAppleUSBEHCI)?.filter_map(|h| probe_root_hub(h, AppleUSBController::EHCI))
-            .chain(usb_service_iter(kAppleUSBOHCI)?.filter_map(|h| probe_root_hub(h, AppleUSBController::OHCI))
-                .chain(usb_service_iter(kAppleUSBVHCI)?.filter_map(|h| probe_root_hub(h, AppleUSBController::VHCI))
-            ),
-        ),
-    ))
+    Ok(usb_service_iter(kAppleUSBXHCI)?
+        .filter_map(|h| probe_root_hub(h, AppleUSBController::XHCI))
+        .chain(
+            usb_service_iter(kAppleUSBEHCI)?
+                .filter_map(|h| probe_root_hub(h, AppleUSBController::EHCI))
+                .chain(
+                    usb_service_iter(kAppleUSBOHCI)?
+                        .filter_map(|h| probe_root_hub(h, AppleUSBController::OHCI))
+                        .chain(
+                            usb_service_iter(kAppleUSBVHCI)?
+                                .filter_map(|h| probe_root_hub(h, AppleUSBController::VHCI)),
+                        ),
+                ),
+        ))
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
@@ -124,7 +131,10 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     })
 }
 
-pub(crate) fn probe_root_hub(device: IoService, host_controller: AppleUSBController) -> Option<DeviceInfo> {
+pub(crate) fn probe_root_hub(
+    device: IoService,
+    host_controller: AppleUSBController,
+) -> Option<DeviceInfo> {
     let registry_id = get_registry_id(&device)?;
     log::debug!("Probing root_hub {registry_id:08x}");
 
@@ -138,10 +148,9 @@ pub(crate) fn probe_root_hub(device: IoService, host_controller: AppleUSBControl
                 let vid = u16::from_str_radix(spid, 16).unwrap_or(0x0000);
                 (vid, pid)
             }
-            _ => (0x0000, 0x0000)
+            _ => (0x0000, 0x0000),
         }
     } else {
-        debug!("Root hub does not have IOPCIPrimaryMatch property");
         (0x0000, 0x0000)
     };
 
@@ -170,7 +179,7 @@ pub(crate) fn probe_root_hub(device: IoService, host_controller: AppleUSBControl
         manufacturer_string: get_string_property(&device, "IOProviderClass"),
         product_string: get_string_property(&device, "IOClass"),
         serial_number: get_string_property(&device, "name"), // name is unique system bus name but not always present
-        interfaces: Vec::new()
+        interfaces: Vec::new(),
     })
 }
 

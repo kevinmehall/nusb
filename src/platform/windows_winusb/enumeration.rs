@@ -7,9 +7,9 @@ use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
-        DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationPaths,
-        DEVPKEY_Device_Parent, DEVPKEY_Device_Service, DEVPKEY_Device_Manufacturer,
-        DEVPKEY_Device_DeviceDesc,
+        DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
+        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Manufacturer, DEVPKEY_Device_Parent,
+        DEVPKEY_Device_Service,
     },
     Usb::{GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB},
 };
@@ -154,7 +154,8 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
     let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
-    let (vendor_id, product_id, _, _, _) = parse_host_controller_id(parent_instance_id.as_os_str()).unwrap_or_default();
+    let (vendor_id, product_id, _, _, _) =
+        parse_host_controller_id(parent_instance_id.as_os_str()).unwrap_or_default();
 
     let product_string = devinst
         .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)
@@ -417,7 +418,6 @@ fn test_parse_location_path() {
     );
 }
 
-
 /// Parse device version and ID from Root Hub instance ID
 fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
     let s = s.to_str()?;
@@ -425,18 +425,36 @@ fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
     let (version, i) = u16::from_str_radix(s.get(0..2).unwrap_or("11"), 10)
         .map(|v| ((v / 10) << 8 | v % 10 << 4, 2)) // convert to BCD
         .unwrap_or((0x0110, 0)); // default USB 1.1
-    let id = s.get(i..).map(|v| v.strip_prefix("\\").map(|s| s.to_owned())).flatten();
+    let id = s
+        .get(i..)
+        .map(|v| v.strip_prefix("\\").map(|s| s.to_owned()))
+        .flatten();
     Some((version, id))
 }
 
 #[test]
 fn test_parse_root_hub_id() {
     assert_eq!(parse_root_hub_id(OsStr::new("")), None);
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")), Some((0x0110, None)));
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")), Some((0x0110, Some("4&2FB9F669&0".to_string()))));
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB20")), Some((0x0200, None)));
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB31")), Some((0x0310, None)));
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB30\\4&2FB9F669&0")), Some((0x0300, Some("4&2FB9F669&0".to_string()))));
+    assert_eq!(
+        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")),
+        Some((0x0110, None))
+    );
+    assert_eq!(
+        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")),
+        Some((0x0110, Some("4&2FB9F669&0".to_string())))
+    );
+    assert_eq!(
+        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB20")),
+        Some((0x0200, None))
+    );
+    assert_eq!(
+        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB31")),
+        Some((0x0310, None))
+    );
+    assert_eq!(
+        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB30\\4&2FB9F669&0")),
+        Some((0x0300, Some("4&2FB9F669&0".to_string())))
+    );
 }
 
 /// Parse VID, PID, revision, subsys and ID from a Host Controller ID: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/identifiers-for-pci-devices
@@ -459,7 +477,24 @@ fn parse_host_controller_id(s: &OsStr) -> Option<(u16, u16, u8, u32, Option<Stri
 #[test]
 fn test_parse_host_controller_id() {
     assert_eq!(parse_host_controller_id(OsStr::new("")), None);
-    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02\\3&11583659&0&E8")), Some((0x8086, 0x2658, 2, 0x04001AB8, Some("3&11583659&0&E8".to_string()))));
-    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658")), None);
-    assert_eq!(parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02")), Some((0x8086, 0x2658, 2, 0x04001AB8, None)));
+    assert_eq!(
+        parse_host_controller_id(OsStr::new(
+            "PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02\\3&11583659&0&E8"
+        )),
+        Some((
+            0x8086,
+            0x2658,
+            2,
+            0x04001AB8,
+            Some("3&11583659&0&E8".to_string())
+        ))
+    );
+    assert_eq!(
+        parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658")),
+        None
+    );
+    assert_eq!(
+        parse_host_controller_id(OsStr::new("PCI\\VEN_8086&DEV_2658&SUBSYS_04001AB8&REV_02")),
+        Some((0x8086, 0x2658, 2, 0x04001AB8, None))
+    );
 }
