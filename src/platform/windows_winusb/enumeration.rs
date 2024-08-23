@@ -178,7 +178,6 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
     let protocol = match device_version & 0xFF00 {
         0x0100 => 0x00,
         0x0200 => 0x01,
-        0x0300 => 0x03,
         x => (x >> 8) as u8,
     };
 
@@ -194,11 +193,11 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
         device_address: 0,
         vendor_id,
         product_id,
-        device_version,
+        device_version, // could put PCI revision ID here - value is currently attemped parse of USB BCD
         class: 0x09,
         subclass: 0x0,
         protocol,
-        max_packet_size_0: 64, // always 64 bytes for hubs
+        max_packet_size_0: 64, // always 64 bytes for root hubs
         speed: None,
         manufacturer_string,
         product_string,
@@ -423,9 +422,9 @@ fn test_parse_location_path() {
 fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
     let s = s.to_str()?;
     let s = s.strip_prefix("USB\\ROOT_HUB")?;
-    let (version, i) = u16::from_str_radix(s.get(0..2).unwrap_or("10"), 10)
+    let (version, i) = u16::from_str_radix(s.get(0..2).unwrap_or("11"), 10)
         .map(|v| ((v / 10) << 8 | v % 10 << 4, 2)) // convert to BCD
-        .unwrap_or((0x0100, 0)); // default USB 1.0
+        .unwrap_or((0x0110, 0)); // default USB 1.1
     let id = s.get(i..).map(|v| v.strip_prefix("\\").map(|s| s.to_owned())).flatten();
     Some((version, id))
 }
@@ -433,8 +432,8 @@ fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
 #[test]
 fn test_parse_root_hub_id() {
     assert_eq!(parse_root_hub_id(OsStr::new("")), None);
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")), Some((0x0100, None)));
-    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")), Some((0x0100, Some("4&2FB9F669&0".to_string()))));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")), Some((0x0110, None)));
+    assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")), Some((0x0110, Some("4&2FB9F669&0".to_string()))));
     assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB20")), Some((0x0200, None)));
     assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB31")), Some((0x0310, None)));
     assert_eq!(parse_root_hub_id(OsStr::new("USB\\ROOT_HUB30\\4&2FB9F669&0")), Some((0x0300, Some("4&2FB9F669&0".to_string()))));

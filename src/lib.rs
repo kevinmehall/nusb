@@ -177,15 +177,15 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 ///    - subclass -> 0x00 (Unused)
 ///    - protocol -> based on hub speed
 /// * On non-Linux platforms, the data is a combination of Host Controller and Root Hub information (where available):
-///     - vendor_id -> Host Controller Vendor ID
-///     - product_id -> Host Controller Product ID
-///     - device_version -> Windows: USB version parsed from instance ID, macOS: missing
-///     - manufacturer_string -> Windows: Root Hub Manufacturer, macOS: IOProviderClass
-///     - product_string -> Windows: Root Hub Product, macOS: IOClass
-///     - serial_number -> Windows: parsed from end of instance ID, macOS: missing
-///     - class -> 0x09 (Hub)
-///     - subclass -> 0x00 (Unused)
-///     - protocol -> parsed from information available but maybe inaccurate
+///    - vendor_id -> Host Controller Vendor ID, 0x0000 if not available
+///    - product_id -> Host Controller Product ID, 0x0000 if not available
+///    - device_version -> Windows: USB version parsed from instance ID, macOS: USB version based on Host Controller Interface
+///    - manufacturer_string -> Windows: Root Hub Manufacturer, macOS: IOProviderClass
+///    - product_string -> Windows: Root Hub Product, macOS: IOClass
+///    - serial_number -> Windows: parsed from end of instance ID, macOS: missing
+///    - class -> 0x09 (Hub)
+///    - subclass -> 0x00 (Unused)
+///    - protocol -> resolved from parsed USB BCD but maybe inaccurate
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_root_hubs()
 }
