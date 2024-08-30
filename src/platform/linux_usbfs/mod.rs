@@ -5,7 +5,7 @@ mod usbfs;
 
 mod enumeration;
 mod events;
-pub use enumeration::{list_devices, list_root_hubs, SysfsPath};
+pub use enumeration::{list_buses, list_devices, SysfsPath};
 
 mod device;
 pub(crate) use device::LinuxDevice as Device;

@@ -19,7 +19,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
-    DeviceInfo, Error, InterfaceInfo,
+    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo,
 };
 
 use super::{
@@ -38,12 +38,12 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(devs.into_iter())
 }
 
-pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    let devs: Vec<BusInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
         .iter()
         .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
         .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(probe_root_hub)
+        .flat_map(probe_bus)
         .collect();
     Ok(devs.into_iter())
 }
@@ -145,22 +145,19 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     })
 }
 
-pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
+pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
-    // Skip non-root hubs - ID will not parse
-    let (device_version, serial_number) = parse_root_hub_id(&instance_id)?;
+    // Skip non-root hubs; buses - ID will not parse
+    let (_device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
 
-    debug!("Probing root_hub {instance_id:?}");
+    debug!("Probing bus {instance_id:?}");
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
-    let port_number = devinst.get_property::<u32>(DEVPKEY_Device_Address)?;
-    let (vendor_id, product_id, _, _, _) =
-        parse_host_controller_id(parent_instance_id.as_os_str()).unwrap_or_default();
 
-    let product_string = devinst
+    let class_name = devinst
         .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)
         .and_then(|s| s.into_string().ok());
-    let manufacturer_string = devinst
+    let provider_class = devinst
         .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
         .and_then(|s| s.into_string().ok());
 
@@ -170,40 +167,36 @@ pub fn probe_root_hub(devinst: DevInst) -> Option<DeviceInfo> {
         .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
         .unwrap_or_default();
 
-    let (bus_id, port_chain) = location_paths
+    let (bus_id, _) = location_paths
         .iter()
         .find_map(|p| parse_location_path(p))
         .unwrap_or_default();
 
-    // not perfect as don't know if single-TT or multi-TT
-    let protocol = match device_version & 0xFF00 {
-        0x0100 => 0x00,
-        0x0200 => 0x01,
-        x => (x >> 8) as u8,
+    let pci_info = if let Some((vendor_id, device_id, revision, subsystem, _)) =
+        parse_host_controller_id(parent_instance_id.as_os_str())
+    {
+        Some(PciInfo {
+            instance_id: parent_instance_id,
+            vendor_id,
+            device_id,
+            revision: Some(revision as u16),
+            subsystem_vendor_id: Some((subsystem >> 16) as u16),
+            subsystem_device_id: Some((subsystem & 0xFFFF) as u16),
+        })
+    } else {
+        None
     };
 
-    Some(DeviceInfo {
+    Some(BusInfo {
         instance_id,
         location_paths,
-        parent_instance_id,
+        pci_info,
         devinst,
-        port_number,
-        port_chain,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
-        device_address: 0,
-        vendor_id,
-        product_id,
-        device_version, // could put PCI revision ID here - value is currently attemped parse of USB BCD
-        class: 0x09,
-        subclass: 0x0,
-        protocol,
-        max_packet_size_0: 64, // always 64 bytes for root hubs
-        speed: None,
-        manufacturer_string,
-        product_string,
-        serial_number,
-        interfaces: Vec::new(),
+        controller: None,
+        class_name,
+        provider_class,
     })
 }
 

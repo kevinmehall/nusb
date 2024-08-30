@@ -8,9 +8,7 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
-use crate::DeviceInfo;
-use crate::Error;
-use crate::Speed;
+use crate::{BusInfo, DeviceInfo, Error, PciInfo, Speed, UsbController};
 
 #[derive(Debug, Clone)]
 pub struct SysfsPath(pub(crate) PathBuf);
@@ -67,7 +65,7 @@ impl SysfsPath {
     }
 
     fn read_attr_hex<T: FromHexStr>(&self, attr: &str) -> Result<T, SysfsError> {
-        self.parse_attr(attr, |s| T::from_hex_str(s))
+        self.parse_attr(attr, |s| T::from_hex_str(s.strip_prefix("0x").unwrap_or(s)))
     }
 
     fn children(&self) -> impl Iterator<Item = SysfsPath> {
@@ -97,10 +95,11 @@ impl FromHexStr for u16 {
     }
 }
 
-const SYSFS_PREFIX: &'static str = "/sys/bus/usb/devices/";
+const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
+const SYSFS_PCI_PREFIX: &'static str = "/sys/bus/pci/devices/";
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(fs::read_dir(SYSFS_PREFIX)?.flat_map(|entry| {
+    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
         let path = entry.ok()?.path();
         let name = path.file_name()?;
 
@@ -123,7 +122,7 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 }
 
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(fs::read_dir(SYSFS_PREFIX)?.filter_map(|entry| {
+    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.filter_map(|entry| {
         let path = entry.ok()?.path();
         let name = path.file_name()?;
 
@@ -135,6 +134,48 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
         probe_device(SysfsPath(path))
             .inspect_err(|e| warn!("{e}; ignoring root hub"))
             .ok()
+    }))
+}
+
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    Ok(list_root_hubs()?.map(|rh| {
+        // root hub devices have a serial number that matches the PCI device name so try to read that path
+        let pci_info = if let Some(pci_name) = rh.serial_number() {
+            let path = SysfsPath(PathBuf::from(SYSFS_PCI_PREFIX).join(pci_name));
+            debug!("Probing PCI device {:?}", path.0);
+
+            if let (Ok(vendor_id), Ok(device_id)) = (
+                path.read_attr_hex::<u16>("vendor"),
+                path.read_attr_hex::<u16>("device"),
+            ) {
+                Some(PciInfo {
+                    vendor_id,
+                    device_id,
+                    revision: path.read_attr_hex("revision").ok(),
+                    subsystem_vendor_id: path.read_attr_hex("subsystem_vendor").ok(),
+                    subsystem_device_id: path.read_attr_hex("subsystem_device").ok(),
+                    path,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        BusInfo {
+            bus_id: rh.bus_id.to_owned(),
+            path: rh.path.to_owned(),
+            busnum: rh.busnum,
+            class_name: rh.product_string.to_owned(),
+            provider_class: rh.manufacturer_string.to_owned(),
+            pci_info,
+            controller: rh
+                .product_string()
+                .map(|p| UsbController::from_str(p))
+                .flatten(),
+            root_hub: rh,
+        }
     }))
 }
 

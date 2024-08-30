@@ -427,3 +427,320 @@ impl std::fmt::Debug for InterfaceInfo {
             .finish()
     }
 }
+
+/// PCI device information for host controllers
+#[derive(Clone)]
+pub struct PciInfo {
+    #[cfg(target_os = "linux")]
+    pub(crate) path: SysfsPath,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) instance_id: OsString,
+    /// PCI vendor ID
+    pub(crate) vendor_id: u16,
+    /// PCI device ID
+    pub(crate) device_id: u16,
+    /// PCI hardware revision
+    pub(crate) revision: Option<u16>,
+    /// PCI subsystem vendor ID
+    pub(crate) subsystem_vendor_id: Option<u16>,
+    /// PCI subsystem device ID
+    pub(crate) subsystem_device_id: Option<u16>,
+}
+
+impl PciInfo {
+    /// *(Linux-only)* Sysfs path for the PCI device.
+    #[cfg(target_os = "linux")]
+    pub fn sysfs_path(&self) -> &std::path::Path {
+        &self.path.0
+    }
+
+    /// *(Windows-only)* Instance ID path of this device
+    #[cfg(target_os = "windows")]
+    pub fn instance_id(&self) -> &OsStr {
+        &self.instance_id
+    }
+
+    /// PCI vendor ID
+    pub fn vendor_id(&self) -> u16 {
+        self.vendor_id
+    }
+
+    /// PCI device ID
+    pub fn device_id(&self) -> u16 {
+        self.device_id
+    }
+
+    /// PCI hardware revision
+    pub fn revision(&self) -> Option<u16> {
+        self.revision
+    }
+
+    /// PCI subsystem vendor ID
+    pub fn subsystem_vendor_id(&self) -> Option<u16> {
+        self.subsystem_vendor_id
+    }
+
+    /// PCI subsystem device ID
+    pub fn subsystem_device_id(&self) -> Option<u16> {
+        self.subsystem_device_id
+    }
+}
+
+impl std::fmt::Debug for PciInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("PciInfo");
+
+        s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
+            .field("device_id", &format_args!("0x{:04X}", self.device_id))
+            .field("revision", &self.revision)
+            .field("subsystem_vendor_id", &self.subsystem_vendor_id)
+            .field("subsystem_device_id", &self.subsystem_device_id);
+
+        #[cfg(target_os = "linux")]
+        {
+            s.field("sysfs_path", &self.path);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            s.field("instance_id", &self.instance_id);
+        }
+
+        s.finish()
+    }
+}
+
+/// USB host controller type
+#[derive(Copy, Clone, Eq, PartialOrd, Ord, PartialEq, Hash, Debug)]
+#[non_exhaustive]
+pub enum UsbController {
+    /// xHCI controller (USB 3.0+)
+    XHCI,
+
+    /// EHCI controller (USB 2.0)
+    EHCI,
+
+    /// OHCI controller (USB 1.1)
+    OHCI,
+
+    /// VHCI controller (virtual internal USB)
+    VHCI,
+}
+
+impl UsbController {
+    #[allow(dead_code)] // not used on all platforms
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
+        match s
+            .find("HCI")
+            .filter(|i| *i > 0)
+            .and_then(|i| s.bytes().nth(i - 1))
+        {
+            Some(b'x') | Some(b'X') => Some(UsbController::XHCI),
+            Some(b'e') | Some(b'E') => Some(UsbController::EHCI),
+            Some(b'o') | Some(b'O') => Some(UsbController::OHCI),
+            Some(b'v') | Some(b'V') => Some(UsbController::VHCI),
+            _ => None,
+        }
+    }
+}
+
+/// Information about a system USB bus. Aims to be a more useful and portable version of the Linux root hub device.
+///
+/// Platform-specific fields:
+/// * Linux: `path`, `busnum`, `root_hub`
+/// * Windows: `instance_id`, `location_paths`, `devinst`, `driver`
+/// * macOS: `registry_id`, `location_id`, `name`, `driver`
+pub struct BusInfo {
+    #[cfg(target_os = "linux")]
+    pub(crate) path: SysfsPath,
+
+    /// The phony root hub device
+    #[cfg(target_os = "linux")]
+    pub(crate) root_hub: DeviceInfo,
+
+    #[cfg(target_os = "linux")]
+    pub(crate) busnum: u8,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) instance_id: OsString,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) location_paths: Vec<OsString>,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) devinst: crate::platform::DevInst,
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) driver: Option<String>,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) registry_id: u64,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) location_id: u32,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) name: Option<String>,
+
+    /// System ID for the bus
+    pub(crate) bus_id: String,
+
+    /// Optional PCI information if the bus is connected to a PCI Host Controller
+    pub(crate) pci_info: Option<PciInfo>,
+
+    /// Detected USB controller type
+    pub(crate) controller: Option<UsbController>,
+
+    /// System provider class name for the bus
+    pub(crate) provider_class: Option<String>,
+    /// System class name for the bus
+    pub(crate) class_name: Option<String>,
+}
+
+impl BusInfo {
+    /// Opaque identifier for the device.
+    pub fn id(&self) -> DeviceId {
+        #[cfg(target_os = "windows")]
+        {
+            DeviceId(self.devinst)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            self.root_hub.id()
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            DeviceId(self.registry_id)
+        }
+    }
+
+    /// *(Linux-only)* Sysfs path for the bus.
+    #[doc(hidden)]
+    #[deprecated = "use `sysfs_path()` instead"]
+    #[cfg(target_os = "linux")]
+    pub fn path(&self) -> &SysfsPath {
+        &self.path
+    }
+
+    /// *(Linux-only)* Sysfs path for the bus.
+    #[cfg(target_os = "linux")]
+    pub fn sysfs_path(&self) -> &std::path::Path {
+        &self.path.0
+    }
+
+    /// *(Linux-only)* Bus number.
+    ///
+    /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
+    #[cfg(target_os = "linux")]
+    pub fn busnum(&self) -> u8 {
+        self.busnum
+    }
+
+    /// *(Linux-only)* The root hub [`DeviceInfo`] representing the bus.
+    #[cfg(target_os = "linux")]
+    pub fn root_hub(&self) -> &DeviceInfo {
+        &self.root_hub
+    }
+
+    /// *(Windows-only)* Instance ID path of this device
+    #[cfg(target_os = "windows")]
+    pub fn instance_id(&self) -> &OsStr {
+        &self.instance_id
+    }
+
+    /// *(Windows-only)* Location paths property
+    #[cfg(target_os = "windows")]
+    pub fn location_paths(&self) -> &[OsString] {
+        &self.location_paths
+    }
+
+    /// *(Windows/macOS-only)* Driver associated with the device as a whole
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub fn driver(&self) -> Option<&str> {
+        self.driver.as_deref()
+    }
+
+    /// *(macOS-only)* IOKit Location ID
+    #[cfg(target_os = "macos")]
+    pub fn location_id(&self) -> u32 {
+        self.location_id
+    }
+
+    /// *(macOS-only)* IOKit [Registry Entry ID](https://developer.apple.com/documentation/iokit/1514719-ioregistryentrygetregistryentryi?language=objc)
+    #[cfg(target_os = "macos")]
+    pub fn registry_entry_id(&self) -> u64 {
+        self.registry_id
+    }
+
+    /// Name of the bus
+    #[cfg(target_os = "macos")]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Identifier for the bus
+    pub fn bus_id(&self) -> &str {
+        &self.bus_id
+    }
+
+    /// Optional PCI information if the bus is connected to a PCI Host Controller
+    pub fn pci_info(&self) -> Option<&PciInfo> {
+        self.pci_info.as_ref()
+    }
+
+    /// Detected USB controller type
+    pub fn controller(&self) -> Option<UsbController> {
+        self.controller
+    }
+
+    /// System provider class name for the bus
+    pub fn provider_class(&self) -> Option<&str> {
+        self.provider_class.as_deref()
+    }
+
+    /// System class name for the bus
+    pub fn class_name(&self) -> Option<&str> {
+        self.class_name.as_deref()
+    }
+}
+
+impl std::fmt::Debug for BusInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("BusInfo");
+
+        #[cfg(target_os = "linux")]
+        {
+            s.field("sysfs_path", &self.path);
+            s.field("busnum", &self.busnum);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            s.field("instance_id", &self.instance_id);
+            s.field("location_paths", &self.location_paths);
+            s.field("driver", &self.driver);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            s.field("location_id", &format_args!("0x{:08X}", self.location_id));
+            s.field(
+                "registry_entry_id",
+                &format_args!("0x{:08X}", self.registry_id),
+            );
+            s.field("name", &self.name);
+            s.field("driver", &self.driver);
+        }
+
+        s.field("bus_id", &self.bus_id)
+            .field("pci_info", &self.pci_info)
+            .field("controller", &self.controller)
+            .field("provider_class", &self.provider_class)
+            .field("class_name", &self.class_name);
+
+        s.finish()
+    }
+}

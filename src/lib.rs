@@ -120,7 +120,9 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-pub use enumeration::{DeviceId, DeviceInfo, InterfaceInfo, Speed};
+pub use enumeration::{
+    BusInfo, DeviceId, DeviceInfo, InterfaceInfo, PciInfo, Speed, UsbController,
+};
 
 mod device;
 pub use device::{Device, Interface};
@@ -149,45 +151,21 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
 }
 
-/// Get an iterator listing the root hubs; psuedo devices that can be
-/// considered buses on a Host Controller.
+/// Get an iterator listing the system USB buses.
 ///
 /// ### Example
 ///
 /// ```no_run
 /// use nusb;
-/// let hub = nusb::list_root_hubs().unwrap()
-///    .find(|dev| dev.vendor_id() == 0x1d6b)
-///    .expect("Linux Foundation root hub not found");
+/// let hub = nusb::list_buses().unwrap()
+///    .find(|bus| bus.bus_id().parse() == Ok(1))
+///    .expect("bus #1 not found");
 /// ```
 ///
 /// ### Platform-specific notes
-///
-/// Root hubs are not actual devices, but an abstration to the physical Host
-/// Controller they are attached to:
-///
-/// * On Linux, the data is obtained from the sysfs filesystem root hub 'device':
-///    - vendor_id -> constant Linux root hub ID (0x1d6b)
-///    - product_id -> compresponds to the hub speed (0x001 for USB1.1, 0x0002 for USB2, 0x0003 for USB3 etc.)
-///    - manufacturer_string -> kernel generated string, normally the kernel build and HCI driver
-///    - product_string -> kernel generated string, normally the type of Host Controller
-///    - device_version -> normally the kernel version
-///    - serial_number -> normally sysfs kernel name of the PCI Host Controller
-///    - class -> 0x09 (Hub)
-///    - subclass -> 0x00 (Unused)
-///    - protocol -> based on hub speed
-/// * On non-Linux platforms, the data is a combination of Host Controller and Root Hub information (where available):
-///    - vendor_id -> Host Controller Vendor ID, 0x0000 if not available
-///    - product_id -> Host Controller Product ID, 0x0000 if not available
-///    - device_version -> Windows: USB version parsed from instance ID, macOS: USB version based on Host Controller Interface
-///    - manufacturer_string -> Windows: Root Hub Manufacturer, macOS: IOProviderClass
-///    - product_string -> Windows: Root Hub Product, macOS: IOClass
-///    - serial_number -> Windows: parsed from end of instance ID, macOS: missing
-///    - class -> 0x09 (Hub)
-///    - subclass -> 0x00 (Unused)
-///    - protocol -> resolved from parsed USB BCD but maybe inaccurate
-pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    platform::list_root_hubs()
+/// * On Linux, the abstraction of the "bus" is a phony device known as the root hub. This device is available at bus.root_hub()
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    platform::list_buses()
 }
 
 /// Get a [`Stream`][`futures_core::Stream`] that yields an

@@ -14,7 +14,7 @@ use io_kit_sys::{
 };
 use log::debug;
 
-use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
+use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, Speed, UsbController};
 
 use super::iokit::{IoService, IoServiceIterator};
 /// IOKit class name for PCI USB XHCI high-speed controllers (USB 3.0+)
@@ -33,17 +33,6 @@ const kAppleUSBOHCI: *const ::std::os::raw::c_char =
 #[allow(non_upper_case_globals)]
 const kAppleUSBVHCI: *const ::std::os::raw::c_char =
     b"AppleUSBVHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
-
-pub(crate) enum AppleUSBController {
-    /// xHCI controller (USB 3.0+)
-    XHCI,
-    /// EHCI controller (USB 2.0)
-    EHCI,
-    /// OHCI controller (USB 1.1)
-    OHCI,
-    /// VHCI controller (T2 chip)
-    VHCI,
-}
 
 fn usb_service_iter(service: *const ::std::os::raw::c_char) -> Result<IoServiceIterator, Error> {
     unsafe {
@@ -66,20 +55,20 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter(kIOUSBDeviceClassName)?.filter_map(probe_device))
 }
 
-pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
     Ok(usb_service_iter(kAppleUSBXHCI)?
-        .filter_map(|h| probe_root_hub(h, AppleUSBController::XHCI))
+        .filter_map(|h| probe_bus(h, UsbController::XHCI))
         .chain(
             usb_service_iter(kAppleUSBEHCI)?
-                .filter_map(|h| probe_root_hub(h, AppleUSBController::EHCI))
+                .filter_map(|h| probe_bus(h, UsbController::EHCI))
                 .chain(
                     usb_service_iter(kAppleUSBOHCI)?
-                        .filter_map(|h| probe_root_hub(h, AppleUSBController::OHCI))
+                        .filter_map(|h| probe_bus(h, UsbController::OHCI))
                         .chain(
                             usb_service_iter(kAppleUSBVHCI)?
-                                .filter_map(|h| probe_root_hub(h, AppleUSBController::VHCI)),
+                                .filter_map(|h| probe_bus(h, UsbController::VHCI)),
                         ),
                 ),
         ))
@@ -131,55 +120,51 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     })
 }
 
-pub(crate) fn probe_root_hub(
-    device: IoService,
-    host_controller: AppleUSBController,
-) -> Option<DeviceInfo> {
+pub(crate) fn probe_bus(device: IoService, host_controller: UsbController) -> Option<BusInfo> {
     let registry_id = get_registry_id(&device)?;
-    log::debug!("Probing root_hub {registry_id:08x}");
+    log::debug!("Probing bus {registry_id:08x}");
 
     let location_id = get_integer_property(&device, "locationID")? as u32;
     // "IOPCIPrimaryMatch" = "0x15e98086 0x15ec8086 0x15f08086 0x0b278086"
     // can be varying array length and appears to be different parts of Host Controller - all with same VID - so we'll just take first
-    let (vid, pid) = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
-        match (pci.get(2..6), pci.get(6..10)) {
+    let pci_info = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
+        match (
+            pci.get(2..6)
+                .map(|v| u16::from_str_radix(v, 16).ok())
+                .flatten(),
+            pci.get(6..10)
+                .map(|d| u16::from_str_radix(d, 16).ok())
+                .flatten(),
+        ) {
             (Some(svid), Some(spid)) => {
-                let pid = u16::from_str_radix(svid, 16).unwrap_or(0x0000);
-                let vid = u16::from_str_radix(spid, 16).unwrap_or(0x0000);
-                (vid, pid)
+                Some(PciInfo {
+                    vendor_id: svid,
+                    device_id: spid,
+                    // TODO this is something like <0103> but not a string...need to parse
+                    revision: get_string_property(&device, "Revision")
+                        .map(|r| u16::from_str_radix(&r, 16).ok())
+                        .flatten(),
+                    subsystem_vendor_id: None,
+                    subsystem_device_id: None,
+                })
             }
-            _ => (0x0000, 0x0000),
+            _ => None,
         }
     } else {
-        (0x0000, 0x0000)
-    };
-
-    let (device_version, protocol) = match host_controller {
-        AppleUSBController::XHCI => (0x300, 0x03),
-        AppleUSBController::EHCI => (0x200, 0x01),
-        AppleUSBController::OHCI => (0x110, 0x00),
-        AppleUSBController::VHCI => (0x000, 0x00),
+        None
     };
 
     // Can run `ioreg -rc AppleUSBXHCI -d 1` to see all properties
-    Some(DeviceInfo {
+    Some(BusInfo {
         registry_id,
         location_id,
         bus_id: format!("{:02x}", (location_id >> 24) as u8),
-        device_address: 0,
-        port_chain: parse_location_id(location_id),
-        vendor_id: vid,
-        product_id: pid,
-        device_version,
-        class: 0x09,
-        subclass: 0x00,
-        protocol,
-        max_packet_size_0: 64,
-        speed: None,
-        manufacturer_string: get_string_property(&device, "IOProviderClass"),
-        product_string: get_string_property(&device, "IOClass"),
-        serial_number: get_string_property(&device, "name"), // name is unique system bus name but not always present
-        interfaces: Vec::new(),
+        pci_info,
+        driver: get_string_property(&device, "CFBundleIdentifier"),
+        provider_class: get_string_property(&device, "IOProviderClass"),
+        class_name: get_string_property(&device, "IOClass"),
+        name: get_string_property(&device, "name"), // name is unique system bus name but not always present
+        controller: Some(host_controller),
     })
 }
 

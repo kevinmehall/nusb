@@ -1,5 +1,5 @@
 mod enumeration;
-pub use enumeration::{list_devices, list_root_hubs};
+pub use enumeration::{list_buses, list_devices};
 
 mod events;
 
