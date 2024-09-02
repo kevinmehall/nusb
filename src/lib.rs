@@ -153,13 +153,29 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 
 /// Get an iterator listing the system USB buses.
 ///
-/// ### Example
+/// ### Examples
+///
+/// Filter for a specific bus ID:
 ///
 /// ```no_run
 /// use nusb;
 /// let hub = nusb::list_buses().unwrap()
 ///    .find(|bus| bus.bus_id().parse() == Ok(1))
 ///    .expect("bus #1 not found");
+/// ```
+///
+/// Group devices by bus:
+///
+/// ```no_run
+/// use std::collections::HashMap;
+///
+/// let devices = nusb::list_devices().unwrap().collect::<Vec<_>>();
+/// let buses: HashMap<String, (nusb::BusInfo, Vec::<nusb::DeviceInfo>)> = nusb::list_buses().unwrap()
+///     .map(|bus| {
+///         let bus_id = bus.bus_id().to_owned();
+///         (bus.bus_id().to_owned(), (bus, devices.clone().into_iter().filter(|dev| dev.bus_id() == bus_id).collect()))
+///     })
+///     .collect();
 /// ```
 ///
 /// ### Platform-specific notes
