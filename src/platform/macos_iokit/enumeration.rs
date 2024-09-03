@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 
 use core_foundation::{
     base::{CFType, TCFType},
+    data::CFData,
     number::CFNumber,
     string::CFString,
     ConcreteCFType,
@@ -125,29 +126,30 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbController) -> Op
     log::debug!("Probing bus {registry_id:08x}");
 
     let location_id = get_integer_property(&device, "locationID")? as u32;
+    // name is a CFData of ASCII characters
+    let name = get_ascii_array_property(&device, "name");
+
     // "IOPCIPrimaryMatch" = "0x15e98086 0x15ec8086 0x15f08086 0x0b278086"
     // can be varying array length and appears to be different parts of Host Controller - all with same VID - so we'll just take first
+    // device ID is upper 16 bits, vendor ID is lower 16 bits
     let pci_info = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
         match (
-            pci.get(2..6)
+            pci.get(2..6) // upper: device
                 .map(|v| u16::from_str_radix(v, 16).ok())
                 .flatten(),
-            pci.get(6..10)
+            pci.get(6..10) // lower: vendor
                 .map(|d| u16::from_str_radix(d, 16).ok())
                 .flatten(),
         ) {
-            (Some(svid), Some(spid)) => {
-                Some(PciInfo {
-                    vendor_id: svid,
-                    device_id: spid,
-                    // TODO this is something like <0103> but not a string...need to parse
-                    revision: get_string_property(&device, "Revision")
-                        .map(|r| u16::from_str_radix(&r, 16).ok())
-                        .flatten(),
-                    subsystem_vendor_id: None,
-                    subsystem_device_id: None,
-                })
-            }
+            (Some(device_id), Some(vendor_id)) => Some(PciInfo {
+                vendor_id,
+                device_id,
+                revision: get_byte_array_property(&device, "Revision")
+                    .map(|r| r.get(0..2).map(|v| u16::from_le_bytes([v[0], v[1]])))
+                    .flatten(),
+                subsystem_vendor_id: None,
+                subsystem_device_id: None,
+            }),
             _ => None,
         }
     } else {
@@ -163,7 +165,7 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbController) -> Op
         driver: get_string_property(&device, "CFBundleIdentifier"),
         provider_class: get_string_property(&device, "IOProviderClass"),
         class_name: get_string_property(&device, "IOClass"),
-        name: get_string_property(&device, "name"), // name is unique system bus name but not always present
+        name,
         controller: Some(host_controller),
     })
 }
@@ -220,6 +222,22 @@ fn get_integer_property(device: &IoService, property: &'static str) -> Option<i6
         debug!("failed to convert {property} value {n:?} to i64");
         None
     })
+}
+
+fn get_byte_array_property(device: &IoService, property: &'static str) -> Option<Vec<u8>> {
+    let d = get_property::<CFData>(device, property)?;
+    Some(d.bytes().to_vec())
+}
+
+fn get_ascii_array_property(device: &IoService, property: &'static str) -> Option<String> {
+    let d = get_property::<CFData>(device, property)?;
+    Some(
+        d.bytes()
+            .iter()
+            .map(|b| *b as char)
+            .filter(|c| *c != '\0')
+            .collect(),
+    )
 }
 
 fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
