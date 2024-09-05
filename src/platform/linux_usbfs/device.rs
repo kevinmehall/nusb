@@ -48,12 +48,36 @@ impl LinuxDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
         let busnum = d.busnum();
         let devnum = d.device_address();
+        // Can we also use this method to read devnum and busnum?
+        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L626-L631
+        //
+        // Yes I think it is the same!
+        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L584-L585
+        //
+        // 
+        // But how do we get the path (as in d.path)?
+        //
+        // Looks like /proc/self/fd/<num> is always a simlink to something with the busnum!
+        // Its then possible to parse `/dev/bus/usb/%hhu/%hhu` into busnum and devnum
+        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L616-L617
         let active_config = d.path.read_attr("bConfigurationValue")?;
 
         let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
         let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
             .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
 
+        Self::from_fd(fd, d.path.clone(), active_config, busnum, devnum)
+    }
+
+    // On android, we have the fd, but are missing active config, busnum, devnum, and sysfs path
+    // See libusb's linux_get_device_address. Used by wrap sys device on android
+    pub(crate) fn from_fd(
+        fd: OwnedFd,
+        sysfs: SysfsPath,
+        active_config: u8,
+        busnum: u8,
+        devnum: u8,
+    ) -> Result<Arc<LinuxDevice>, Error> {
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
             let mut buf = Vec::new();
@@ -75,7 +99,7 @@ impl LinuxDevice {
                 fd,
                 events_id,
                 descriptors,
-                sysfs: Some(d.path.clone()),
+                sysfs: Some(sysfs),
                 active_config: AtomicU8::new(active_config),
             }
         });
