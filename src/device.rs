@@ -1,7 +1,3 @@
-use std::{io::ErrorKind, sync::Arc, time::Duration};
-
-use log::error;
-
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
@@ -14,6 +10,9 @@ use crate::{
     },
     DeviceInfo, Error,
 };
+use log::error;
+use rustix::fd::OwnedFd;
+use std::{io::ErrorKind, sync::Arc, time::Duration};
 
 /// An opened USB device.
 ///
@@ -44,6 +43,14 @@ impl Device {
     pub(crate) fn open(d: &DeviceInfo) -> Result<Device, std::io::Error> {
         let backend = platform::Device::from_device_info(d)?;
         Ok(Device { backend })
+    }
+
+    /// Wraps a device that is already open.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub fn from_fd(fd: OwnedFd) -> Result<Device, Error> {
+        Ok(Device {
+            backend: platform::Device::from_fd(fd)?,
+        })
     }
 
     /// Open an interface of the device and claim it for exclusive use.

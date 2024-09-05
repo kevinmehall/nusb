@@ -1,3 +1,6 @@
+use std::ffi::OsString;
+use std::io::ErrorKind;
+use std::os::unix::ffi::OsStringExt;
 use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
@@ -13,6 +16,7 @@ use std::{
 use log::{debug, error, warn};
 use rustix::event::epoll;
 use rustix::fd::AsFd;
+use rustix::path::Arg;
 use rustix::{
     fd::{AsRawFd, FromRawFd, OwnedFd},
     fs::{Mode, OFlags},
@@ -54,7 +58,7 @@ impl LinuxDevice {
         // Yes I think it is the same!
         // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L584-L585
         //
-        // 
+        //
         // But how do we get the path (as in d.path)?
         //
         // Looks like /proc/self/fd/<num> is always a simlink to something with the busnum!
@@ -66,18 +70,46 @@ impl LinuxDevice {
         let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
             .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
 
-        Self::from_fd(fd, d.path.clone(), active_config, busnum, devnum)
+        Self::create_inner(fd, d.path.clone(), active_config, busnum, devnum)
+    }
+
+    pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
+        log::info!("from_fd called with: {}", fd.as_raw_fd());
+
+        // Fails an android here with: No such file or directory
+        let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
+        log::info!("reading link: {}", proc_path.to_string_lossy());
+
+        let fd_path = rustix::fs::readlink(&proc_path, vec![]).expect("failed to read fd link");
+        if fd_path.is_empty() {
+            return Err(ErrorKind::Other.into());
+        }
+        log::info!("sysfs path: {:?}", fd_path.to_string_lossy());
+        let sysfs = SysfsPath(PathBuf::from(OsString::from_vec(fd_path.into_bytes())));
+        // TODO: should we parse from path or just read directly?
+
+        let active_config = sysfs.read_attr("bConfigurationValue")?;
+        log::info!("read active_config: {active_config:?}");
+
+        let busnum = sysfs.read_attr("denvum")?;
+        log::info!("read busnum: {busnum:?}");
+
+        let devnum = sysfs.read_attr("busnum")?;
+        log::info!("read devnum: {busnum:?}");
+
+        Self::create_inner(fd, sysfs, active_config, busnum, devnum)
     }
 
     // On android, we have the fd, but are missing active config, busnum, devnum, and sysfs path
     // See libusb's linux_get_device_address. Used by wrap sys device on android
-    pub(crate) fn from_fd(
+    pub(crate) fn create_inner(
         fd: OwnedFd,
         sysfs: SysfsPath,
         active_config: u8,
         busnum: u8,
         devnum: u8,
     ) -> Result<Arc<LinuxDevice>, Error> {
+        log::info!("reading descriptors");
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
             let mut buf = Vec::new();
@@ -103,6 +135,7 @@ impl LinuxDevice {
                 active_config: AtomicU8::new(active_config),
             }
         });
+        log::info!("Created LinuxDevice struct!");
 
         if let Some(err) = events_err {
             error!("Failed to initialize event loop: {err}");
