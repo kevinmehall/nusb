@@ -68,7 +68,7 @@ impl Device {
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.backend.detach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -81,7 +81,7 @@ impl Device {
     /// This function can only attach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.backend.attach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -242,7 +242,7 @@ impl Device {
     ///   and use the interface handle to submit transfers.
     /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
     ///   are better off using the async methods.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_in_blocking(
         &self,
         control: Control,
@@ -260,7 +260,7 @@ impl Device {
     ///   and use the interface handle to submit transfers.
     /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
     ///   are better off using the async methods.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_out_blocking(
         &self,
         control: Control,
@@ -296,7 +296,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlIn>(data);
@@ -329,7 +329,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
