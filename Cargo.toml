@@ -13,6 +13,7 @@ rust-version = "1.76" # keep in sync with .github/workflows/rust.yml
 [dependencies]
 atomic-waker = "1.1.2"
 futures-core = "0.3.29"
+libc = "0.2.155"
 log = "0.4.20"
 once_cell = "1.18.0"
 slab = "0.4.9"

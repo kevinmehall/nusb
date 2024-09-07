@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{CStr, OsString};
 use std::io::ErrorKind;
 use std::os::unix::ffi::OsStringExt;
 use std::{ffi::c_void, time::Duration};
@@ -80,12 +80,19 @@ impl LinuxDevice {
         let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
         log::info!("reading link: {}", proc_path.to_string_lossy());
 
-        let fd_path = rustix::fs::readlink(&proc_path, vec![]).expect("failed to read fd link");
-        if fd_path.is_empty() {
+        //let mut dst = [0u8; 256];
+        //let path = libc::readlink(CStr::from(proc_Path).unwrap(), dst.as_mut_ptr(), dst.len());
+        let fd_path = std::fs::read_link(&proc_path).expect("Failed to read link");
+        log::info!("sysfs path: {:?}", fd_path.to_string_lossy());
+
+        //let fd_path = rustix::fs::readlink(&proc_path, vec![]).expect("failed to read fd link");
+        if fd_path.as_path().to_str().unwrap().is_empty() {
+            log::error!("empty path??");
+
             return Err(ErrorKind::Other.into());
         }
-        log::info!("sysfs path: {:?}", fd_path.to_string_lossy());
-        let sysfs = SysfsPath(PathBuf::from(OsString::from_vec(fd_path.into_bytes())));
+
+        let sysfs = SysfsPath(fd_path);
         // TODO: should we parse from path or just read directly?
 
         let active_config = sysfs.read_attr("bConfigurationValue")?;
