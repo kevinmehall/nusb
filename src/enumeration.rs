@@ -100,13 +100,13 @@ impl DeviceInfo {
     /// *(Linux-only)* Sysfs path for the device.
     #[doc(hidden)]
     #[deprecated = "use `sysfs_path()` instead"]
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     pub fn path(&self) -> &SysfsPath {
         &self.path
     }
 
     /// *(Linux-only)* Sysfs path for the device.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
     }
@@ -311,9 +311,12 @@ impl std::fmt::Debug for DeviceInfo {
             .field("product_string", &self.product_string)
             .field("serial_number", &self.serial_number);
 
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
             s.field("busnum", &self.busnum);
         }
 

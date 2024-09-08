@@ -95,7 +95,7 @@ mod opcodes {
 pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
-        ioctl_code: opcodes::nested::USBDEVFS_DISCONNECT::OPCODE.raw() as _,
+        ioctl_code: opcodes::nested::USBDEVFS_DISCONNECT::OPCODE.raw(),
         data: std::ptr::null_mut(),
     };
     unsafe {
@@ -107,7 +107,7 @@ pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
 pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
-        ioctl_code: opcodes::nested::USBDEVFS_CONNECT::OPCODE.raw() as _,
+        ioctl_code: opcodes::nested::USBDEVFS_CONNECT::OPCODE.raw(),
         data: std::ptr::null_mut(),
     };
     unsafe {

@@ -14,7 +14,6 @@ use std::{
 use log::{debug, error, warn};
 use rustix::event::epoll;
 use rustix::fd::AsFd;
-use rustix::path::Arg;
 use rustix::{
     fd::{AsRawFd, FromRawFd, OwnedFd},
     fs::{Mode, OFlags},
@@ -50,20 +49,6 @@ impl LinuxDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
         let busnum = d.busnum();
         let devnum = d.device_address();
-        // NOTE: a bit wrong since these files dont exist on android
-        // Can we also use this method to read devnum and busnum?
-        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L626-L631
-        //
-        // Yes I think it is the same!
-        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L584-L585
-        //
-        //
-        // NOTE: Yes this path does exist and we can use it to get devnum
-        // But how do we get the path (as in d.path)?
-        //
-        // Looks like /proc/self/fd/<num> is always a simlink to something with the busnum!
-        // Its then possible to parse `/dev/bus/usb/%hhu/%hhu` into busnum and devnum
-        // https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L616-L617
         let active_config = d.path.read_attr("bConfigurationValue")?;
 
         let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
@@ -74,14 +59,12 @@ impl LinuxDevice {
     }
 
     pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
-        log::info!("from_fd called with: {}", fd.as_raw_fd());
+        log::debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
 
         // NOTE: must be called from the same thread that gave us the FD on android, otherwise this fails
         let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
-        log::info!("reading link: {}", proc_path.to_string_lossy());
 
         let fd_path = std::fs::read_link(&proc_path).expect("Failed to read link");
-        log::info!("sysfs path: {:?}", fd_path.to_string_lossy());
 
         let prefix = "/dev/bus/usb/";
         let Ok(dev_num_bus_num) = fd_path.strip_prefix(prefix) else {
@@ -95,11 +78,16 @@ impl LinuxDevice {
             log::error!("End of usb device path is not UTF-8!: {dev_num_bus_num:?}",);
             return Err(ErrorKind::Other.into());
         };
-        log::info!("Got dev_num_bus_num: {dev_num_bus_num}");
 
         let mut split = dev_num_bus_num.split("/");
-        let bus_str = split.next().unwrap();
-        let dev_str = split.next().unwrap();
+        let Some(bus_str) = split.next() else {
+            log::error!("Failed to split usbfs device path: {}", dev_num_bus_num);
+            return Err(ErrorKind::Other.into());
+        };
+        let Some(dev_str) = split.next() else {
+            log::error!("Failed to split usbfs device path: {}", dev_num_bus_num);
+            return Err(ErrorKind::Other.into());
+        };
 
         let Ok(busnum) = bus_str.parse::<u8>() else {
             log::error!("Usb bus number failed to parse: {bus_str}",);
@@ -112,12 +100,11 @@ impl LinuxDevice {
 
         // TODO: actually read active config
         // Looks like we have to send a in ctrl. See: https://github.com/libusb/libusb/blob/master/libusb/os/linux_usbfs.c#L850-L858
+        // How to handle wait time? Make async?
         let active_config = 1;
         Self::create_inner(fd, None, active_config, busnum, devnum)
     }
 
-    // On android, we have the fd, but are missing active config, busnum, devnum, and sysfs path
-    // See libusb's linux_get_device_address. Used by wrap sys device on android
     pub(crate) fn create_inner(
         fd: OwnedFd,
         sysfs: Option<SysfsPath>,
@@ -151,7 +138,6 @@ impl LinuxDevice {
                 active_config: AtomicU8::new(active_config),
             }
         });
-        log::info!("Created LinuxDevice struct!");
 
         if let Some(err) = events_err {
             error!("Failed to initialize event loop: {err}");
