@@ -11,7 +11,6 @@ use crate::{
     DeviceInfo, Error,
 };
 use log::error;
-use rustix::fd::OwnedFd;
 use std::{io::ErrorKind, sync::Arc, time::Duration};
 
 /// An opened USB device.
@@ -47,7 +46,7 @@ impl Device {
 
     /// Wraps a device that is already open.
     #[cfg(any(target_os = "android", target_os = "linux"))]
-    pub fn from_fd(fd: OwnedFd) -> Result<Device, Error> {
+    pub fn from_fd(fd: std::os::fd::OwnedFd) -> Result<Device, Error> {
         Ok(Device {
             backend: platform::Device::from_fd(fd)?,
         })
