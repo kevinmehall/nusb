@@ -15,7 +15,7 @@ use io_kit_sys::{
 };
 use log::debug;
 
-use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, Speed, UsbController};
+use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, Speed, UsbControllerType};
 
 use super::iokit::{IoService, IoServiceIterator};
 /// IOKit class name for PCI USB XHCI high-speed controllers (USB 3.0+)
@@ -60,16 +60,16 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
     Ok(usb_service_iter(kAppleUSBXHCI)?
-        .filter_map(|h| probe_bus(h, UsbController::XHCI))
+        .filter_map(|h| probe_bus(h, UsbControllerType::XHCI))
         .chain(
             usb_service_iter(kAppleUSBEHCI)?
-                .filter_map(|h| probe_bus(h, UsbController::EHCI))
+                .filter_map(|h| probe_bus(h, UsbControllerType::EHCI))
                 .chain(
                     usb_service_iter(kAppleUSBOHCI)?
-                        .filter_map(|h| probe_bus(h, UsbController::OHCI))
+                        .filter_map(|h| probe_bus(h, UsbControllerType::OHCI))
                         .chain(
                             usb_service_iter(kAppleUSBVHCI)?
-                                .filter_map(|h| probe_bus(h, UsbController::VHCI)),
+                                .filter_map(|h| probe_bus(h, UsbControllerType::VHCI)),
                         ),
                 ),
         ))
@@ -121,7 +121,7 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     })
 }
 
-pub(crate) fn probe_bus(device: IoService, host_controller: UsbController) -> Option<BusInfo> {
+pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -> Option<BusInfo> {
     let registry_id = get_registry_id(&device)?;
     log::debug!("Probing bus {registry_id:08x}");
 

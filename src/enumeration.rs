@@ -514,7 +514,7 @@ impl std::fmt::Debug for PciInfo {
 /// USB host controller type
 #[derive(Copy, Clone, Eq, PartialOrd, Ord, PartialEq, Hash, Debug)]
 #[non_exhaustive]
-pub enum UsbController {
+pub enum UsbControllerType {
     /// xHCI controller (USB 3.0+)
     XHCI,
 
@@ -528,7 +528,7 @@ pub enum UsbController {
     VHCI,
 }
 
-impl UsbController {
+impl UsbControllerType {
     #[allow(dead_code)] // not used on all platforms
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s
@@ -536,10 +536,20 @@ impl UsbController {
             .filter(|i| *i > 0)
             .and_then(|i| s.bytes().nth(i - 1))
         {
-            Some(b'x') | Some(b'X') => Some(UsbController::XHCI),
-            Some(b'e') | Some(b'E') => Some(UsbController::EHCI),
-            Some(b'o') | Some(b'O') => Some(UsbController::OHCI),
-            Some(b'v') | Some(b'V') => Some(UsbController::VHCI),
+            Some(b'x') | Some(b'X') => Some(UsbControllerType::XHCI),
+            Some(b'e') | Some(b'E') => Some(UsbControllerType::EHCI),
+            Some(b'o') | Some(b'O') => Some(UsbControllerType::OHCI),
+            Some(b'v') | Some(b'V') => Some(UsbControllerType::VHCI),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)] // not used on all platforms
+    pub(crate) fn from_bcd(bcd: u16) -> Option<Self> {
+        match bcd & 0xF00 {
+            0x300 => Some(UsbControllerType::XHCI),
+            0x200 => Some(UsbControllerType::EHCI),
+            0x100 => Some(UsbControllerType::OHCI),
             _ => None,
         }
     }
@@ -590,7 +600,7 @@ pub struct BusInfo {
     pub(crate) pci_info: Option<PciInfo>,
 
     /// Detected USB controller type
-    pub(crate) controller: Option<UsbController>,
+    pub(crate) controller: Option<UsbControllerType>,
 
     /// System provider class name for the bus
     pub(crate) provider_class: Option<String>,
@@ -692,7 +702,13 @@ impl BusInfo {
     }
 
     /// Detected USB controller type
-    pub fn controller(&self) -> Option<UsbController> {
+    /// 
+    /// ### Platform-specific notes
+    ///
+    /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
+    /// * Linux: Parsed from root_hub manufacturer string.
+    /// * macOS: The IOService entry matched.
+    pub fn controller(&self) -> Option<UsbControllerType> {
         self.controller
     }
 

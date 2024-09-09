@@ -19,7 +19,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
-    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo,
+    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, UsbControllerType
 };
 
 use super::{
@@ -148,7 +148,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     // Skip non-root hubs; buses - ID will not parse
-    let (_device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
+    let (device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
 
     debug!("Probing bus {instance_id:?}");
 
@@ -194,7 +194,7 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
         devinst,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
-        controller: None,
+        controller: UsbControllerType::from_bcd(device_version),
         class_name,
         provider_class,
     })

@@ -8,7 +8,7 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
-use crate::{BusInfo, DeviceInfo, Error, PciInfo, Speed, UsbController};
+use crate::{BusInfo, DeviceInfo, Error, PciInfo, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
 pub struct SysfsPath(pub(crate) PathBuf);
@@ -172,7 +172,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
             pci_info,
             controller: rh
                 .product_string()
-                .map(|p| UsbController::from_str(p))
+                .map(|p| UsbControllerType::from_str(p))
                 .flatten(),
             root_hub: rh,
         }
