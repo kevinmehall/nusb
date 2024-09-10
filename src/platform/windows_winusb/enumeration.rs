@@ -151,7 +151,10 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
 
-    let root_hub_description = devinst.get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?;
+    let root_hub_description = devinst
+        .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?
+        .to_string_lossy()
+        .to_string();
 
     let driver = get_driver_name(devinst);
 

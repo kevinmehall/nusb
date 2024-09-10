@@ -583,7 +583,7 @@ pub struct BusInfo {
     pub(crate) devinst: crate::platform::DevInst,
 
     #[cfg(target_os = "windows")]
-    pub(crate) root_hub_description: OsString,
+    pub(crate) root_hub_description: String,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
@@ -645,12 +645,6 @@ impl BusInfo {
         &self.location_paths
     }
 
-    /// *(Windows-only)* Description of the root hub. How the bus will appear in Device Manager.
-    #[cfg(target_os = "windows")]
-    pub fn root_hub_description(&self) -> &OsString {
-        &self.root_hub_description
-    }
-
     /// *(Windows-only)* Device Instance ID
     #[cfg(target_os = "windows")]
     pub fn devinst(&self) -> crate::platform::DevInst {
@@ -708,11 +702,35 @@ impl BusInfo {
     ///
     /// ### Platform-specific notes
     ///
-    /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
     /// * Linux: Parsed from driver in use.
     /// * macOS: The IOService entry matched.
+    /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
     pub fn controller_type(&self) -> Option<UsbControllerType> {
         self.controller_type
+    }
+
+    /// System name of the bus
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Linux: The root hub product string.
+    /// * macOS: The name key of the IOService entry.
+    /// * Windows: Description field of the root hub device. How the bus will appear in Device Manager.
+    pub fn system_name(&self) -> Option<&str> {
+        #[cfg(target_os = "linux")]
+        {
+            self.root_hub.product_string()
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            Some(&self.root_hub_description)
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.name.as_deref()
+        }
     }
 }
 
@@ -730,7 +748,6 @@ impl std::fmt::Debug for BusInfo {
         {
             s.field("instance_id", &self.instance_id);
             s.field("location_paths", &self.location_paths);
-            s.field("root_hub_description", &self.root_hub_description);
         }
 
         #[cfg(target_os = "macos")]
@@ -742,13 +759,13 @@ impl std::fmt::Debug for BusInfo {
             );
             s.field("class_name", &self.class_name);
             s.field("provider_class_name", &self.provider_class_name);
-            s.field("name", &self.name);
         }
 
         s.field("bus_id", &self.bus_id)
-            .field("pci_info", &self.pci_info)
+            .field("system_name", &self.system_name())
             .field("controller_type", &self.controller_type)
-            .field("driver", &self.driver);
+            .field("driver", &self.driver)
+            .field("pci_info", &self.pci_info);
 
         s.finish()
     }
