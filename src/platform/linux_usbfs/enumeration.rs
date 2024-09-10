@@ -63,9 +63,7 @@ impl SysfsPath {
 
     fn readlink_attr(&self, attr: &str) -> Result<PathBuf, SysfsError> {
         let attr_path = self.0.join(attr);
-        fs::read_link(&attr_path)
-            .map_err(SysfsErrorKind::Io)
-            .map_err(|e| SysfsError(self.0.clone(), e))
+        fs::read_link(&attr_path).map_err(|e| SysfsError(attr_path, SysfsErrorKind::Io(e)))
     }
 
     pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, SysfsError> {
@@ -83,7 +81,7 @@ impl SysfsPath {
                 .map(str::to_owned)
                 .ok_or_else(|| {
                     SysfsError(
-                        self.0.clone(),
+                        p,
                         SysfsErrorKind::Parse(format!(
                             "Failed to read filename for readlink attribute {}",
                             attr
@@ -164,11 +162,11 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     Ok(list_root_hubs()?.filter_map(|rh| {
         // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
-        let parent_path = rh.sysfs_path().canonicalize().ok().and_then(|p| {
-            p.canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))
-        })?;
+        let parent_path = rh
+            .sysfs_path()
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
 
         debug!("Probing PCI device {:?}", parent_path.0);
         let driver = parent_path.readlink_attr_filename("driver").ok();
