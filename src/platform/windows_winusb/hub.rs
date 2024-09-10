@@ -225,22 +225,6 @@ impl HubPort {
         })
     }
 
-    pub fn by_hub_devinst(devinst: DevInst) -> Result<HubPort, Error> {
-        let hub_handle = HubHandle::by_devinst(devinst)
-            .ok_or_else(|| Error::new(ErrorKind::Other, "failed to open parent hub"))?;
-        let Some(port_number) = devinst.get_property::<u32>(DEVPKEY_Device_Address) else {
-            return Err(Error::new(
-                ErrorKind::NotConnected,
-                "Could not find hub port number",
-            ));
-        };
-
-        Ok(HubPort {
-            hub_handle,
-            port_number,
-        })
-    }
-
     pub fn get_info(&self) -> Result<HubDeviceInfo, Error> {
         #![allow(non_upper_case_globals)]
 

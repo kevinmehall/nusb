@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::num::ParseIntError;
@@ -60,12 +61,36 @@ impl SysfsPath {
             .map_err(|e| SysfsError(attr_path, e))
     }
 
+    fn readlink_attr(&self, attr: &str) -> Result<PathBuf, SysfsError> {
+        let attr_path = self.0.join(attr);
+        fs::read_link(&attr_path)
+            .map_err(SysfsErrorKind::Io)
+            .map_err(|e| SysfsError(self.0.clone(), e))
+    }
+
     pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, SysfsError> {
         self.parse_attr(attr, |s| s.parse())
     }
 
     fn read_attr_hex<T: FromHexStr>(&self, attr: &str) -> Result<T, SysfsError> {
         self.parse_attr(attr, |s| T::from_hex_str(s.strip_prefix("0x").unwrap_or(s)))
+    }
+
+    pub(crate) fn readlink_attr_filename(&self, attr: &str) -> Result<String, SysfsError> {
+        self.readlink_attr(attr).map(|p| {
+            p.file_name()
+                .and_then(OsStr::to_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    SysfsError(
+                        self.0.clone(),
+                        SysfsErrorKind::Parse(format!(
+                            "Failed to read filename for readlink attribute {}",
+                            attr
+                        )),
+                    )
+                })
+        })?
     }
 
     fn children(&self) -> impl Iterator<Item = SysfsPath> {
@@ -96,7 +121,6 @@ impl FromHexStr for u16 {
 }
 
 const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
-const SYSFS_PCI_PREFIX: &'static str = "/sys/bus/pci/devices/";
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
@@ -138,44 +162,45 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 }
 
 pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
-    Ok(list_root_hubs()?.map(|rh| {
-        // root hub devices have a serial number that matches the PCI device name so try to read that path
-        let pci_info = if let Some(pci_name) = rh.serial_number() {
-            let path = SysfsPath(PathBuf::from(SYSFS_PCI_PREFIX).join(pci_name));
-            debug!("Probing PCI device {:?}", path.0);
+    Ok(list_root_hubs()?.filter_map(|rh| {
+        // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
+        let parent_path = rh.sysfs_path().canonicalize().ok().and_then(|p| {
+            p.canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))
+        })?;
 
-            if let (Ok(vendor_id), Ok(device_id)) = (
-                path.read_attr_hex::<u16>("vendor"),
-                path.read_attr_hex::<u16>("device"),
-            ) {
-                Some(PciInfo {
-                    vendor_id,
-                    device_id,
-                    revision: path.read_attr_hex("revision").ok(),
-                    subsystem_vendor_id: path.read_attr_hex("subsystem_vendor").ok(),
-                    subsystem_device_id: path.read_attr_hex("subsystem_device").ok(),
-                    path,
-                })
-            } else {
-                None
-            }
+        debug!("Probing PCI device {:?}", parent_path.0);
+        let driver = parent_path.readlink_attr_filename("driver").ok();
+
+        let pci_info = if let (Ok(vendor_id), Ok(device_id)) = (
+            parent_path.read_attr_hex::<u16>("vendor"),
+            parent_path.read_attr_hex::<u16>("device"),
+        ) {
+            Some(PciInfo {
+                vendor_id,
+                device_id,
+                revision: parent_path.read_attr_hex("revision").ok(),
+                subsystem_vendor_id: parent_path.read_attr_hex("subsystem_vendor").ok(),
+                subsystem_device_id: parent_path.read_attr_hex("subsystem_device").ok(),
+                path: parent_path,
+            })
         } else {
             None
         };
 
-        BusInfo {
+        Some(BusInfo {
             bus_id: rh.bus_id.to_owned(),
             path: rh.path.to_owned(),
             busnum: rh.busnum,
-            class_name: rh.product_string.to_owned(),
-            provider_class: rh.manufacturer_string.to_owned(),
             pci_info,
-            controller: rh
-                .product_string()
+            controller_type: driver
+                .as_ref()
                 .map(|p| UsbControllerType::from_str(p))
                 .flatten(),
+            driver,
             root_hub: rh,
-        }
+        })
     }))
 }
 

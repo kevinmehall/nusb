@@ -163,10 +163,10 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -
         bus_id: format!("{:02x}", (location_id >> 24) as u8),
         pci_info,
         driver: get_string_property(&device, "CFBundleIdentifier"),
-        provider_class: get_string_property(&device, "IOProviderClass"),
-        class_name: get_string_property(&device, "IOClass"),
+        provider_class_name: get_string_property(&device, "IOProviderClass")?,
+        class_name: get_string_property(&device, "IOClass")?,
         name,
-        controller: Some(host_controller),
+        controller_type: Some(host_controller),
     })
 }
 

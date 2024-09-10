@@ -8,8 +8,7 @@ use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
         DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
-        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Manufacturer, DEVPKEY_Device_Parent,
-        DEVPKEY_Device_Service,
+        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
     Usb::{GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB},
 };
@@ -19,7 +18,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
-    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, UsbControllerType
+    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, UsbControllerType,
 };
 
 use super::{
@@ -61,9 +60,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let product_string = devinst
         .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
         .and_then(|s| s.into_string().ok());
-    let manufacturer_string = devinst
-        .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
-        .and_then(|s| s.into_string().ok());
+    // DEVPKEY_Device_Manufacturer exists but is often wrong and appears not to be read from the string descriptor but the .inf file
 
     let serial_number = if info.device_desc.iSerialNumber != 0 {
         // Experimentally confirmed, the string descriptor is cached and this does
@@ -138,7 +135,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         protocol: info.device_desc.bDeviceProtocol,
         max_packet_size_0: info.device_desc.bMaxPacketSize0,
         speed: info.speed,
-        manufacturer_string,
+        manufacturer_string: None,
         product_string,
         serial_number,
         interfaces,
@@ -154,12 +151,7 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
 
-    let class_name = devinst
-        .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)
-        .and_then(|s| s.into_string().ok());
-    let provider_class = devinst
-        .get_property::<OsString>(DEVPKEY_Device_Manufacturer)
-        .and_then(|s| s.into_string().ok());
+    let root_hub_description = devinst.get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?;
 
     let driver = get_driver_name(devinst);
 
@@ -194,9 +186,8 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
         devinst,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
-        controller: UsbControllerType::from_bcd(device_version),
-        class_name,
-        provider_class,
+        controller_type: UsbControllerType::from_bcd(device_version),
+        root_hub_description,
     })
 }
 

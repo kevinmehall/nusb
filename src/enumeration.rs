@@ -532,14 +532,15 @@ impl UsbControllerType {
     #[allow(dead_code)] // not used on all platforms
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s
-            .find("HCI")
+            .to_ascii_lowercase()
+            .find("hci")
             .filter(|i| *i > 0)
             .and_then(|i| s.bytes().nth(i - 1))
         {
-            Some(b'x') | Some(b'X') => Some(UsbControllerType::XHCI),
-            Some(b'e') | Some(b'E') => Some(UsbControllerType::EHCI),
-            Some(b'o') | Some(b'O') => Some(UsbControllerType::OHCI),
-            Some(b'v') | Some(b'V') => Some(UsbControllerType::VHCI),
+            Some(b'x') => Some(UsbControllerType::XHCI),
+            Some(b'e') => Some(UsbControllerType::EHCI),
+            Some(b'o') => Some(UsbControllerType::OHCI),
+            Some(b'v') => Some(UsbControllerType::VHCI),
             _ => None,
         }
     }
@@ -559,8 +560,8 @@ impl UsbControllerType {
 ///
 /// Platform-specific fields:
 /// * Linux: `path`, `busnum`, `root_hub`
-/// * Windows: `instance_id`, `location_paths`, `devinst`, `driver`
-/// * macOS: `registry_id`, `location_id`, `name`, `driver`
+/// * Windows: `instance_id`, `location_paths`, `devinst`, `root_hub_description`
+/// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
 pub struct BusInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
@@ -581,8 +582,8 @@ pub struct BusInfo {
     #[cfg(target_os = "windows")]
     pub(crate) devinst: crate::platform::DevInst,
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) driver: Option<String>,
+    #[cfg(target_os = "windows")]
+    pub(crate) root_hub_description: OsString,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
@@ -591,7 +592,15 @@ pub struct BusInfo {
     pub(crate) location_id: u32,
 
     #[cfg(target_os = "macos")]
+    pub(crate) provider_class_name: String,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) class_name: String,
+
+    #[cfg(target_os = "macos")]
     pub(crate) name: Option<String>,
+
+    pub(crate) driver: Option<String>,
 
     /// System ID for the bus
     pub(crate) bus_id: String,
@@ -600,41 +609,10 @@ pub struct BusInfo {
     pub(crate) pci_info: Option<PciInfo>,
 
     /// Detected USB controller type
-    pub(crate) controller: Option<UsbControllerType>,
-
-    /// System provider class name for the bus
-    pub(crate) provider_class: Option<String>,
-    /// System class name for the bus
-    pub(crate) class_name: Option<String>,
+    pub(crate) controller_type: Option<UsbControllerType>,
 }
 
 impl BusInfo {
-    /// Opaque identifier for the device.
-    pub fn id(&self) -> DeviceId {
-        #[cfg(target_os = "windows")]
-        {
-            DeviceId(self.devinst)
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            self.root_hub.id()
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            DeviceId(self.registry_id)
-        }
-    }
-
-    /// *(Linux-only)* Sysfs path for the bus.
-    #[doc(hidden)]
-    #[deprecated = "use `sysfs_path()` instead"]
-    #[cfg(target_os = "linux")]
-    pub fn path(&self) -> &SysfsPath {
-        &self.path
-    }
-
     /// *(Linux-only)* Sysfs path for the bus.
     #[cfg(target_os = "linux")]
     pub fn sysfs_path(&self) -> &std::path::Path {
@@ -667,10 +645,16 @@ impl BusInfo {
         &self.location_paths
     }
 
-    /// *(Windows/macOS-only)* Driver associated with the device as a whole
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub fn driver(&self) -> Option<&str> {
-        self.driver.as_deref()
+    /// *(Windows-only)* Description of the root hub. How the bus will appear in Device Manager.
+    #[cfg(target_os = "windows")]
+    pub fn root_hub_description(&self) -> &OsString {
+        &self.root_hub_description
+    }
+
+    /// *(Windows-only)* Device Instance ID
+    #[cfg(target_os = "windows")]
+    pub fn devinst(&self) -> crate::platform::DevInst {
+        self.devinst
     }
 
     /// *(macOS-only)* IOKit Location ID
@@ -685,10 +669,27 @@ impl BusInfo {
         self.registry_id
     }
 
-    /// Name of the bus
+    /// *(macOS-only)* IOKit provider class name
+    #[cfg(target_os = "macos")]
+    pub fn provider_class_name(&self) -> &str {
+        &self.provider_class_name
+    }
+
+    /// *(macOS-only)* IOKit class name
+    #[cfg(target_os = "macos")]
+    pub fn class_name(&self) -> &str {
+        &self.class_name
+    }
+
+    /// *(macOS-only)* Name of the bus
     #[cfg(target_os = "macos")]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Driver associated with the bus
+    pub fn driver(&self) -> Option<&str> {
+        self.driver.as_deref()
     }
 
     /// Identifier for the bus
@@ -702,24 +703,16 @@ impl BusInfo {
     }
 
     /// Detected USB controller type
-    /// 
+    ///
+    /// None means the controller type could not be determined.
+    ///
     /// ### Platform-specific notes
     ///
     /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
-    /// * Linux: Parsed from root_hub manufacturer string.
+    /// * Linux: Parsed from driver in use.
     /// * macOS: The IOService entry matched.
-    pub fn controller(&self) -> Option<UsbControllerType> {
-        self.controller
-    }
-
-    /// System provider class name for the bus
-    pub fn provider_class(&self) -> Option<&str> {
-        self.provider_class.as_deref()
-    }
-
-    /// System class name for the bus
-    pub fn class_name(&self) -> Option<&str> {
-        self.class_name.as_deref()
+    pub fn controller_type(&self) -> Option<UsbControllerType> {
+        self.controller_type
     }
 }
 
@@ -737,7 +730,7 @@ impl std::fmt::Debug for BusInfo {
         {
             s.field("instance_id", &self.instance_id);
             s.field("location_paths", &self.location_paths);
-            s.field("driver", &self.driver);
+            s.field("root_hub_description", &self.root_hub_description);
         }
 
         #[cfg(target_os = "macos")]
@@ -747,15 +740,15 @@ impl std::fmt::Debug for BusInfo {
                 "registry_entry_id",
                 &format_args!("0x{:08X}", self.registry_id),
             );
+            s.field("class_name", &self.class_name);
+            s.field("provider_class_name", &self.provider_class_name);
             s.field("name", &self.name);
-            s.field("driver", &self.driver);
         }
 
         s.field("bus_id", &self.bus_id)
             .field("pci_info", &self.pci_info)
-            .field("controller", &self.controller)
-            .field("provider_class", &self.provider_class)
-            .field("class_name", &self.class_name);
+            .field("controller_type", &self.controller_type)
+            .field("driver", &self.driver);
 
         s.finish()
     }
