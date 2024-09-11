@@ -65,8 +65,10 @@ impl LinuxDevice {
         // NOTE: must be called from the same thread that gave us the FD on android, otherwise this fails
         let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
 
-        let fd_path = std::fs::read_link(&proc_path).expect("Failed to read link");
+        log::debug!("Reading link: {proc_path:?}");
+        let fd_path = std::fs::read_link(&proc_path)?;
 
+        // TODO: should we switch to regex or regex-lite for this?
         let prefix = "/dev/bus/usb/";
         let Ok(dev_num_bus_num) = fd_path.strip_prefix(prefix) else {
             log::error!(
@@ -110,6 +112,8 @@ impl LinuxDevice {
             value: 0,
             index: 0,
         };
+
+        // TODO: what to do about blocking here?
         let r = usbfs::control(
             &fd,
             usbfs::CtrlTransfer {
@@ -126,7 +130,7 @@ impl LinuxDevice {
             },
         );
 
-        // Could use some more fullproof logic here to support buggy devices
+        // TODO: Could add some more logic here to support buggy devices, similar to what libusb does
         // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
         let n = r.map_err(errno_to_transfer_error)?;
         if n != dst.len() {
