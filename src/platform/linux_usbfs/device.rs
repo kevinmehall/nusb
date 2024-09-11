@@ -26,6 +26,7 @@ use super::{
     SysfsPath,
 };
 use crate::platform::linux_usbfs::events::Watch;
+use crate::transfer::{ControlType, Recipient};
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{
@@ -98,10 +99,43 @@ impl LinuxDevice {
             return Err(ErrorKind::Other.into());
         };
 
-        // TODO: actually read active config
-        // Looks like we have to send a in ctrl. See: https://github.com/libusb/libusb/blob/master/libusb/os/linux_usbfs.c#L850-L858
-        // How to handle wait time? Make async?
-        let active_config = 1;
+        const LIBUSB_REQUEST_GET_CONFIGURATION: u8 = 0x08;
+
+        let mut dst = [0u8; 1];
+
+        let control = Control {
+            control_type: ControlType::Standard,
+            recipient: Recipient::Device,
+            request: LIBUSB_REQUEST_GET_CONFIGURATION,
+            value: 0,
+            index: 0,
+        };
+        let r = usbfs::control(
+            &fd,
+            usbfs::CtrlTransfer {
+                bRequestType: control.request_type(Direction::In),
+                bRequest: control.request,
+                wValue: control.value,
+                wIndex: control.index,
+                wLength: dst.len() as u16,
+                timeout: Duration::from_millis(50)
+                    .as_millis()
+                    .try_into()
+                    .expect("timeout must fit in u32 ms"),
+                data: &mut dst[0] as *mut u8 as *mut c_void,
+            },
+        );
+
+        // Could use some more fullproof logic here to support buggy devices
+        // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
+        let n = r.map_err(errno_to_transfer_error)?;
+        if n != dst.len() {
+            log::error!("Failed to read descriptor");
+            return Err(ErrorKind::Other.into());
+        }
+
+        let active_config = dst[0];
+        log::info!("Got active config: {active_config}");
         Self::create_inner(fd, None, active_config, busnum, devnum)
     }
 
@@ -321,6 +355,7 @@ impl LinuxDevice {
         }))
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn detach_kernel_driver(
         self: &Arc<Self>,
         interface_number: u8,
@@ -328,6 +363,7 @@ impl LinuxDevice {
         usbfs::detach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn attach_kernel_driver(
         self: &Arc<Self>,
         interface_number: u8,
