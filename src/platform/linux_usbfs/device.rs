@@ -1,4 +1,4 @@
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Seek};
 use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
@@ -60,44 +60,44 @@ impl LinuxDevice {
     }
 
     pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
-        log::debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
+        debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
 
         // NOTE: must be called from the same thread that gave us the FD on android, otherwise this fails
         let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
 
-        log::debug!("Reading link: {proc_path:?}");
+        debug!("Reading link: {proc_path:?}");
         let fd_path = std::fs::read_link(&proc_path)?;
 
         // TODO: should we switch to regex or regex-lite for this?
         let prefix = "/dev/bus/usb/";
         let Ok(dev_num_bus_num) = fd_path.strip_prefix(prefix) else {
-            log::error!(
+            error!(
                 "Usb device path does not start with required prefix `{prefix}`: {}",
                 fd_path.to_string_lossy()
             );
             return Err(ErrorKind::Other.into());
         };
         let Some(dev_num_bus_num) = dev_num_bus_num.to_str() else {
-            log::error!("End of usb device path is not UTF-8!: {dev_num_bus_num:?}",);
+            error!("End of usb device path is not UTF-8!: {dev_num_bus_num:?}",);
             return Err(ErrorKind::Other.into());
         };
 
         let mut split = dev_num_bus_num.split("/");
         let Some(bus_str) = split.next() else {
-            log::error!("Failed to split usbfs device path: {}", dev_num_bus_num);
+            error!("Failed to split usbfs device path: {}", dev_num_bus_num);
             return Err(ErrorKind::Other.into());
         };
         let Some(dev_str) = split.next() else {
-            log::error!("Failed to split usbfs device path: {}", dev_num_bus_num);
+            error!("Failed to split usbfs device path: {}", dev_num_bus_num);
             return Err(ErrorKind::Other.into());
         };
 
         let Ok(busnum) = bus_str.parse::<u8>() else {
-            log::error!("Usb bus number failed to parse: {bus_str}",);
+            error!("Usb bus number failed to parse: {bus_str}",);
             return Err(ErrorKind::Other.into());
         };
         let Ok(devnum) = dev_str.parse::<u8>() else {
-            log::error!("Usb device number failed to parse: {dev_str}",);
+            error!("Usb device number failed to parse: {dev_str}",);
             return Err(ErrorKind::Other.into());
         };
 
@@ -134,12 +134,13 @@ impl LinuxDevice {
         // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
         let n = r.map_err(errno_to_transfer_error)?;
         if n != dst.len() {
-            log::error!("Failed to read descriptor");
+            error!("Failed to read descriptor");
             return Err(ErrorKind::Other.into());
         }
 
         let active_config = dst[0];
-        log::info!("Got active config: {active_config}");
+        debug!("Active config for fd {}: {active_config}", fd.as_raw_fd());
+
         Self::create_inner(fd, None, active_config, busnum, devnum)
     }
 
@@ -150,9 +151,10 @@ impl LinuxDevice {
         busnum: u8,
         devnum: u8,
     ) -> Result<Arc<LinuxDevice>, Error> {
-        log::info!("reading descriptors");
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
+            // NOTE: Seek required on android
+            file.seek(std::io::SeekFrom::Start(0))?;
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             buf
