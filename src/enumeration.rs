@@ -524,6 +524,9 @@ pub enum UsbControllerType {
     /// OHCI controller (USB 1.1)
     OHCI,
 
+    /// UHCI controller (USB 1.x) (proprietary interface created by Intel)
+    UHCI,
+
     /// VHCI controller (virtual internal USB)
     VHCI,
 }
@@ -531,16 +534,17 @@ pub enum UsbControllerType {
 impl UsbControllerType {
     #[allow(dead_code)] // not used on all platforms
     pub(crate) fn from_str(s: &str) -> Option<Self> {
-        match s
-            .to_ascii_lowercase()
+        let lower_s = s.to_owned().to_ascii_lowercase();
+        match lower_s
             .find("hci")
             .filter(|i| *i > 0)
-            .and_then(|i| s.bytes().nth(i - 1))
+            .and_then(|i| lower_s.bytes().nth(i - 1))
         {
             Some(b'x') => Some(UsbControllerType::XHCI),
             Some(b'e') => Some(UsbControllerType::EHCI),
             Some(b'o') => Some(UsbControllerType::OHCI),
             Some(b'v') => Some(UsbControllerType::VHCI),
+            Some(b'u') => Some(UsbControllerType::UHCI),
             _ => None,
         }
     }
@@ -550,6 +554,7 @@ impl UsbControllerType {
         match bcd & 0xF00 {
             0x300 => Some(UsbControllerType::XHCI),
             0x200 => Some(UsbControllerType::EHCI),
+            // assume open version
             0x100 => Some(UsbControllerType::OHCI),
             _ => None,
         }

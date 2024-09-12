@@ -145,11 +145,18 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     // Skip non-root hubs; buses - ID will not parse
-    let (device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
+    let (_device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
 
     debug!("Probing bus {instance_id:?}");
 
-    let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;
+    let parent_instance_id = devinst.get_property::<WCString>(DEVPKEY_Device_Parent)?;
+    let parent_devinst = DevInst::from_instance_id(&parent_instance_id)?;
+    // parent service contains controller type
+    let controller_type = parent_devinst
+        .get_property::<OsString>(DEVPKEY_Device_Service)
+        .and_then(|s| UsbControllerType::from_str(&s.to_string_lossy()));
+
+    let parent_instance_id: OsString = parent_instance_id.into();
 
     let root_hub_description = devinst
         .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?
@@ -189,7 +196,7 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
         devinst,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
-        controller_type: UsbControllerType::from_bcd(device_version),
+        controller_type,
         root_hub_description,
     })
 }
