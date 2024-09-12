@@ -25,6 +25,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
+use crate::descriptors::Configuration;
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
 use crate::{
@@ -56,100 +57,23 @@ impl LinuxDevice {
         let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
             .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
 
-        Self::create_inner(fd, Some(d.path.clone()), active_config, busnum, devnum)
+        let inner = Self::create_inner(fd, Some(d.path.clone()), Some(active_config));
+        if inner.is_ok() {
+            debug!("Opened device bus={busnum} addr={devnum}",);
+        }
+        inner
     }
 
     pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
         debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
 
-        // NOTE: must be called from the same thread that gave us the FD on android, otherwise this fails
-        let proc_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
-
-        debug!("Reading link: {proc_path:?}");
-        let fd_path = std::fs::read_link(&proc_path)?;
-
-        // TODO: should we switch to regex or regex-lite for this?
-        let prefix = "/dev/bus/usb/";
-        let Ok(dev_num_bus_num) = fd_path.strip_prefix(prefix) else {
-            error!(
-                "Usb device path does not start with required prefix `{prefix}`: {}",
-                fd_path.to_string_lossy()
-            );
-            return Err(ErrorKind::Other.into());
-        };
-        let Some(dev_num_bus_num) = dev_num_bus_num.to_str() else {
-            error!("End of usb device path is not UTF-8!: {dev_num_bus_num:?}",);
-            return Err(ErrorKind::Other.into());
-        };
-
-        let mut split = dev_num_bus_num.split("/");
-        let Some(bus_str) = split.next() else {
-            error!("Failed to split usbfs device path: {}", dev_num_bus_num);
-            return Err(ErrorKind::Other.into());
-        };
-        let Some(dev_str) = split.next() else {
-            error!("Failed to split usbfs device path: {}", dev_num_bus_num);
-            return Err(ErrorKind::Other.into());
-        };
-
-        let Ok(busnum) = bus_str.parse::<u8>() else {
-            error!("Usb bus number failed to parse: {bus_str}",);
-            return Err(ErrorKind::Other.into());
-        };
-        let Ok(devnum) = dev_str.parse::<u8>() else {
-            error!("Usb device number failed to parse: {dev_str}",);
-            return Err(ErrorKind::Other.into());
-        };
-
-        const LIBUSB_REQUEST_GET_CONFIGURATION: u8 = 0x08;
-
-        let mut dst = [0u8; 1];
-
-        let control = Control {
-            control_type: ControlType::Standard,
-            recipient: Recipient::Device,
-            request: LIBUSB_REQUEST_GET_CONFIGURATION,
-            value: 0,
-            index: 0,
-        };
-
-        // TODO: what to do about blocking here?
-        let r = usbfs::control(
-            &fd,
-            usbfs::CtrlTransfer {
-                bRequestType: control.request_type(Direction::In),
-                bRequest: control.request,
-                wValue: control.value,
-                wIndex: control.index,
-                wLength: dst.len() as u16,
-                timeout: Duration::from_millis(50)
-                    .as_millis()
-                    .try_into()
-                    .expect("timeout must fit in u32 ms"),
-                data: &mut dst[0] as *mut u8 as *mut c_void,
-            },
-        );
-
-        // TODO: Could add some more logic here to support buggy devices, similar to what libusb does
-        // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
-        let n = r.map_err(errno_to_transfer_error)?;
-        if n != dst.len() {
-            error!("Failed to read descriptor");
-            return Err(ErrorKind::Other.into());
-        }
-
-        let active_config = dst[0];
-        debug!("Active config for fd {}: {active_config}", fd.as_raw_fd());
-
-        Self::create_inner(fd, None, active_config, busnum, devnum)
+        Self::create_inner(fd, None, None)
     }
 
     pub(crate) fn create_inner(
         fd: OwnedFd,
         sysfs: Option<SysfsPath>,
-        active_config: u8,
-        busnum: u8,
-        devnum: u8,
+        active_config: Option<u8>,
     ) -> Result<Arc<LinuxDevice>, Error> {
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
@@ -158,6 +82,12 @@ impl LinuxDevice {
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             buf
+        };
+
+        let active_config = if let Some(active_config) = active_config {
+            active_config
+        } else {
+            Self::get_config(&descriptors, &fd)?
         };
 
         // because there's no Arc::try_new_cyclic
@@ -170,6 +100,9 @@ impl LinuxDevice {
             );
             let events_id = *res.as_ref().unwrap_or(&usize::MAX);
             events_err = res.err();
+            if events_err.is_none() {
+                debug!("Opened device fd={} with id {}", fd.as_raw_fd(), events_id,);
+            }
             LinuxDevice {
                 fd,
                 events_id,
@@ -183,10 +116,6 @@ impl LinuxDevice {
             error!("Failed to initialize event loop: {err}");
             Err(err)
         } else {
-            debug!(
-                "Opened device bus={busnum} addr={devnum} with id {}",
-                arc.events_id
-            );
             Ok(arc)
         }
     }
@@ -403,6 +332,78 @@ impl LinuxDevice {
                 debug!("Failed to cancel URB {urb:?}: {e}");
             }
         }
+    }
+
+    fn get_config(descriptors: &[u8], fd: &OwnedFd) -> Result<u8, Error> {
+        const REQUEST_GET_CONFIGURATION: u8 = 0x08;
+
+        let mut dst = [0u8; 1];
+
+        let control = Control {
+            control_type: ControlType::Standard,
+            recipient: Recipient::Device,
+            request: REQUEST_GET_CONFIGURATION,
+            value: 0,
+            index: 0,
+        };
+
+        let r = usbfs::control(
+            &fd,
+            usbfs::CtrlTransfer {
+                bRequestType: control.request_type(Direction::In),
+                bRequest: control.request,
+                wValue: control.value,
+                wIndex: control.index,
+                wLength: dst.len() as u16,
+                timeout: Duration::from_millis(50)
+                    .as_millis()
+                    .try_into()
+                    .expect("timeout must fit in u32 ms"),
+                data: &mut dst[0] as *mut u8 as *mut c_void,
+            },
+        );
+
+        match r {
+            Ok(n) => {
+                if n == dst.len() {
+                    let active_config = dst[0];
+                    debug!("Obtained active configuration for fd {} from GET_CONFIGURATION request: {active_config}", fd.as_raw_fd());
+                    return Ok(active_config);
+                } else {
+                    warn!("GET_CONFIGURATION request returned incorrect length: {n}, expected 1",);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "GET_CONFIGURATION request failed: {:?}",
+                    errno_to_transfer_error(e)
+                );
+            }
+        }
+
+        if descriptors.len() < DESCRIPTOR_LEN_DEVICE as usize {
+            warn!(
+                "Descriptors for device fd {} too short to use fallback configuration",
+                fd.as_raw_fd()
+            );
+            return Err(ErrorKind::Other.into());
+        }
+
+        // Assume the current configuration is the first one
+        // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
+        let mut descriptors =
+            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
+                .map(Configuration::new);
+
+        if let Some(config) = descriptors.next() {
+            return Ok(config.configuration_value());
+        }
+
+        error!(
+            "No available configurations for device fd {}",
+            fd.as_raw_fd()
+        );
+        return Err(ErrorKind::Other.into());
     }
 }
 
