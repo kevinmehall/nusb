@@ -135,18 +135,15 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -
     let pci_info = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
         match (
             pci.get(2..6) // upper: device
-                .map(|v| u16::from_str_radix(v, 16).ok())
-                .flatten(),
+                .and_then(|v| u16::from_str_radix(v, 16).ok()),
             pci.get(6..10) // lower: vendor
-                .map(|d| u16::from_str_radix(d, 16).ok())
-                .flatten(),
+                .and_then(|d| u16::from_str_radix(d, 16).ok()),
         ) {
             (Some(device_id), Some(vendor_id)) => Some(PciInfo {
                 vendor_id,
                 device_id,
                 revision: get_byte_array_property(&device, "Revision")
-                    .map(|r| r.get(0..2).map(|v| u16::from_le_bytes([v[0], v[1]])))
-                    .flatten(),
+                    .and_then(|r| r.get(0..2).map(|v| u16::from_le_bytes([v[0], v[1]]))),
                 subsystem_vendor_id: None,
                 subsystem_device_id: None,
             }),

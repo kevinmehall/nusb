@@ -719,7 +719,7 @@ impl BusInfo {
     /// ### Platform-specific notes
     ///
     /// * Linux: The root hub product string.
-    /// * macOS: The name key of the IOService entry.
+    /// * macOS: The [IONameMatched](https://developer.apple.com/documentation/bundleresources/information_property_list/ionamematch) key of the IOService entry.
     /// * Windows: Description field of the root hub device. How the bus will appear in Device Manager.
     pub fn system_name(&self) -> Option<&str> {
         #[cfg(target_os = "linux")]
