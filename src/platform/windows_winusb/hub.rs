@@ -53,7 +53,6 @@ impl HubHandle {
             debug!("Failed to find hub interface");
             return None;
         };
-        debug!("Opening hub: {path}");
 
         match create_file(path) {
             Ok(f) => Some(HubHandle(f)),

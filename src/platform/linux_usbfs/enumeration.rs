@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::num::ParseIntError;
@@ -9,7 +8,7 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
-use crate::{BusInfo, DeviceInfo, Error, PciInfo, Speed, UsbControllerType};
+use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
 pub struct SysfsPath(pub(crate) PathBuf);
@@ -77,7 +76,7 @@ impl SysfsPath {
     pub(crate) fn readlink_attr_filename(&self, attr: &str) -> Result<String, SysfsError> {
         self.readlink_attr(attr).map(|p| {
             p.file_name()
-                .and_then(OsStr::to_str)
+                .and_then(|s| s.to_str().to_owned())
                 .map(str::to_owned)
                 .ok_or_else(|| {
                     SysfsError(
@@ -171,27 +170,10 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
         debug!("Probing PCI device {:?}", parent_path.0);
         let driver = parent_path.readlink_attr_filename("driver").ok();
 
-        let pci_info = if let (Ok(vendor_id), Ok(device_id)) = (
-            parent_path.read_attr_hex::<u16>("vendor"),
-            parent_path.read_attr_hex::<u16>("device"),
-        ) {
-            Some(PciInfo {
-                vendor_id,
-                device_id,
-                revision: parent_path.read_attr_hex("revision").ok(),
-                subsystem_vendor_id: parent_path.read_attr_hex("subsystem_vendor").ok(),
-                subsystem_device_id: parent_path.read_attr_hex("subsystem_device").ok(),
-                path: parent_path,
-            })
-        } else {
-            None
-        };
-
         Some(BusInfo {
             bus_id: rh.bus_id.to_owned(),
             path: rh.path.to_owned(),
             busnum: rh.busnum,
-            pci_info,
             controller_type: driver
                 .as_ref()
                 .map(|p| UsbControllerType::from_str(p))

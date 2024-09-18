@@ -15,7 +15,7 @@ use io_kit_sys::{
 };
 use log::debug;
 
-use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, Speed, UsbControllerType};
+use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, Speed, UsbControllerType};
 
 use super::iokit::{IoService, IoServiceIterator};
 /// IOKit class name for PCI USB XHCI high-speed controllers (USB 3.0+)
@@ -129,36 +129,11 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -
     // name is a CFData of ASCII characters
     let name = get_ascii_array_property(&device, "name");
 
-    // "IOPCIPrimaryMatch" = "0x15e98086 0x15ec8086 0x15f08086 0x0b278086"
-    // can be varying array length and appears to be different parts of Host Controller - all with same VID - so we'll just take first
-    // device ID is upper 16 bits, vendor ID is lower 16 bits
-    let pci_info = if let Some(pci) = get_string_property(&device, "IOPCIPrimaryMatch") {
-        match (
-            pci.get(2..6) // upper: device
-                .and_then(|v| u16::from_str_radix(v, 16).ok()),
-            pci.get(6..10) // lower: vendor
-                .and_then(|d| u16::from_str_radix(d, 16).ok()),
-        ) {
-            (Some(device_id), Some(vendor_id)) => Some(PciInfo {
-                vendor_id,
-                device_id,
-                revision: get_byte_array_property(&device, "Revision")
-                    .and_then(|r| r.get(0..2).map(|v| u16::from_le_bytes([v[0], v[1]]))),
-                subsystem_vendor_id: None,
-                subsystem_device_id: None,
-            }),
-            _ => None,
-        }
-    } else {
-        None
-    };
-
     // Can run `ioreg -rc AppleUSBXHCI -d 1` to see all properties
     Some(BusInfo {
         registry_id,
         location_id,
         bus_id: format!("{:02x}", (location_id >> 24) as u8),
-        pci_info,
         driver: get_string_property(&device, "CFBundleIdentifier"),
         provider_class_name: get_string_property(&device, "IOProviderClass")?,
         class_name: get_string_property(&device, "IOClass")?,

@@ -428,89 +428,6 @@ impl std::fmt::Debug for InterfaceInfo {
     }
 }
 
-/// PCI device information for host controllers
-#[derive(Clone)]
-pub struct PciInfo {
-    #[cfg(target_os = "linux")]
-    pub(crate) path: SysfsPath,
-
-    #[cfg(target_os = "windows")]
-    pub(crate) instance_id: OsString,
-    /// PCI vendor ID
-    pub(crate) vendor_id: u16,
-    /// PCI device ID
-    pub(crate) device_id: u16,
-    /// PCI hardware revision
-    pub(crate) revision: Option<u16>,
-    /// PCI subsystem vendor ID
-    pub(crate) subsystem_vendor_id: Option<u16>,
-    /// PCI subsystem device ID
-    pub(crate) subsystem_device_id: Option<u16>,
-}
-
-impl PciInfo {
-    /// *(Linux-only)* Sysfs path for the PCI device.
-    #[cfg(target_os = "linux")]
-    pub fn sysfs_path(&self) -> &std::path::Path {
-        &self.path.0
-    }
-
-    /// *(Windows-only)* Instance ID path of this device
-    #[cfg(target_os = "windows")]
-    pub fn instance_id(&self) -> &OsStr {
-        &self.instance_id
-    }
-
-    /// PCI vendor ID
-    pub fn vendor_id(&self) -> u16 {
-        self.vendor_id
-    }
-
-    /// PCI device ID
-    pub fn device_id(&self) -> u16 {
-        self.device_id
-    }
-
-    /// PCI hardware revision
-    pub fn revision(&self) -> Option<u16> {
-        self.revision
-    }
-
-    /// PCI subsystem vendor ID
-    pub fn subsystem_vendor_id(&self) -> Option<u16> {
-        self.subsystem_vendor_id
-    }
-
-    /// PCI subsystem device ID
-    pub fn subsystem_device_id(&self) -> Option<u16> {
-        self.subsystem_device_id
-    }
-}
-
-impl std::fmt::Debug for PciInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct("PciInfo");
-
-        s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
-            .field("device_id", &format_args!("0x{:04X}", self.device_id))
-            .field("revision", &self.revision)
-            .field("subsystem_vendor_id", &self.subsystem_vendor_id)
-            .field("subsystem_device_id", &self.subsystem_device_id);
-
-        #[cfg(target_os = "linux")]
-        {
-            s.field("sysfs_path", &self.path);
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            s.field("instance_id", &self.instance_id);
-        }
-
-        s.finish()
-    }
-}
-
 /// USB host controller type
 #[derive(Copy, Clone, Eq, PartialOrd, Ord, PartialEq, Hash, Debug)]
 #[non_exhaustive]
@@ -610,9 +527,6 @@ pub struct BusInfo {
     /// System ID for the bus
     pub(crate) bus_id: String,
 
-    /// Optional PCI information if the bus is connected to a PCI Host Controller
-    pub(crate) pci_info: Option<PciInfo>,
-
     /// Detected USB controller type
     pub(crate) controller_type: Option<UsbControllerType>,
 }
@@ -696,11 +610,6 @@ impl BusInfo {
         &self.bus_id
     }
 
-    /// Optional PCI information if the bus is connected to a PCI Host Controller
-    pub fn pci_info(&self) -> Option<&PciInfo> {
-        self.pci_info.as_ref()
-    }
-
     /// Detected USB controller type
     ///
     /// None means the controller type could not be determined.
@@ -769,8 +678,7 @@ impl std::fmt::Debug for BusInfo {
         s.field("bus_id", &self.bus_id)
             .field("system_name", &self.system_name())
             .field("controller_type", &self.controller_type)
-            .field("driver", &self.driver)
-            .field("pci_info", &self.pci_info);
+            .field("driver", &self.driver);
 
         s.finish()
     }

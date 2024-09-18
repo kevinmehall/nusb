@@ -18,7 +18,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
-    BusInfo, DeviceInfo, Error, InterfaceInfo, PciInfo, UsbControllerType,
+    BusInfo, DeviceInfo, Error, InterfaceInfo, UsbControllerType,
 };
 
 use super::{
@@ -151,12 +151,10 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
 
     let parent_instance_id = devinst.get_property::<WCString>(DEVPKEY_Device_Parent)?;
     let parent_devinst = DevInst::from_instance_id(&parent_instance_id)?;
-    // parent service contains controller type
+    // parent service contains controller type in service field
     let controller_type = parent_devinst
         .get_property::<OsString>(DEVPKEY_Device_Service)
         .and_then(|s| UsbControllerType::from_str(&s.to_string_lossy()));
-
-    let parent_instance_id: OsString = parent_instance_id.into();
 
     let root_hub_description = devinst
         .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?
@@ -174,25 +172,9 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
         .find_map(|p| parse_location_path(p))
         .unwrap_or_default();
 
-    let pci_info = if let Some((vendor_id, device_id, revision, subsystem, _)) =
-        parse_host_controller_id(parent_instance_id.as_os_str())
-    {
-        Some(PciInfo {
-            instance_id: parent_instance_id,
-            vendor_id,
-            device_id,
-            revision: Some(revision as u16),
-            subsystem_vendor_id: Some((subsystem >> 16) as u16),
-            subsystem_device_id: Some((subsystem & 0xFFFF) as u16),
-        })
-    } else {
-        None
-    };
-
     Some(BusInfo {
         instance_id,
         location_paths,
-        pci_info,
         devinst,
         driver: Some(driver).filter(|s| !s.is_empty()),
         bus_id,
