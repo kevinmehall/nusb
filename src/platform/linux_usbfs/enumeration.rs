@@ -173,6 +173,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
         Some(BusInfo {
             bus_id: rh.bus_id.to_owned(),
             path: rh.path.to_owned(),
+            parent_path: parent_path.to_owned(),
             busnum: rh.busnum,
             controller_type: driver
                 .as_ref()

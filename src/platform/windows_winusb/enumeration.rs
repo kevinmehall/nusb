@@ -174,6 +174,7 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
 
     Some(BusInfo {
         instance_id,
+        parent_instance_id: parent_instance_id.into(),
         location_paths,
         devinst,
         driver: Some(driver).filter(|s| !s.is_empty()),

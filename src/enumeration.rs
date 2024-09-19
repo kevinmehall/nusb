@@ -481,12 +481,15 @@ impl UsbControllerType {
 /// Information about a system USB bus. Aims to be a more useful and portable version of the Linux root hub device.
 ///
 /// Platform-specific fields:
-/// * Linux: `path`, `busnum`, `root_hub`
-/// * Windows: `instance_id`, `location_paths`, `devinst`, `root_hub_description`
+/// * Linux: `path`, `parent_path`, `busnum`, `root_hub`
+/// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
 pub struct BusInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
+
+    #[cfg(target_os = "linux")]
+    pub(crate) parent_path: SysfsPath,
 
     /// The phony root hub device
     #[cfg(target_os = "linux")]
@@ -506,6 +509,9 @@ pub struct BusInfo {
 
     #[cfg(target_os = "windows")]
     pub(crate) root_hub_description: String,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) parent_instance_id: OsString,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
@@ -538,6 +544,12 @@ impl BusInfo {
         &self.path.0
     }
 
+    /// *(Linux-only)* Sysfs path for the parent controller
+    #[cfg(target_os = "linux")]
+    pub fn parent_sysfs_path(&self) -> &std::path::Path {
+        &self.parent_path.0
+    }
+
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
@@ -556,6 +568,12 @@ impl BusInfo {
     #[cfg(target_os = "windows")]
     pub fn instance_id(&self) -> &OsStr {
         &self.instance_id
+    }
+
+    /// *(Windows-only)* Instance ID path of the parent device
+    #[cfg(target_os = "windows")]
+    pub fn parent_instance_id(&self) -> &OsStr {
+        &self.parent_instance_id
     }
 
     /// *(Windows-only)* Location paths property
@@ -655,12 +673,14 @@ impl std::fmt::Debug for BusInfo {
         #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
+            s.field("parent_sysfs_path", &self.parent_path);
             s.field("busnum", &self.busnum);
         }
 
         #[cfg(target_os = "windows")]
         {
             s.field("instance_id", &self.instance_id);
+            s.field("parent_instance_id", &self.parent_instance_id);
             s.field("location_paths", &self.location_paths);
         }
 
