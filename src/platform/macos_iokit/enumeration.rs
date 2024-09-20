@@ -59,20 +59,16 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
-    Ok(usb_service_iter(kAppleUSBXHCI)?
-        .filter_map(|h| probe_bus(h, UsbControllerType::XHCI))
-        .chain(
-            usb_service_iter(kAppleUSBEHCI)?
-                .filter_map(|h| probe_bus(h, UsbControllerType::EHCI))
-                .chain(
-                    usb_service_iter(kAppleUSBOHCI)?
-                        .filter_map(|h| probe_bus(h, UsbControllerType::OHCI))
-                        .chain(
-                            usb_service_iter(kAppleUSBVHCI)?
-                                .filter_map(|h| probe_bus(h, UsbControllerType::VHCI)),
-                        ),
-                ),
-        ))
+    Ok([
+        (usb_service_iter(kAppleUSBXHCI)?, UsbControllerType::XHCI),
+        (usb_service_iter(kAppleUSBEHCI)?, UsbControllerType::EHCI),
+        (usb_service_iter(kAppleUSBOHCI)?, UsbControllerType::OHCI),
+        (usb_service_iter(kAppleUSBVHCI)?, UsbControllerType::VHCI),
+    ]
+    .into_iter()
+    .map(|(iter, hci_type)| iter.zip(std::iter::repeat(hci_type)))
+    .flatten()
+    .filter_map(|(bus, hci_type)| probe_bus(bus, hci_type)))
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
