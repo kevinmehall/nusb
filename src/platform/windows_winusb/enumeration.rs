@@ -404,8 +404,7 @@ fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
         .unwrap_or((0x0110, 0)); // default USB 1.1
     let id = s
         .get(i..)
-        .map(|v| v.strip_prefix("\\").map(|s| s.to_owned()))
-        .flatten();
+        .and_then(|v| v.strip_prefix("\\").map(|s| s.to_owned()));
     Some((version, id))
 }
 

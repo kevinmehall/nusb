@@ -175,10 +175,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
             path: rh.path.to_owned(),
             parent_path: parent_path.to_owned(),
             busnum: rh.busnum,
-            controller_type: driver
-                .as_ref()
-                .map(|p| UsbControllerType::from_str(p))
-                .flatten(),
+            controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
             driver,
             root_hub: rh,
         })
