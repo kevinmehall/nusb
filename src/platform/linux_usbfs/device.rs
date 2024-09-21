@@ -1,3 +1,4 @@
+use std::io::{ErrorKind, Seek};
 use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
@@ -10,7 +11,7 @@ use std::{
     },
 };
 
-use log::{debug, error};
+use log::{debug, error, warn};
 use rustix::event::epoll;
 use rustix::fd::AsFd;
 use rustix::{
@@ -26,9 +27,10 @@ use super::{
 };
 use crate::platform::linux_usbfs::events::Watch;
 use crate::{
-    descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
+    descriptors::{parse_concatenated_config_descriptors, Configuration, DESCRIPTOR_LEN_DEVICE},
     transfer::{
-        notify_completion, Control, Direction, EndpointType, TransferError, TransferHandle,
+        notify_completion, Control, ControlType, Direction, EndpointType, Recipient, TransferError,
+        TransferHandle,
     },
     DeviceInfo, Error,
 };
@@ -54,11 +56,37 @@ impl LinuxDevice {
         debug!("Opening usbfs device {}", path.display());
         let fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
 
+        let inner = Self::create_inner(fd, Some(d.path.clone()), Some(active_config));
+        if inner.is_ok() {
+            debug!("Opened device bus={busnum} addr={devnum}",);
+        }
+        inner
+    }
+
+    pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
+        debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
+
+        Self::create_inner(fd, None, None)
+    }
+
+    pub(crate) fn create_inner(
+        fd: OwnedFd,
+        sysfs: Option<SysfsPath>,
+        active_config: Option<u8>,
+    ) -> Result<Arc<LinuxDevice>, Error> {
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
+            // NOTE: Seek required on android
+            file.seek(std::io::SeekFrom::Start(0))?;
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             buf
+        };
+
+        let active_config = if let Some(active_config) = active_config {
+            active_config
+        } else {
+            Self::get_config(&descriptors, &fd)?
         };
 
         // because there's no Arc::try_new_cyclic
@@ -71,11 +99,14 @@ impl LinuxDevice {
             );
             let events_id = *res.as_ref().unwrap_or(&usize::MAX);
             events_err = res.err();
+            if events_err.is_none() {
+                debug!("Opened device fd={} with id {}", fd.as_raw_fd(), events_id,);
+            }
             LinuxDevice {
                 fd,
                 events_id,
                 descriptors,
-                sysfs: Some(d.path.clone()),
+                sysfs,
                 active_config: AtomicU8::new(active_config),
             }
         });
@@ -84,10 +115,6 @@ impl LinuxDevice {
             error!("Failed to initialize event loop: {err}");
             Err(err)
         } else {
-            debug!(
-                "Opened device bus={busnum} addr={devnum} with id {}",
-                arc.events_id
-            );
             Ok(arc)
         }
     }
@@ -297,6 +324,78 @@ impl LinuxDevice {
                 debug!("Failed to cancel URB {urb:?}: {e}");
             }
         }
+    }
+
+    fn get_config(descriptors: &[u8], fd: &OwnedFd) -> Result<u8, Error> {
+        const REQUEST_GET_CONFIGURATION: u8 = 0x08;
+
+        let mut dst = [0u8; 1];
+
+        let control = Control {
+            control_type: ControlType::Standard,
+            recipient: Recipient::Device,
+            request: REQUEST_GET_CONFIGURATION,
+            value: 0,
+            index: 0,
+        };
+
+        let r = usbfs::control(
+            &fd,
+            usbfs::CtrlTransfer {
+                bRequestType: control.request_type(Direction::In),
+                bRequest: control.request,
+                wValue: control.value,
+                wIndex: control.index,
+                wLength: dst.len() as u16,
+                timeout: Duration::from_millis(50)
+                    .as_millis()
+                    .try_into()
+                    .expect("timeout must fit in u32 ms"),
+                data: &mut dst[0] as *mut u8 as *mut c_void,
+            },
+        );
+
+        match r {
+            Ok(n) => {
+                if n == dst.len() {
+                    let active_config = dst[0];
+                    debug!("Obtained active configuration for fd {} from GET_CONFIGURATION request: {active_config}", fd.as_raw_fd());
+                    return Ok(active_config);
+                } else {
+                    warn!("GET_CONFIGURATION request returned incorrect length: {n}, expected 1",);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "GET_CONFIGURATION request failed: {:?}",
+                    errno_to_transfer_error(e)
+                );
+            }
+        }
+
+        if descriptors.len() < DESCRIPTOR_LEN_DEVICE as usize {
+            warn!(
+                "Descriptors for device fd {} too short to use fallback configuration",
+                fd.as_raw_fd()
+            );
+            return Err(ErrorKind::Other.into());
+        }
+
+        // Assume the current configuration is the first one
+        // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
+        let mut descriptors =
+            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
+                .map(Configuration::new);
+
+        if let Some(config) = descriptors.next() {
+            return Ok(config.configuration_value());
+        }
+
+        error!(
+            "No available configurations for device fd {}",
+            fd.as_raw_fd()
+        );
+        return Err(ErrorKind::Other.into());
     }
 }
 

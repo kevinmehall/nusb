@@ -46,6 +46,14 @@ impl Device {
         Ok(Device { backend })
     }
 
+    /// Wraps a device that is already open.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub fn from_fd(fd: std::os::fd::OwnedFd) -> Result<Device, Error> {
+        Ok(Device {
+            backend: platform::Device::from_fd(fd)?,
+        })
+    }
+
     /// Open an interface of the device and claim it for exclusive use.
     pub fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
         let backend = self.backend.claim_interface(interface)?;
@@ -240,7 +248,7 @@ impl Device {
     ///   and use the interface handle to submit transfers.
     /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
     ///   are better off using the async methods.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_in_blocking(
         &self,
         control: Control,
@@ -258,7 +266,7 @@ impl Device {
     ///   and use the interface handle to submit transfers.
     /// * On Linux, this takes a device-wide lock, so if you have multiple threads, you
     ///   are better off using the async methods.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_out_blocking(
         &self,
         control: Control,
@@ -294,7 +302,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlIn>(data);
@@ -327,7 +335,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
