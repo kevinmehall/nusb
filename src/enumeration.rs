@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
 use std::ffi::{OsStr, OsString};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::platform::SysfsPath;
 
 use crate::{Device, Error};
@@ -22,10 +22,10 @@ pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
 pub struct DeviceInfo {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) path: SysfsPath,
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) busnum: u8,
 
     #[cfg(target_os = "windows")]
@@ -83,7 +83,7 @@ impl DeviceInfo {
             DeviceId(self.devinst)
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             DeviceId(crate::platform::DeviceId {
                 bus: self.busnum,
@@ -114,7 +114,7 @@ impl DeviceInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
@@ -314,6 +314,9 @@ impl std::fmt::Debug for DeviceInfo {
         #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
             s.field("busnum", &self.busnum);
         }
 
