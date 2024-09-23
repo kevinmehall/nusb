@@ -151,16 +151,7 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 
 /// Get an iterator listing the system USB buses.
 ///
-/// ### Examples
-///
-/// Filter for a specific bus ID:
-///
-/// ```no_run
-/// use nusb;
-/// let hub = nusb::list_buses().unwrap()
-///    .find(|bus| bus.bus_id().parse() == Ok(1))
-///    .expect("bus #1 not found");
-/// ```
+/// ### Example
 ///
 /// Group devices by bus:
 ///
