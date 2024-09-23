@@ -144,8 +144,10 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
 pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
-    // Skip non-root hubs; buses - ID will not parse
-    let (_device_version, _serial_number) = parse_root_hub_id(&instance_id)?;
+    // Skip non-root hubs; buses which have instance IDs starting with "USB\\ROOT_HUB"
+    if !instance_id.to_string_lossy().starts_with("USB\\ROOT_HUB") {
+        return None;
+    }
 
     debug!("Probing bus {instance_id:?}");
 
@@ -392,43 +394,5 @@ fn test_parse_location_path() {
             "ACPI(_SB_)#ACPI(PCI0)#ACPI(S11_)#ACPI(S00_)#ACPI(RHUB)#ACPI(HS04)"
         )),
         None
-    );
-}
-
-/// Parse device version and ID from Root Hub instance ID
-fn parse_root_hub_id(s: &OsStr) -> Option<(u16, Option<String>)> {
-    let s = s.to_str()?;
-    let s = s.strip_prefix("USB\\ROOT_HUB")?;
-    let (version, i) = u16::from_str_radix(s.get(0..2).unwrap_or("11"), 10)
-        .map(|v| ((v / 10) << 8 | v % 10 << 4, 2)) // convert to BCD
-        .unwrap_or((0x0110, 0)); // default USB 1.1
-    let id = s
-        .get(i..)
-        .and_then(|v| v.strip_prefix("\\").map(|s| s.to_owned()));
-    Some((version, id))
-}
-
-#[test]
-fn test_parse_root_hub_id() {
-    assert_eq!(parse_root_hub_id(OsStr::new("")), None);
-    assert_eq!(
-        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB")),
-        Some((0x0110, None))
-    );
-    assert_eq!(
-        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB\\4&2FB9F669&0")),
-        Some((0x0110, Some("4&2FB9F669&0".to_string())))
-    );
-    assert_eq!(
-        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB20")),
-        Some((0x0200, None))
-    );
-    assert_eq!(
-        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB31")),
-        Some((0x0310, None))
-    );
-    assert_eq!(
-        parse_root_hub_id(OsStr::new("USB\\ROOT_HUB30\\4&2FB9F669&0")),
-        Some((0x0300, Some("4&2FB9F669&0".to_string())))
     );
 }
