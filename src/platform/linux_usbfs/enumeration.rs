@@ -167,7 +167,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
             .ok()
             .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
 
-        debug!("Probing PCI device {:?}", parent_path.0);
+        debug!("Probing parent device {:?}", parent_path.0);
         let driver = parent_path.readlink_attr_filename("driver").ok();
 
         Some(BusInfo {
