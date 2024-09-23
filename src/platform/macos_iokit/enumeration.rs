@@ -52,6 +52,30 @@ fn usb_service_iter(service: *const ::std::os::raw::c_char) -> Result<IoServiceI
     }
 }
 
+fn usb_controller_service_iter(
+    controller_type: UsbControllerType,
+) -> Result<IoServiceIterator, Error> {
+    unsafe {
+        let dictionary = match controller_type {
+            UsbControllerType::XHCI => IOServiceMatching(kAppleUSBXHCI),
+            UsbControllerType::EHCI => IOServiceMatching(kAppleUSBEHCI),
+            UsbControllerType::OHCI | UsbControllerType::UHCI => IOServiceMatching(kAppleUSBOHCI),
+            UsbControllerType::VHCI => IOServiceMatching(kAppleUSBVHCI),
+        };
+        if dictionary.is_null() {
+            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
+        }
+
+        let mut iterator = 0;
+        let r = IOServiceGetMatchingServices(kIOMasterPortDefault, dictionary, &mut iterator);
+        if r != kIOReturnSuccess {
+            return Err(Error::from_raw_os_error(r));
+        }
+
+        Ok(IoServiceIterator::new(iterator))
+    }
+}
+
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter(kIOUSBDeviceClassName)?.filter_map(probe_device))
 }
@@ -60,10 +84,22 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
     Ok([
-        (usb_service_iter(kAppleUSBXHCI)?, UsbControllerType::XHCI),
-        (usb_service_iter(kAppleUSBEHCI)?, UsbControllerType::EHCI),
-        (usb_service_iter(kAppleUSBOHCI)?, UsbControllerType::OHCI),
-        (usb_service_iter(kAppleUSBVHCI)?, UsbControllerType::VHCI),
+        (
+            usb_controller_service_iter(UsbControllerType::XHCI)?,
+            UsbControllerType::XHCI,
+        ),
+        (
+            usb_controller_service_iter(UsbControllerType::EHCI)?,
+            UsbControllerType::EHCI,
+        ),
+        (
+            usb_controller_service_iter(UsbControllerType::OHCI)?,
+            UsbControllerType::OHCI,
+        ),
+        (
+            usb_controller_service_iter(UsbControllerType::VHCI)?,
+            UsbControllerType::VHCI,
+        ),
     ]
     .into_iter()
     .map(|(iter, hci_type)| iter.zip(std::iter::repeat(hci_type)))
