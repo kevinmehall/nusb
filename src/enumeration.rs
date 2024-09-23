@@ -485,17 +485,17 @@ impl UsbControllerType {
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
 pub struct BusInfo {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) path: SysfsPath,
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) parent_path: SysfsPath,
 
     /// The phony root hub device
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) root_hub: DeviceInfo,
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) busnum: u8,
 
     #[cfg(target_os = "windows")]
@@ -649,7 +649,7 @@ impl BusInfo {
     /// * macOS: The [IONameMatched](https://developer.apple.com/documentation/bundleresources/information_property_list/ionamematch) key of the IOService entry.
     /// * Windows: Description field of the root hub device. How the bus will appear in Device Manager.
     pub fn system_name(&self) -> Option<&str> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             self.root_hub.product_string()
         }
@@ -674,6 +674,9 @@ impl std::fmt::Debug for BusInfo {
         {
             s.field("sysfs_path", &self.path);
             s.field("parent_sysfs_path", &self.parent_path);
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
             s.field("busnum", &self.busnum);
         }
 

@@ -162,7 +162,8 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     Ok(list_root_hubs()?.filter_map(|rh| {
         // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
         let parent_path = rh
-            .sysfs_path()
+            .path
+            .0
             .canonicalize()
             .ok()
             .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
