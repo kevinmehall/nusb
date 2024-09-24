@@ -35,9 +35,9 @@ const kAppleUSBOHCI: *const ::std::os::raw::c_char =
 const kAppleUSBVHCI: *const ::std::os::raw::c_char =
     b"AppleUSBVHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
 
-fn usb_service_iter(service: *const ::std::os::raw::c_char) -> Result<IoServiceIterator, Error> {
+fn usb_service_iter() -> Result<IoServiceIterator, Error> {
     unsafe {
-        let dictionary = IOServiceMatching(service);
+        let dictionary = IOServiceMatching(kIOUSBDeviceClassName);
         if dictionary.is_null() {
             return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
         }
@@ -77,7 +77,7 @@ fn usb_controller_service_iter(
 }
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(usb_service_iter(kIOUSBDeviceClassName)?.filter_map(probe_device))
+    Ok(usb_service_iter()?.filter_map(probe_device))
 }
 
 pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
@@ -108,7 +108,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
-    usb_service_iter(kIOUSBDeviceClassName)?
+    usb_service_iter()?
         .find(|dev| get_registry_id(dev) == Some(registry_id))
         .ok_or(Error::new(ErrorKind::NotFound, "not found by registry id"))
 }
