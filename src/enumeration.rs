@@ -539,13 +539,13 @@ pub struct BusInfo {
 
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
     }
 
     /// *(Linux-only)* Sysfs path for the parent controller
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn parent_sysfs_path(&self) -> &std::path::Path {
         &self.parent_path.0
     }
@@ -553,13 +553,13 @@ impl BusInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
 
     /// *(Linux-only)* The root hub [`DeviceInfo`] representing the bus.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn root_hub(&self) -> &DeviceInfo {
         &self.root_hub
     }
@@ -670,13 +670,10 @@ impl std::fmt::Debug for BusInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("BusInfo");
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             s.field("sysfs_path", &self.path);
             s.field("parent_sysfs_path", &self.parent_path);
-        }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        {
             s.field("busnum", &self.busnum);
         }
 

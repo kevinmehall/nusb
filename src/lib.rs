@@ -169,6 +169,7 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 ///
 /// ### Platform-specific notes
 /// * On Linux, the abstraction of the "bus" is a phony device known as the root hub. This device is available at bus.root_hub()
+/// * On Android, this will only work on rooted devices due to sysfs path usage
 pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     platform::list_buses()
 }
