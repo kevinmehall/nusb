@@ -53,7 +53,7 @@ fn usb_service_iter() -> Result<IoServiceIterator, Error> {
 }
 
 fn usb_controller_service_iter(
-    controller_type: UsbControllerType,
+    controller_type: &UsbControllerType,
 ) -> Result<IoServiceIterator, Error> {
     unsafe {
         let dictionary = match controller_type {
@@ -84,27 +84,17 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
     Ok([
-        (
-            usb_controller_service_iter(UsbControllerType::XHCI)?,
-            UsbControllerType::XHCI,
-        ),
-        (
-            usb_controller_service_iter(UsbControllerType::EHCI)?,
-            UsbControllerType::EHCI,
-        ),
-        (
-            usb_controller_service_iter(UsbControllerType::OHCI)?,
-            UsbControllerType::OHCI,
-        ),
-        (
-            usb_controller_service_iter(UsbControllerType::VHCI)?,
-            UsbControllerType::VHCI,
-        ),
+        UsbControllerType::XHCI,
+        UsbControllerType::EHCI,
+        UsbControllerType::OHCI,
+        UsbControllerType::VHCI,
     ]
-    .into_iter()
-    .map(|(iter, hci_type)| iter.zip(std::iter::repeat(hci_type)))
-    .flatten()
-    .filter_map(|(bus, hci_type)| probe_bus(bus, hci_type)))
+    .iter()
+    .flat_map(|hci_type| {
+        usb_controller_service_iter(hci_type)
+            .map(|iter| iter.flat_map(|dev| probe_bus(dev, hci_type)))
+    })
+    .flatten())
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
@@ -153,7 +143,7 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
     })
 }
 
-pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -> Option<BusInfo> {
+pub(crate) fn probe_bus(device: IoService, host_controller: &UsbControllerType) -> Option<BusInfo> {
     let registry_id = get_registry_id(&device)?;
     log::debug!("Probing bus {registry_id:08x}");
 
@@ -170,7 +160,7 @@ pub(crate) fn probe_bus(device: IoService, host_controller: UsbControllerType) -
         provider_class_name: get_string_property(&device, "IOProviderClass")?,
         class_name: get_string_property(&device, "IOClass")?,
         name,
-        controller_type: Some(host_controller),
+        controller_type: Some(host_controller.to_owned()),
     })
 }
 
