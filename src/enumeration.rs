@@ -427,3 +427,268 @@ impl std::fmt::Debug for InterfaceInfo {
             .finish()
     }
 }
+
+/// USB host controller type
+#[derive(Copy, Clone, Eq, PartialOrd, Ord, PartialEq, Hash, Debug)]
+#[non_exhaustive]
+pub enum UsbControllerType {
+    /// xHCI controller (USB 3.0+)
+    XHCI,
+
+    /// EHCI controller (USB 2.0)
+    EHCI,
+
+    /// OHCI controller (USB 1.1)
+    OHCI,
+
+    /// UHCI controller (USB 1.x) (proprietary interface created by Intel)
+    UHCI,
+
+    /// VHCI controller (virtual internal USB)
+    VHCI,
+}
+
+impl UsbControllerType {
+    #[allow(dead_code)] // not used on all platforms
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
+        let lower_s = s.to_owned().to_ascii_lowercase();
+        match lower_s
+            .find("hci")
+            .filter(|i| *i > 0)
+            .and_then(|i| lower_s.bytes().nth(i - 1))
+        {
+            Some(b'x') => Some(UsbControllerType::XHCI),
+            Some(b'e') => Some(UsbControllerType::EHCI),
+            Some(b'o') => Some(UsbControllerType::OHCI),
+            Some(b'v') => Some(UsbControllerType::VHCI),
+            Some(b'u') => Some(UsbControllerType::UHCI),
+            _ => None,
+        }
+    }
+}
+
+/// Information about a system USB bus.
+///
+/// Platform-specific fields:
+/// * Linux: `path`, `parent_path`, `busnum`, `root_hub`
+/// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
+/// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
+pub struct BusInfo {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) path: SysfsPath,
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) parent_path: SysfsPath,
+
+    /// The phony root hub device
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) root_hub: DeviceInfo,
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) busnum: u8,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) instance_id: OsString,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) location_paths: Vec<OsString>,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) devinst: crate::platform::DevInst,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) root_hub_description: String,
+
+    #[cfg(target_os = "windows")]
+    pub(crate) parent_instance_id: OsString,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) registry_id: u64,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) location_id: u32,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) provider_class_name: String,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) class_name: String,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) name: Option<String>,
+
+    pub(crate) driver: Option<String>,
+
+    /// System ID for the bus
+    pub(crate) bus_id: String,
+
+    /// Detected USB controller type
+    pub(crate) controller_type: Option<UsbControllerType>,
+}
+
+impl BusInfo {
+    /// *(Linux-only)* Sysfs path for the bus.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn sysfs_path(&self) -> &std::path::Path {
+        &self.path.0
+    }
+
+    /// *(Linux-only)* Sysfs path for the parent controller
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn parent_sysfs_path(&self) -> &std::path::Path {
+        &self.parent_path.0
+    }
+
+    /// *(Linux-only)* Bus number.
+    ///
+    /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn busnum(&self) -> u8 {
+        self.busnum
+    }
+
+    /// *(Linux-only)* The root hub [`DeviceInfo`] representing the bus.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn root_hub(&self) -> &DeviceInfo {
+        &self.root_hub
+    }
+
+    /// *(Windows-only)* Instance ID path of this device
+    #[cfg(target_os = "windows")]
+    pub fn instance_id(&self) -> &OsStr {
+        &self.instance_id
+    }
+
+    /// *(Windows-only)* Instance ID path of the parent device
+    #[cfg(target_os = "windows")]
+    pub fn parent_instance_id(&self) -> &OsStr {
+        &self.parent_instance_id
+    }
+
+    /// *(Windows-only)* Location paths property
+    #[cfg(target_os = "windows")]
+    pub fn location_paths(&self) -> &[OsString] {
+        &self.location_paths
+    }
+
+    /// *(Windows-only)* Device Instance ID
+    #[cfg(target_os = "windows")]
+    pub fn devinst(&self) -> crate::platform::DevInst {
+        self.devinst
+    }
+
+    /// *(macOS-only)* IOKit Location ID
+    #[cfg(target_os = "macos")]
+    pub fn location_id(&self) -> u32 {
+        self.location_id
+    }
+
+    /// *(macOS-only)* IOKit [Registry Entry ID](https://developer.apple.com/documentation/iokit/1514719-ioregistryentrygetregistryentryi?language=objc)
+    #[cfg(target_os = "macos")]
+    pub fn registry_entry_id(&self) -> u64 {
+        self.registry_id
+    }
+
+    /// *(macOS-only)* IOKit provider class name
+    #[cfg(target_os = "macos")]
+    pub fn provider_class_name(&self) -> &str {
+        &self.provider_class_name
+    }
+
+    /// *(macOS-only)* IOKit class name
+    #[cfg(target_os = "macos")]
+    pub fn class_name(&self) -> &str {
+        &self.class_name
+    }
+
+    /// *(macOS-only)* Name of the bus
+    #[cfg(target_os = "macos")]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Driver associated with the bus
+    pub fn driver(&self) -> Option<&str> {
+        self.driver.as_deref()
+    }
+
+    /// Identifier for the bus
+    pub fn bus_id(&self) -> &str {
+        &self.bus_id
+    }
+
+    /// Detected USB controller type
+    ///
+    /// None means the controller type could not be determined.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Linux: Parsed from driver in use.
+    /// * macOS: The IOService entry matched.
+    /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
+    pub fn controller_type(&self) -> Option<UsbControllerType> {
+        self.controller_type
+    }
+
+    /// System name of the bus
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Linux: The root hub product string.
+    /// * macOS: The [IONameMatched](https://developer.apple.com/documentation/bundleresources/information_property_list/ionamematch) key of the IOService entry.
+    /// * Windows: Description field of the root hub device. How the bus will appear in Device Manager.
+    pub fn system_name(&self) -> Option<&str> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            self.root_hub.product_string()
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            Some(&self.root_hub_description)
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.name.as_deref()
+        }
+    }
+}
+
+impl std::fmt::Debug for BusInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("BusInfo");
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            s.field("sysfs_path", &self.path);
+            s.field("parent_sysfs_path", &self.parent_path);
+            s.field("busnum", &self.busnum);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            s.field("instance_id", &self.instance_id);
+            s.field("parent_instance_id", &self.parent_instance_id);
+            s.field("location_paths", &self.location_paths);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            s.field("location_id", &format_args!("0x{:08X}", self.location_id));
+            s.field(
+                "registry_entry_id",
+                &format_args!("0x{:08X}", self.registry_id),
+            );
+            s.field("class_name", &self.class_name);
+            s.field("provider_class_name", &self.provider_class_name);
+        }
+
+        s.field("bus_id", &self.bus_id)
+            .field("system_name", &self.system_name())
+            .field("controller_type", &self.controller_type)
+            .field("driver", &self.driver);
+
+        s.finish()
+    }
+}

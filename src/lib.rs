@@ -120,7 +120,7 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-pub use enumeration::{DeviceId, DeviceInfo, InterfaceInfo, Speed};
+pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
 pub use device::{Device, Interface};
@@ -147,6 +147,31 @@ pub type Error = io::Error;
 /// * On Windows, hubs are not included in the list
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
+}
+
+/// Get an iterator listing the system USB buses.
+///
+/// ### Example
+///
+/// Group devices by bus:
+///
+/// ```no_run
+/// use std::collections::HashMap;
+///
+/// let devices = nusb::list_devices().unwrap().collect::<Vec<_>>();
+/// let buses: HashMap<String, (nusb::BusInfo, Vec::<nusb::DeviceInfo>)> = nusb::list_buses().unwrap()
+///     .map(|bus| {
+///         let bus_id = bus.bus_id().to_owned();
+///         (bus.bus_id().to_owned(), (bus, devices.clone().into_iter().filter(|dev| dev.bus_id() == bus_id).collect()))
+///     })
+///     .collect();
+/// ```
+///
+/// ### Platform-specific notes
+/// * On Linux, the abstraction of the "bus" is a phony device known as the root hub. This device is available at bus.root_hub()
+/// * On Android, this will only work on rooted devices due to sysfs path usage
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    platform::list_buses()
 }
 
 /// Get a [`Stream`][`futures_core::Stream`] that yields an

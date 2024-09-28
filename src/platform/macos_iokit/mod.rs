@@ -6,7 +6,7 @@ pub(crate) use transfer::TransferData;
 
 mod enumeration;
 mod events;
-pub use enumeration::list_devices;
+pub use enumeration::{list_buses, list_devices};
 
 mod device;
 pub(crate) use device::MacDevice as Device;

@@ -8,9 +8,7 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
-use crate::DeviceInfo;
-use crate::Error;
-use crate::Speed;
+use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
 pub struct SysfsPath(pub(crate) PathBuf);
@@ -62,12 +60,34 @@ impl SysfsPath {
             .map_err(|e| SysfsError(attr_path, e))
     }
 
+    fn readlink_attr(&self, attr: &str) -> Result<PathBuf, SysfsError> {
+        let attr_path = self.0.join(attr);
+        fs::read_link(&attr_path).map_err(|e| SysfsError(attr_path, SysfsErrorKind::Io(e)))
+    }
+
     pub(crate) fn read_attr<T: FromStr>(&self, attr: &str) -> Result<T, SysfsError> {
         self.parse_attr(attr, |s| s.parse())
     }
 
     fn read_attr_hex<T: FromHexStr>(&self, attr: &str) -> Result<T, SysfsError> {
-        self.parse_attr(attr, |s| T::from_hex_str(s))
+        self.parse_attr(attr, |s| T::from_hex_str(s.strip_prefix("0x").unwrap_or(s)))
+    }
+
+    pub(crate) fn readlink_attr_filename(&self, attr: &str) -> Result<String, SysfsError> {
+        self.readlink_attr(attr).map(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str().to_owned())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    SysfsError(
+                        p,
+                        SysfsErrorKind::Parse(format!(
+                            "Failed to read filename for readlink attribute {}",
+                            attr
+                        )),
+                    )
+                })
+        })?
     }
 
     fn children(&self) -> impl Iterator<Item = SysfsPath> {
@@ -97,10 +117,10 @@ impl FromHexStr for u16 {
     }
 }
 
-const SYSFS_PREFIX: &'static str = "/sys/bus/usb/devices/";
+const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(fs::read_dir(SYSFS_PREFIX)?.flat_map(|entry| {
+    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
         let path = entry.ok()?.path();
         let name = path.file_name()?;
 
@@ -122,6 +142,47 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     }))
 }
 
+pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.filter_map(|entry| {
+        let path = entry.ok()?.path();
+        let name = path.file_name()?;
+
+        // root hubs are named `usbX` where X is the bus number
+        if !name.to_string_lossy().starts_with("usb") {
+            return None;
+        }
+
+        probe_device(SysfsPath(path))
+            .inspect_err(|e| warn!("{e}; ignoring root hub"))
+            .ok()
+    }))
+}
+
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    Ok(list_root_hubs()?.filter_map(|rh| {
+        // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
+        let parent_path = rh
+            .path
+            .0
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
+
+        debug!("Probing parent device {:?}", parent_path.0);
+        let driver = parent_path.readlink_attr_filename("driver").ok();
+
+        Some(BusInfo {
+            bus_id: rh.bus_id.to_owned(),
+            path: rh.path.to_owned(),
+            parent_path: parent_path.to_owned(),
+            busnum: rh.busnum,
+            controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
+            driver,
+            root_hub: rh,
+        })
+    }))
+}
+
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     debug!("Probing device {:?}", path.0);
 
@@ -131,6 +192,7 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     let port_chain = path
         .read_attr::<String>("devpath")
         .ok()
+        .filter(|p| p != "0") // root hub should be empty but devpath is 0
         .and_then(|p| {
             p.split('.')
                 .map(|v| v.parse::<u8>().ok())

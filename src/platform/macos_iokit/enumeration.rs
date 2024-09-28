@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 
 use core_foundation::{
     base::{CFType, TCFType},
+    data::CFData,
     number::CFNumber,
     string::CFString,
     ConcreteCFType,
@@ -14,9 +15,25 @@ use io_kit_sys::{
 };
 use log::debug;
 
-use crate::{DeviceInfo, Error, InterfaceInfo, Speed};
+use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, Speed, UsbControllerType};
 
 use super::iokit::{IoService, IoServiceIterator};
+/// IOKit class name for PCI USB XHCI high-speed controllers (USB 3.0+)
+#[allow(non_upper_case_globals)]
+const kAppleUSBXHCI: *const ::std::os::raw::c_char =
+    b"AppleUSBXHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
+/// IOKit class name for PCI USB EHCI high-speed controllers (USB 2.0)
+#[allow(non_upper_case_globals)]
+const kAppleUSBEHCI: *const ::std::os::raw::c_char =
+    b"AppleUSBEHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
+/// IOKit class name for PCI USB OHCI full-speed controllers (USB 1.1)
+#[allow(non_upper_case_globals)]
+const kAppleUSBOHCI: *const ::std::os::raw::c_char =
+    b"AppleUSBOHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
+/// IOKit class name for virtual internal controller (T2 chip)
+#[allow(non_upper_case_globals)]
+const kAppleUSBVHCI: *const ::std::os::raw::c_char =
+    b"AppleUSBVHCI\x00" as *const [u8; 13usize] as *const ::std::os::raw::c_char;
 
 fn usb_service_iter() -> Result<IoServiceIterator, Error> {
     unsafe {
@@ -35,8 +52,49 @@ fn usb_service_iter() -> Result<IoServiceIterator, Error> {
     }
 }
 
+fn usb_controller_service_iter(
+    controller_type: &UsbControllerType,
+) -> Result<IoServiceIterator, Error> {
+    unsafe {
+        let dictionary = match controller_type {
+            UsbControllerType::XHCI => IOServiceMatching(kAppleUSBXHCI),
+            UsbControllerType::EHCI => IOServiceMatching(kAppleUSBEHCI),
+            UsbControllerType::OHCI | UsbControllerType::UHCI => IOServiceMatching(kAppleUSBOHCI),
+            UsbControllerType::VHCI => IOServiceMatching(kAppleUSBVHCI),
+        };
+        if dictionary.is_null() {
+            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
+        }
+
+        let mut iterator = 0;
+        let r = IOServiceGetMatchingServices(kIOMasterPortDefault, dictionary, &mut iterator);
+        if r != kIOReturnSuccess {
+            return Err(Error::from_raw_os_error(r));
+        }
+
+        Ok(IoServiceIterator::new(iterator))
+    }
+}
+
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter()?.filter_map(probe_device))
+}
+
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    // Chain all the HCI types into one iterator
+    // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
+    Ok([
+        UsbControllerType::XHCI,
+        UsbControllerType::EHCI,
+        UsbControllerType::OHCI,
+        UsbControllerType::VHCI,
+    ]
+    .iter()
+    .flat_map(|hci_type| {
+        usb_controller_service_iter(hci_type)
+            .map(|iter| iter.flat_map(|dev| probe_bus(dev, hci_type)))
+    })
+    .flatten())
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
@@ -82,6 +140,27 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
             })
             .collect()
         }),
+    })
+}
+
+pub(crate) fn probe_bus(device: IoService, host_controller: &UsbControllerType) -> Option<BusInfo> {
+    let registry_id = get_registry_id(&device)?;
+    log::debug!("Probing bus {registry_id:08x}");
+
+    let location_id = get_integer_property(&device, "locationID")? as u32;
+    // name is a CFData of ASCII characters
+    let name = get_ascii_array_property(&device, "name");
+
+    // Can run `ioreg -rc AppleUSBXHCI -d 1` to see all properties
+    Some(BusInfo {
+        registry_id,
+        location_id,
+        bus_id: format!("{:02x}", (location_id >> 24) as u8),
+        driver: get_string_property(&device, "CFBundleIdentifier"),
+        provider_class_name: get_string_property(&device, "IOProviderClass")?,
+        class_name: get_string_property(&device, "IOClass")?,
+        name,
+        controller_type: Some(host_controller.to_owned()),
     })
 }
 
@@ -137,6 +216,17 @@ fn get_integer_property(device: &IoService, property: &'static str) -> Option<i6
         debug!("failed to convert {property} value {n:?} to i64");
         None
     })
+}
+
+fn get_ascii_array_property(device: &IoService, property: &'static str) -> Option<String> {
+    let d = get_property::<CFData>(device, property)?;
+    Some(
+        d.bytes()
+            .iter()
+            .map(|b| *b as char)
+            .filter(|c| *c != '\0')
+            .collect(),
+    )
 }
 
 fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {

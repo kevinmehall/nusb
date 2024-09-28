@@ -7,10 +7,10 @@ use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
-        DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationPaths,
-        DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
+        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
     },
-    Usb::GUID_DEVINTERFACE_USB_DEVICE,
+    Usb::{GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB},
 };
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
-    DeviceInfo, Error, InterfaceInfo,
+    BusInfo, DeviceInfo, Error, InterfaceInfo, UsbControllerType,
 };
 
 use super::{
@@ -37,6 +37,16 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(devs.into_iter())
 }
 
+pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+    let devs: Vec<BusInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
+        .iter()
+        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
+        .flat_map(|d| DevInst::from_instance_id(&d))
+        .flat_map(probe_bus)
+        .collect();
+    Ok(devs.into_iter())
+}
+
 pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
     debug!("Probing device {instance_id:?}");
@@ -50,6 +60,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let product_string = devinst
         .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
         .and_then(|s| s.into_string().ok());
+    // DEVPKEY_Device_Manufacturer exists but is often wrong and appears not to be read from the string descriptor but the .inf file
 
     let serial_number = if info.device_desc.iSerialNumber != 0 {
         // Experimentally confirmed, the string descriptor is cached and this does
@@ -128,6 +139,50 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         product_string,
         serial_number,
         interfaces,
+    })
+}
+
+pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
+    let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
+    // Skip non-root hubs; buses which have instance IDs starting with "USB\\ROOT_HUB"
+    if !instance_id.to_string_lossy().starts_with("USB\\ROOT_HUB") {
+        return None;
+    }
+
+    debug!("Probing bus {instance_id:?}");
+
+    let parent_instance_id = devinst.get_property::<WCString>(DEVPKEY_Device_Parent)?;
+    let parent_devinst = DevInst::from_instance_id(&parent_instance_id)?;
+    // parent service contains controller type in service field
+    let controller_type = parent_devinst
+        .get_property::<OsString>(DEVPKEY_Device_Service)
+        .and_then(|s| UsbControllerType::from_str(&s.to_string_lossy()));
+
+    let root_hub_description = devinst
+        .get_property::<OsString>(DEVPKEY_Device_DeviceDesc)?
+        .to_string_lossy()
+        .to_string();
+
+    let driver = get_driver_name(devinst);
+
+    let location_paths = devinst
+        .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
+        .unwrap_or_default();
+
+    let (bus_id, _) = location_paths
+        .iter()
+        .find_map(|p| parse_location_path(p))
+        .unwrap_or_default();
+
+    Some(BusInfo {
+        instance_id,
+        parent_instance_id: parent_instance_id.into(),
+        location_paths,
+        devinst,
+        driver: Some(driver).filter(|s| !s.is_empty()),
+        bus_id,
+        controller_type,
+        root_hub_description,
     })
 }
 
