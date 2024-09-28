@@ -465,20 +465,9 @@ impl UsbControllerType {
             _ => None,
         }
     }
-
-    #[allow(dead_code)] // not used on all platforms
-    pub(crate) fn from_bcd(bcd: u16) -> Option<Self> {
-        match bcd & 0xF00 {
-            0x300 => Some(UsbControllerType::XHCI),
-            0x200 => Some(UsbControllerType::EHCI),
-            // assume open version
-            0x100 => Some(UsbControllerType::OHCI),
-            _ => None,
-        }
-    }
 }
 
-/// Information about a system USB bus. Aims to be a more useful and portable version of the Linux root hub device.
+/// Information about a system USB bus.
 ///
 /// Platform-specific fields:
 /// * Linux: `path`, `parent_path`, `busnum`, `root_hub`

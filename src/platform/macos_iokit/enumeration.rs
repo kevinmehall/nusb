@@ -218,11 +218,6 @@ fn get_integer_property(device: &IoService, property: &'static str) -> Option<i6
     })
 }
 
-fn get_byte_array_property(device: &IoService, property: &'static str) -> Option<Vec<u8>> {
-    let d = get_property::<CFData>(device, property)?;
-    Some(d.bytes().to_vec())
-}
-
 fn get_ascii_array_property(device: &IoService, property: &'static str) -> Option<String> {
     let d = get_property::<CFData>(device, property)?;
     Some(
