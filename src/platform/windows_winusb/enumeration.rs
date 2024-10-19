@@ -29,7 +29,9 @@ use super::{
 
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
+        // get USB_HUB devices as well, like other platforms. ROOT_HUBs will be dropped by probe_device
         .iter()
+        .chain(cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None).iter())
         .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
         .flat_map(|d| DevInst::from_instance_id(&d))
         .flat_map(probe_device)
@@ -49,6 +51,10 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
 
 pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_InstanceId)?;
+    if instance_id.to_string_lossy().starts_with("USB\\ROOT_HUB") {
+        return None;
+    }
+
     debug!("Probing device {instance_id:?}");
 
     let parent_instance_id = devinst.get_property::<OsString>(DEVPKEY_Device_Parent)?;

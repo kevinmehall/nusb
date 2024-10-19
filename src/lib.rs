@@ -142,9 +142,6 @@ pub type Error = io::Error;
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 /// ```
-///
-/// ### Platform-specific notes
-/// * On Windows, hubs are not included in the list
 pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     platform::list_devices()
 }
