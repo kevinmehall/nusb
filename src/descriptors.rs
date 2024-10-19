@@ -535,7 +535,7 @@ impl<'a> InterfaceGroup<'a> {
     }
 
     /// Iterator over alternate settings of the interface.
-    pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting> {
+    pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting<'a>> + '_ {
         self.interfaces.iter().cloned()
     }
 
@@ -558,12 +558,12 @@ pub struct InterfaceAltSetting<'a>(&'a [u8]);
 impl<'a> InterfaceAltSetting<'a> {
     /// Get the interface descriptor followed by all trailing endpoint and other
     /// descriptors up to the next interface descriptor.
-    pub fn descriptors(&self) -> Descriptors {
+    pub fn descriptors(&self) -> Descriptors<'a> {
         Descriptors(self.0)
     }
 
     /// Get the endpoints of this interface.
-    pub fn endpoints(&self) -> impl Iterator<Item = Endpoint> {
+    pub fn endpoints(&self) -> impl Iterator<Item = Endpoint<'a>> {
         self.descriptors()
             .split_by_type(DESCRIPTOR_TYPE_ENDPOINT, DESCRIPTOR_LEN_ENDPOINT)
             .map(Endpoint)
@@ -632,7 +632,7 @@ pub struct Endpoint<'a>(&'a [u8]);
 
 impl<'a> Endpoint<'a> {
     /// Get the endpoint descriptor followed by all trailing descriptors up to the next endpoint or interface descriptor.
-    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor> {
+    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor<'a>> {
         Descriptors(self.0)
     }
 
