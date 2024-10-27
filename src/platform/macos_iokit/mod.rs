@@ -1,7 +1,5 @@
 mod transfer;
-use io_kit_sys::ret::{
-    kIOReturnAborted, kIOReturnNoDevice, kIOReturnSuccess, kIOReturnUnderrun, IOReturn,
-};
+use io_kit_sys::ret::IOReturn;
 pub(crate) use transfer::TransferData;
 
 mod enumeration;
@@ -28,9 +26,10 @@ fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
     #[allow(non_upper_case_globals)]
     #[deny(unreachable_patterns)]
     match status {
-        kIOReturnSuccess | kIOReturnUnderrun => Ok(()),
-        kIOReturnNoDevice => Err(TransferError::Disconnected),
-        kIOReturnAborted => Err(TransferError::Cancelled),
+        io_kit_sys::ret::kIOReturnSuccess | io_kit_sys::ret::kIOReturnUnderrun => Ok(()),
+        io_kit_sys::ret::kIOReturnNoDevice => Err(TransferError::Disconnected),
+        io_kit_sys::ret::kIOReturnAborted => Err(TransferError::Cancelled),
+        iokit_c::kIOUSBPipeStalled => Err(TransferError::Stall),
         _ => Err(TransferError::Unknown),
     }
 }
