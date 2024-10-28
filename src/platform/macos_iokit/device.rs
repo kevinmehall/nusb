@@ -3,7 +3,7 @@ use std::{
     ffi::c_void,
     io::ErrorKind,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -31,6 +31,7 @@ pub(crate) struct MacDevice {
     pub(super) device: IoKitDevice,
     active_config: AtomicU8,
     is_open_exclusive: Mutex<bool>,
+    claimed_interfaces: AtomicUsize,
 }
 
 // `get_configuration` does IO, so avoid it in the common case that:
@@ -77,6 +78,7 @@ impl MacDevice {
             device,
             active_config: AtomicU8::new(active_config),
             is_open_exclusive: Mutex::new(opened),
+            claimed_interfaces: AtomicUsize::new(0),
         }))
     }
 
@@ -95,6 +97,14 @@ impl MacDevice {
             unsafe { check_iokit_return(call_iokit_function!(self.device.raw, USBDeviceOpen()))? };
             *state = true;
         }
+
+        if self.claimed_interfaces.load(Ordering::Relaxed) != 0 {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "cannot perform this operation while interfaces are claimed",
+            ));
+        }
+
         Ok(())
     }
 
@@ -203,6 +213,8 @@ impl MacDevice {
 
         let endpoints = interface.endpoints()?;
         debug!("Found endpoints: {endpoints:?}");
+
+        self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
         Ok(Arc::new(MacInterface {
             device: self.clone(),
@@ -331,5 +343,8 @@ impl Drop for MacInterface {
         if let Err(err) = self.interface.close() {
             error!("Failed to close interface: {err}")
         }
+        self.device
+            .claimed_interfaces
+            .fetch_sub(1, Ordering::Release);
     }
 }
