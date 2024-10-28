@@ -30,6 +30,7 @@ pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
     pub(super) device: IoKitDevice,
     active_config: AtomicU8,
+    is_open_exclusive: Mutex<bool>,
 }
 
 // `get_configuration` does IO, so avoid it in the common case that:
@@ -52,6 +53,16 @@ impl MacDevice {
         let device = IoKitDevice::new(service)?;
         let _event_registration = add_event_source(device.create_async_event_source()?);
 
+        let opened = match unsafe { call_iokit_function!(device.raw, USBDeviceOpen()) } {
+            io_kit_sys::ret::kIOReturnSuccess => true,
+            err => {
+                // Most methods don't require USBDeviceOpen() so this can be ignored
+                // to allow different processes to open different interfaces.
+                log::debug!("Could not open device for exclusive access: {err:x}");
+                false
+            }
+        };
+
         let active_config = if let Some(active_config) = guess_active_config(&device) {
             log::debug!("Active config from single descriptor is {}", active_config);
             active_config
@@ -65,6 +76,7 @@ impl MacDevice {
             _event_registration,
             device,
             active_config: AtomicU8::new(active_config),
+            is_open_exclusive: Mutex::new(opened),
         }))
     }
 
@@ -77,18 +89,30 @@ impl MacDevice {
         (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())
     }
 
+    fn require_open_exclusive(&self) -> Result<(), Error> {
+        let mut state = self.is_open_exclusive.lock().unwrap();
+        if *state == false {
+            unsafe { check_iokit_return(call_iokit_function!(self.device.raw, USBDeviceOpen()))? };
+            *state = true;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
+        self.require_open_exclusive()?;
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.device.raw,
                 SetConfiguration(configuration)
             ))?
         }
+        log::debug!("Set configuration {configuration}");
         self.active_config.store(configuration, Ordering::SeqCst);
         Ok(())
     }
 
     pub(crate) fn reset(&self) -> Result<(), Error> {
+        self.require_open_exclusive()?;
         unsafe {
             check_iokit_return(call_iokit_function!(
                 self.device.raw,
@@ -194,6 +218,17 @@ impl MacDevice {
         interface: u8,
     ) -> Result<Arc<MacInterface>, Error> {
         self.claim_interface(interface)
+    }
+}
+
+impl Drop for MacDevice {
+    fn drop(&mut self) {
+        if *self.is_open_exclusive.get_mut().unwrap() {
+            match unsafe { call_iokit_function!(self.device.raw, USBDeviceClose()) } {
+                io_kit_sys::ret::kIOReturnSuccess => {}
+                err => log::debug!("Failed to close device: {err:x}"),
+            };
+        }
     }
 }
 
