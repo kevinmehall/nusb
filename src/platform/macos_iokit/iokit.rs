@@ -4,10 +4,7 @@
 //! licensed under MIT OR Apache-2.0.
 
 use core_foundation_sys::uuid::CFUUIDBytes;
-use io_kit_sys::{
-    ret::{kIOReturnExclusiveAccess, kIOReturnSuccess, IOReturn},
-    IOIteratorNext, IOObjectRelease,
-};
+use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
 use std::io::ErrorKind;
 
 use crate::Error;
@@ -124,11 +121,12 @@ pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), Error> {
     #[allow(non_upper_case_globals)]
     #[deny(unreachable_patterns)]
     match r {
-        kIOReturnSuccess => Ok(()),
-        kIOReturnExclusiveAccess => Err(Error::new(
+        io_kit_sys::ret::kIOReturnSuccess => Ok(()),
+        io_kit_sys::ret::kIOReturnExclusiveAccess => Err(Error::new(
             ErrorKind::Other,
-            "Could not be opened for exclusive access",
+            "could not be opened for exclusive access",
         )),
+        io_kit_sys::ret::kIOReturnNotFound => Err(Error::new(ErrorKind::NotFound, "not found")),
         _ => Err(Error::from_raw_os_error(r)),
     }
 }
