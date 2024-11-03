@@ -6,7 +6,7 @@ use std::{
 
 use core_foundation::runloop::{CFRunLoop, CFRunLoopSource};
 use core_foundation_sys::runloop::kCFRunLoopCommonModes;
-use log::info;
+use log::debug;
 
 // Pending release of https://github.com/servo/core-foundation-rs/pull/610
 struct SendCFRunLoop(CFRunLoop);
@@ -44,14 +44,14 @@ pub(crate) fn add_event_source(source: CFRunLoopSource) -> EventRegistration {
     } else {
         let (tx, rx) = mpsc::channel();
         let source = SendCFRunLoopSource(source.clone());
-        info!("starting event loop thread");
+        debug!("starting event loop thread");
         thread::spawn(move || {
             let runloop = CFRunLoop::get_current();
             let source = source;
             runloop.add_source(&source.0, unsafe { kCFRunLoopCommonModes });
             tx.send(SendCFRunLoop(runloop)).unwrap();
             CFRunLoop::run_current();
-            info!("event loop thread exited");
+            debug!("event loop thread exited");
         });
         event_loop.runloop = Some(rx.recv().expect("failed to start run loop thread"));
         event_loop.count = 1;

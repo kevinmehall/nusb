@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
         WinUsb_ControlTransfer, WinUsb_Free, WinUsb_Initialize, WinUsb_ResetPipe,
@@ -165,7 +165,7 @@ impl WindowsInterface {
         len: usize,
         timeout: Duration,
     ) -> Result<usize, TransferError> {
-        info!("Blocking control {direction:?}, {len} bytes");
+        debug!("Blocking control {direction:?}, {len} bytes");
 
         if control.recipient == Recipient::Interface && control.index as u8 != self.interface_number
         {

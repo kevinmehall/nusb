@@ -6,7 +6,7 @@ use std::{
 };
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
-use log::{error, info};
+use log::{debug, error};
 
 use crate::{
     platform::macos_iokit::iokit_c::IOUSBDevRequest,
@@ -19,7 +19,7 @@ use crate::{
 use super::{iokit::call_iokit_function, status_to_transfer_result};
 
 extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut c_void) {
-    info!(
+    debug!(
         "Completion callback for transfer {refcon:?}, status={result:x}, len={len}",
         len = len as usize
     );
@@ -155,7 +155,7 @@ impl PlatformTransfer for TransferData {
     fn cancel(&self) {
         if let Some(intf) = self.interface.as_ref() {
             let r = unsafe { call_iokit_function!(intf.interface.raw, AbortPipe(self.pipe_ref)) };
-            info!(
+            debug!(
                 "Cancelled all transfers on endpoint {ep:02x}. status={r:x}",
                 ep = self.endpoint_addr
             );
@@ -163,7 +163,7 @@ impl PlatformTransfer for TransferData {
             assert!(self.pipe_ref == 0);
             let r =
                 unsafe { call_iokit_function!(self.device.device.raw, USBDeviceAbortPipeZero()) };
-            info!("Cancelled all transfers on control pipe. status={r:x}");
+            debug!("Cancelled all transfers on control pipe. status={r:x}");
         }
     }
 }
@@ -185,7 +185,7 @@ impl PlatformSubmit<Vec<u8>> for TransferData {
                 self.inner as *mut c_void
             )
         );
-        info!(
+        debug!(
             "Submitted OUT transfer {inner:?} on endpoint {ep:02x}",
             inner = self.inner,
             ep = self.endpoint_addr
@@ -220,7 +220,7 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
                 self.inner as *mut c_void
             )
         );
-        info!(
+        debug!(
             "Submitted IN transfer {inner:?} on endpoint {ep:02x}",
             inner = self.inner,
             ep = self.endpoint_addr
@@ -260,7 +260,7 @@ impl PlatformSubmit<ControlIn> for TransferData {
             self.device.device.raw,
             DeviceRequestAsync(&mut req, transfer_callback, self.inner as *mut c_void)
         );
-        info!(
+        debug!(
             "Submitted Control IN transfer {inner:?}",
             inner = self.inner
         );
@@ -299,7 +299,7 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
             self.device.device.raw,
             DeviceRequestAsync(&mut req, transfer_callback, self.inner as *mut c_void)
         );
-        info!(
+        debug!(
             "Submitted Control OUT transfer {inner:?}",
             inner = self.inner
         );

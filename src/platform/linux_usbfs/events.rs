@@ -76,7 +76,6 @@ fn event_loop() {
         retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, -1)).unwrap();
         for event in &event_list {
             let key = event.data.u64() as usize;
-            log::info!("event on {key}");
             let lock = WATCHES.lock().unwrap();
             let Some(watch) = lock.get(key) else { continue };
 
