@@ -17,10 +17,14 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
 
 ### Current status
 
-* Support for Linux, Windows, and macOS
+* Support for Linux, Windows, macOS, and Android
 * Device listing and descriptor parsing
 * Transfers on control, bulk and interrupt endpoints
-* Used in production by [probe-rs](https://github.com/probe-rs/probe-rs) and others, but still relatively new. Please test with your device and report issues.
+* Device connect / disconnect events on all platforms
+* Used by [probe-rs](https://github.com/probe-rs/probe-rs),
+  [packetry](https://packetry.readthedocs.io/en/latest/),
+  [postcard-rpc](https://github.com/jamesmunns/postcard-rpc)
+  and others, but still relatively new. Please test with your device and report issues.
 
 ### License
 MIT or Apache 2.0, at your option
