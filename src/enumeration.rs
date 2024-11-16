@@ -249,12 +249,6 @@ impl DeviceInfo {
     }
 
     /// Serial number string, if available without device IO.
-    ///
-    /// ### Platform-specific notes
-    /// * On Windows, this comes from a case-insensitive instance ID and may
-    /// have been converted to upper case from the descriptor string. It is
-    /// recommended to use a [case-insensitive
-    /// comparison][str::eq_ignore_ascii_case] when matching a device.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
         self.serial_number.as_deref()
