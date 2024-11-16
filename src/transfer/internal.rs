@@ -2,7 +2,10 @@ use std::{
     cell::UnsafeCell,
     ffi::c_void,
     ptr::NonNull,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 
@@ -44,7 +47,7 @@ struct TransferInner<P: PlatformTransfer> {
     state: AtomicU8,
 
     /// Waker that is notified when transfer completes.
-    waker: AtomicWaker,
+    waker: Arc<AtomicWaker>,
 }
 
 /// Handle to a transfer.
@@ -81,7 +84,7 @@ impl<P: PlatformTransfer> TransferHandle<P> {
         let b = Box::new(TransferInner {
             platform_data: UnsafeCell::new(inner),
             state: AtomicU8::new(STATE_IDLE),
-            waker: AtomicWaker::new(),
+            waker: Arc::new(AtomicWaker::new()),
         });
 
         TransferHandle {
@@ -180,13 +183,9 @@ impl<P: PlatformTransfer> Drop for TransferHandle<P> {
 pub(crate) unsafe fn notify_completion<P: PlatformTransfer>(transfer: *mut c_void) {
     unsafe {
         let transfer = transfer as *mut TransferInner<P>;
-        let waker = (*transfer).waker.take();
+        let waker = (*transfer).waker.clone();
         match (*transfer).state.swap(STATE_COMPLETED, Ordering::Release) {
-            STATE_PENDING => {
-                if let Some(waker) = waker {
-                    waker.wake()
-                }
-            }
+            STATE_PENDING => waker.wake(),
             STATE_ABANDONED => {
                 drop(Box::from_raw(transfer));
             }
