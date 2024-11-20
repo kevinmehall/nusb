@@ -7,8 +7,9 @@ use log::debug;
 use windows_sys::Win32::Devices::{
     Properties::{
         DEVPKEY_Device_Address, DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_CompatibleIds,
-        DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
-        DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+        DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName, DEVPKEY_Device_HardwareIds,
+        DEVPKEY_Device_InstanceId, DEVPKEY_Device_LocationPaths, DEVPKEY_Device_Parent,
+        DEVPKEY_Device_Service,
     },
     Usb::{GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB},
 };
@@ -67,6 +68,10 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
         .and_then(|s| s.into_string().ok());
     // DEVPKEY_Device_Manufacturer exists but is often wrong and appears not to be read from the string descriptor but the .inf file
+
+    let friendly_name = devinst
+        .get_property::<OsString>(DEVPKEY_Device_FriendlyName)
+        .and_then(|s| s.into_string().ok());
 
     let serial_number = if info.device_desc.iSerialNumber != 0 {
         // Experimentally confirmed, the string descriptor is cached and this does
@@ -143,6 +148,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         speed: info.speed,
         manufacturer_string: None,
         product_string,
+        friendly_name,
         serial_number,
         interfaces,
     })
