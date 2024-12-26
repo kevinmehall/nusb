@@ -1,13 +1,14 @@
 use nusb::DeviceInfo;
 
-fn main() {
+#[pollster::main]
+async fn main() {
     env_logger::init();
-    for dev in nusb::list_devices().unwrap() {
-        inspect_device(dev);
+    for dev in nusb::list_devices().await.unwrap() {
+        inspect_device(dev).await;
     }
 }
 
-fn inspect_device(dev: DeviceInfo) {
+async fn inspect_device(dev: DeviceInfo) {
     println!(
         "Device {:03}.{:03} ({:04x}:{:04x}) {} {}",
         dev.bus_id(),
@@ -17,7 +18,7 @@ fn inspect_device(dev: DeviceInfo) {
         dev.manufacturer_string().unwrap_or(""),
         dev.product_string().unwrap_or("")
     );
-    let dev = match dev.open() {
+    let dev = match dev.open().await {
         Ok(dev) => dev,
         Err(e) => {
             println!("Failed to open device: {}", e);
@@ -33,6 +34,6 @@ fn inspect_device(dev: DeviceInfo) {
     for config in dev.configurations() {
         println!("{config:#?}");
     }
-    println!("");
-    println!("");
+    println!();
+    println!();
 }

@@ -17,17 +17,25 @@ use crate::{
     Error,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_CONFIGURATION: u8 = 9;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_INTERFACE: u8 = 0x04;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_INTERFACE: u8 = 9;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_ENDPOINT: u8 = 0x05;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_ENDPOINT: u8 = 7;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_STRING: u8 = 0x03;
 
 /// USB defined language IDs for string descriptors.
@@ -47,7 +55,7 @@ pub mod language_id {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Descriptor<'a>(&'a [u8]);
 
-impl<'a> Descriptor<'a> {
+impl Descriptor<'_> {
     /// Create a `Descriptor` from a buffer.
     ///
     /// Returns `None` if
@@ -74,7 +82,7 @@ impl<'a> Descriptor<'a> {
     }
 }
 
-impl<'a> Deref for Descriptor<'a> {
+impl Deref for Descriptor<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -182,7 +190,7 @@ macro_rules! descriptor_fields {
 
 pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
     if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
-        if buf.len() != 0 {
+        if buf.is_empty() {
             warn!(
                 "config descriptor buffer is {} bytes, need {}",
                 buf.len(),
@@ -193,7 +201,10 @@ pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
     }
 
     if buf[0] < DESCRIPTOR_LEN_CONFIGURATION {
-        warn!("invalid config descriptor bLength");
+        warn!(
+            "invalid config descriptor bLength. expected {DESCRIPTOR_LEN_CONFIGURATION}, got {}",
+            buf[0]
+        );
         return None;
     }
 
@@ -297,7 +308,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Configuration<'a> {
+impl Configuration<'_> {
     /// Index of the string descriptor describing this configuration.
     #[doc(alias = "iConfiguration")]
     pub fn string_index(&self) -> Option<u8> {
@@ -318,7 +329,7 @@ where
     }
 }
 
-impl<'a> Debug for Configuration<'a> {
+impl Debug for Configuration<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Configuration")
             .field("configuration_value", &self.configuration_value())
@@ -371,7 +382,7 @@ impl<'a> InterfaceGroup<'a> {
 #[derive(Clone)]
 pub struct InterfaceAltSetting<'a>(&'a [u8]);
 
-impl<'a> InterfaceAltSetting<'a> {
+impl InterfaceAltSetting<'_> {
     /// Get the interface descriptor followed by all trailing endpoint and other
     /// descriptors up to the next interface descriptor.
     pub fn descriptors(&self) -> Descriptors {
@@ -420,7 +431,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> InterfaceAltSetting<'a> {
+impl InterfaceAltSetting<'_> {
     /// Index of the string descriptor describing this interface or alternate setting.
     #[doc(alias = "iInterface")]
     pub fn string_index(&self) -> Option<u8> {
@@ -428,7 +439,7 @@ impl<'a> InterfaceAltSetting<'a> {
     }
 }
 
-impl<'a> Debug for InterfaceAltSetting<'a> {
+impl Debug for InterfaceAltSetting<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterfaceAltSetting")
             .field("interface_number", &self.interface_number())
@@ -446,7 +457,7 @@ impl<'a> Debug for InterfaceAltSetting<'a> {
 /// Information about a USB endpoint, with access to any associated descriptors.
 pub struct Endpoint<'a>(&'a [u8]);
 
-impl<'a> Endpoint<'a> {
+impl Endpoint<'_> {
     /// Get the endpoint descriptor followed by all trailing descriptors up to the next endpoint or interface descriptor.
     pub fn descriptors(&self) -> impl Iterator<Item = Descriptor> {
         Descriptors(self.0)
@@ -507,7 +518,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Debug for Endpoint<'a> {
+impl Debug for Endpoint<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
             .field("address", &format_args!("0x{:02X}", self.address()))
@@ -548,6 +559,7 @@ impl From<ActiveConfigurationError> for Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
 pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iterator<Item = &[u8]> {
     iter::from_fn(move || {
@@ -582,6 +594,7 @@ pub fn fuzz_parse_concatenated_config_descriptors(buf: &[u8]) -> impl Iterator<I
     parse_concatenated_config_descriptors(buf)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_concatenated {
     use super::parse_concatenated_config_descriptors;

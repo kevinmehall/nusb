@@ -119,7 +119,7 @@ impl FromHexStr for u16 {
 
 const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+pub async fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
         let path = entry.ok()?.path();
         let name = path.file_name()?;

@@ -25,6 +25,8 @@ pub(crate) use control::SETUP_PACKET_SIZE;
 pub use control::{Control, ControlIn, ControlOut, ControlType, Direction, Recipient};
 
 mod internal;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use internal::TransferInner;
 pub(crate) use internal::{
     notify_completion, PlatformSubmit, PlatformTransfer, TransferHandle, TransferRequest,
 };
@@ -94,6 +96,16 @@ impl From<TransferError> for io::Error {
             TransferError::Fault => io::Error::new(io::ErrorKind::Other, value),
             TransferError::Unknown => io::Error::new(io::ErrorKind::Other, value),
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn web_to_nusb_status(status: web_sys::UsbTransferStatus) -> Result<(), TransferError> {
+    match status {
+        web_sys::UsbTransferStatus::Ok => Ok(()),
+        web_sys::UsbTransferStatus::Stall => Err(TransferError::Stall),
+        web_sys::UsbTransferStatus::Babble => Err(TransferError::Unknown),
+        _ => unreachable!(),
     }
 }
 

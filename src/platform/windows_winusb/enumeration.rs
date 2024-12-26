@@ -27,7 +27,7 @@ use super::{
     util::WCString,
 };
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+pub async fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
         // get USB_HUB devices as well, like other platforms. ROOT_HUBs will be dropped by probe_device
         .iter()

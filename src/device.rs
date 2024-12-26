@@ -4,10 +4,7 @@ use crate::{
         Configuration, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
     },
     platform,
-    transfer::{
-        Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
-        TransferFuture,
-    },
+    transfer::{ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferFuture},
     DeviceInfo, Error,
 };
 use log::error;
@@ -18,13 +15,16 @@ use std::{io::ErrorKind, sync::Arc, time::Duration};
 /// Obtain a `Device` by calling [`DeviceInfo::open`]:
 ///
 /// ```no_run
+/// # #[pollster::main]
+/// # async fn main() {
 /// use nusb;
-/// let device_info = nusb::list_devices().unwrap()
+/// let device_info = nusb::list_devices().await.unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 ///
-/// let device = device_info.open().expect("failed to open device");
-/// let interface = device.claim_interface(0);
+/// let device = device_info.open().await.expect("failed to open device");
+/// let interface = device.claim_interface(0).await;
+/// # }
 /// ```
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
@@ -39,8 +39,8 @@ pub struct Device {
 }
 
 impl Device {
-    pub(crate) fn open(d: &DeviceInfo) -> Result<Device, std::io::Error> {
-        let backend = platform::Device::from_device_info(d)?;
+    pub(crate) async fn open(d: &DeviceInfo) -> Result<Device, std::io::Error> {
+        let backend = platform::Device::from_device_info(d).await?;
         Ok(Device { backend })
     }
 
@@ -53,8 +53,8 @@ impl Device {
     }
 
     /// Open an interface of the device and claim it for exclusive use.
-    pub fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
-        let backend = self.backend.claim_interface(interface)?;
+    pub async fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
+        let backend = self.backend.claim_interface(interface).await?;
         Ok(Interface { backend })
     }
 
@@ -63,8 +63,8 @@ impl Device {
     /// ### Platform notes
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// the same effect as [`claim_interface`][`Device::claim_interface`].
-    pub fn detach_and_claim_interface(&self, interface: u8) -> Result<Interface, Error> {
-        let backend = self.backend.detach_and_claim_interface(interface)?;
+    pub async fn detach_and_claim_interface(&self, interface: u8) -> Result<Interface, Error> {
+        let backend = self.backend.detach_and_claim_interface(interface).await?;
         Ok(Interface { backend })
     }
 
@@ -104,7 +104,7 @@ impl Device {
 
         self.configurations()
             .find(|c| c.configuration_value() == active)
-            .ok_or_else(|| ActiveConfigurationError {
+            .ok_or(ActiveConfigurationError {
                 configuration_value: active,
             })
     }
@@ -126,8 +126,8 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
-        self.backend.set_configuration(configuration)
+    pub async fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
+        self.backend.set_configuration(configuration).await
     }
 
     /// Request a descriptor from the device.
@@ -139,7 +139,7 @@ impl Device {
     /// * On Windows, the timeout argument is ignored, and an OS-defined timeout is used.
     /// * On Windows, this does not wake suspended devices. Reading their
     ///   descriptors will return an error.
-    pub fn get_descriptor(
+    pub async fn get_descriptor(
         &self,
         desc_type: u8,
         desc_index: u8,
@@ -153,14 +153,14 @@ impl Device {
                 .get_descriptor(desc_type, desc_index, language_id)
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_family = "wasm")))]
         {
             const STANDARD_REQUEST_GET_DESCRIPTOR: u8 = 0x06;
             use crate::transfer::{ControlType, Recipient};
 
             let mut buf = vec![0; 4096];
             let len = self.control_in_blocking(
-                Control {
+                crate::transfer::Control {
                     control_type: ControlType::Standard,
                     recipient: Recipient::Device,
                     request: STANDARD_REQUEST_GET_DESCRIPTOR,
@@ -174,6 +174,15 @@ impl Device {
             buf.truncate(len);
             Ok(buf)
         }
+
+        #[cfg(target_family = "wasm")]
+        {
+            let device = self.backend.clone();
+
+            device
+                .get_descriptor(desc_type, desc_index, language_id, timeout)
+                .await
+        }
     }
 
     /// Request the list of supported languages for string descriptors.
@@ -181,11 +190,13 @@ impl Device {
     /// ### Platform-specific details
     ///
     /// See notes on [`get_descriptor`][`Self::get_descriptor`].
-    pub fn get_string_descriptor_supported_languages(
+    pub async fn get_string_descriptor_supported_languages(
         &self,
         timeout: Duration,
     ) -> Result<impl Iterator<Item = u16>, Error> {
-        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)?;
+        let data = self
+            .get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)
+            .await?;
 
         if !validate_string_descriptor(&data) {
             error!("String descriptor language list read {data:?}, not a valid string descriptor");
@@ -211,7 +222,7 @@ impl Device {
     /// ### Platform-specific details
     ///
     /// See notes on [`get_descriptor`][`Self::get_descriptor`].
-    pub fn get_string_descriptor(
+    pub async fn get_string_descriptor(
         &self,
         desc_index: u8,
         language_id: u16,
@@ -223,7 +234,9 @@ impl Device {
                 "string descriptor index 0 is reserved for the language table",
             ));
         }
-        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)?;
+        let data = self
+            .get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)
+            .await?;
 
         decode_string_descriptor(&data)
             .map_err(|_| Error::new(ErrorKind::InvalidData, "string descriptor data was invalid"))
@@ -236,8 +249,8 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn reset(&self) -> Result<(), Error> {
-        self.backend.reset()
+    pub async fn reset(&self) -> Result<(), Error> {
+        self.backend.reset().await
     }
 
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
@@ -251,10 +264,10 @@ impl Device {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_in_blocking(
         &self,
-        control: Control,
+        control: crate::transfer::Control,
         data: &mut [u8],
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
+    ) -> Result<usize, crate::transfer::TransferError> {
         self.backend.control_in_blocking(control, data, timeout)
     }
 
@@ -269,10 +282,10 @@ impl Device {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn control_out_blocking(
         &self,
-        control: Control,
+        control: crate::transfer::Control,
         data: &[u8],
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
+    ) -> Result<usize, crate::transfer::TransferError> {
         self.backend.control_out_blocking(control, data, timeout)
     }
 
@@ -281,20 +294,20 @@ impl Device {
     /// ### Example
     ///
     /// ```no_run
-    /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
-    /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
+    /// # #[pollster::main]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().await.unwrap().next().unwrap();
+    /// # let device = di.open().await.unwrap();
     ///
-    /// let data: Vec<u8> = block_on(device.control_in(ControlIn {
+    /// let data: Vec<u8> = device.control_in(ControlIn {
     ///     control_type: ControlType::Vendor,
     ///     recipient: Recipient::Device,
     ///     request: 0x30,
     ///     value: 0x0,
     ///     index: 0x0,
     ///     length: 64,
-    /// })).into_result()?;
+    /// }).await.into_result()?;
     /// # Ok(()) }
     /// ```
     ///
@@ -302,7 +315,12 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_arch = "wasm32"
+    ))]
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlIn>(data);
@@ -314,20 +332,20 @@ impl Device {
     /// ### Example
     ///
     /// ```no_run
-    /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
-    /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
+    /// # #[pollster::main]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().await.unwrap().next().unwrap();
+    /// # let device = di.open().await.unwrap();
     ///
-    /// block_on(device.control_out(ControlOut {
+    /// device.control_out(ControlOut {
     ///     control_type: ControlType::Vendor,
     ///     recipient: Recipient::Device,
     ///     request: 0x32,
     ///     value: 0x0,
     ///     index: 0x0,
     ///     data: &[0x01, 0x02, 0x03, 0x04],
-    /// })).into_result()?;
+    /// }).await.into_result()?;
     /// # Ok(()) }
     /// ```
     ///
@@ -335,7 +353,12 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_arch = "wasm32"
+    ))]
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
@@ -361,10 +384,11 @@ impl Interface {
     /// An alternate setting is a mode of the interface that makes particular endpoints available
     /// and may enable or disable functionality of the device. The OS resets the device to the default
     /// alternate setting when the interface is released or the program exits.
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        self.backend.set_alt_setting(alt_setting)
+    pub async fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+        self.backend.set_alt_setting(alt_setting).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
@@ -378,13 +402,14 @@ impl Interface {
     ///   become an error in the future.
     pub fn control_in_blocking(
         &self,
-        control: Control,
+        control: crate::transfer::Control,
         data: &mut [u8],
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
+    ) -> Result<usize, crate::transfer::TransferError> {
         self.backend.control_in_blocking(control, data, timeout)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Synchronously perform a single **OUT (host-to-device)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
@@ -398,10 +423,10 @@ impl Interface {
     ///   become an error in the future.
     pub fn control_out_blocking(
         &self,
-        control: Control,
+        control: crate::transfer::Control,
         data: &[u8],
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
+    ) -> Result<usize, crate::transfer::TransferError> {
         self.backend.control_out_blocking(control, data, timeout)
     }
 
@@ -410,21 +435,21 @@ impl Interface {
     /// ### Example
     ///
     /// ```no_run
-    /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
-    /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
-    /// # let interface = device.claim_interface(0).unwrap();
+    /// # #[pollster::main]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().await.unwrap().next().unwrap();
+    /// # let device = di.open().await.unwrap();
+    /// # let interface = device.claim_interface(0).await.unwrap();
     ///
-    /// let data: Vec<u8> = block_on(interface.control_in(ControlIn {
+    /// let data: Vec<u8> = interface.control_in(ControlIn {
     ///     control_type: ControlType::Vendor,
     ///     recipient: Recipient::Device,
     ///     request: 0x30,
     ///     value: 0x0,
     ///     index: 0x0,
     ///     length: 64,
-    /// })).into_result()?;
+    /// }).await.into_result()?;
     /// # Ok(()) }
     /// ```
     ///
@@ -445,21 +470,21 @@ impl Interface {
     /// ### Example
     ///
     /// ```no_run
-    /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
-    /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
-    /// # let interface = device.claim_interface(0).unwrap();
+    /// # #[pollster::main]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().await.unwrap().next().unwrap();
+    /// # let device = di.open().await.unwrap();
+    /// # let interface = device.claim_interface(0).await.unwrap();
     ///
-    /// block_on(interface.control_out(ControlOut {
+    /// interface.control_out(ControlOut {
     ///     control_type: ControlType::Vendor,
     ///     recipient: Recipient::Device,
     ///     request: 0x32,
     ///     value: 0x0,
     ///     index: 0x0,
     ///     data: &[0x01, 0x02, 0x03, 0x04],
-    /// })).into_result()?;
+    /// }).await.into_result()?;
     /// # Ok(()) }
     /// ```
     ///
@@ -555,8 +580,8 @@ impl Interface {
     /// resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        self.backend.clear_halt(endpoint)
+    pub async fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+        self.backend.clear_halt(endpoint).await
     }
 
     /// Get the interface number.
@@ -584,6 +609,7 @@ impl Interface {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn assert_send_sync() {
     fn require_send_sync<T: Send + Sync>() {}

@@ -48,7 +48,7 @@ fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
 }
 
 impl MacDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<MacDevice>, Error> {
+    pub(crate) async fn from_device_info(d: &DeviceInfo) -> Result<Arc<MacDevice>, Error> {
         log::info!("Opening device from registry id {}", d.registry_id);
         let service = service_by_registry_id(d.registry_id)?;
         let device = IoKitDevice::new(service)?;
@@ -108,7 +108,7 @@ impl MacDevice {
         Ok(())
     }
 
-    pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
+    pub(crate) async fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
         self.require_open_exclusive()?;
         unsafe {
             check_iokit_return(call_iokit_function!(
@@ -121,7 +121,7 @@ impl MacDevice {
         Ok(())
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
+    pub(crate) async fn reset(&self) -> Result<(), Error> {
         self.require_open_exclusive()?;
         unsafe {
             check_iokit_return(call_iokit_function!(
@@ -196,7 +196,7 @@ impl MacDevice {
         TransferHandle::new(super::TransferData::new_control(self.clone()))
     }
 
-    pub(crate) fn claim_interface(
+    pub(crate) async fn claim_interface(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<MacInterface>, Error> {
@@ -225,11 +225,11 @@ impl MacDevice {
         }))
     }
 
-    pub(crate) fn detach_and_claim_interface(
+    pub(crate) async fn detach_and_claim_interface(
         self: &Arc<Self>,
         interface: u8,
     ) -> Result<Arc<MacInterface>, Error> {
-        self.claim_interface(interface)
+        self.claim_interface(interface).await
     }
 }
 
@@ -297,7 +297,7 @@ impl MacInterface {
         self.device.control_out_blocking(control, data, timeout)
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+    pub async fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         debug!(
             "Set interface {} alt setting to {alt_setting}",
             self.interface_number
@@ -318,7 +318,7 @@ impl MacInterface {
         Ok(())
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+    pub async fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         debug!("Clear halt, endpoint {endpoint:02x}");
 
         let pipe_ref = {

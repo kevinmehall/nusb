@@ -48,7 +48,7 @@ pub(crate) struct LinuxDevice {
 }
 
 impl LinuxDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
+    pub(crate) async fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
         let busnum = d.busnum();
         let devnum = d.device_address();
         let active_config = d.path.read_attr("bConfigurationValue")?;
@@ -171,13 +171,13 @@ impl LinuxDevice {
         self.active_config.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
+    pub(crate) async fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
         usbfs::set_configuration(&self.fd, configuration)?;
         self.active_config.store(configuration, Ordering::SeqCst);
         Ok(())
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
+    pub(crate) async fn reset(&self) -> Result<(), Error> {
         usbfs::reset(&self.fd)?;
         Ok(())
     }
@@ -253,16 +253,18 @@ impl LinuxDevice {
         ))
     }
 
-    pub(crate) fn claim_interface(
+    pub(crate) async fn claim_interface(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
-            warn!(
-                "Failed to claim interface {interface_number} on device id {dev}: {e}",
-                dev = self.events_id
-            )
-        })?;
+        usbfs::claim_interface(&self.fd, interface_number)
+            .await
+            .inspect_err(|e| {
+                warn!(
+                    "Failed to claim interface {interface_number} on device id {dev}: {e}",
+                    dev = self.events_id
+                )
+            })?;
         debug!(
             "Claimed interface {interface_number} on device id {dev}",
             dev = self.events_id
@@ -274,11 +276,11 @@ impl LinuxDevice {
         }))
     }
 
-    pub(crate) fn detach_and_claim_interface(
+    pub(crate) async fn detach_and_claim_interface(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
+        usbfs::detach_and_claim_interface(&self.fd, interface_number).await?;
         debug!(
             "Detached and claimed interface {interface_number} on device id {dev}",
             dev = self.events_id
@@ -452,7 +454,7 @@ impl LinuxInterface {
         self.device.control_out_blocking(control, data, timeout)
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+    pub async fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         debug!(
             "Set interface {} alt setting to {alt_setting}",
             self.interface_number
@@ -464,9 +466,9 @@ impl LinuxInterface {
         )?)
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+    pub async fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         debug!("Clear halt, endpoint {endpoint:02x}");
-        Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)
+        Ok(usbfs::clear_halt(&self.device.fd, endpoint).await?)
     }
 }
 

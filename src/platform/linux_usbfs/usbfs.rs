@@ -23,7 +23,7 @@ pub fn set_configuration<Fd: AsFd>(fd: Fd, configuration: u8) -> io::Result<()> 
     }
 }
 
-pub fn claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+pub async fn claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
         let ctl =
             ioctl::Setter::<ioctl::ReadOpcode<b'U', 15, c_uint>, c_uint>::new(interface.into());
@@ -46,7 +46,7 @@ struct DetachAndClaim {
     driver: [c_uchar; 255 + 1],
 }
 
-pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
+pub async fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     const USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER: c_uint = 0x02;
     unsafe {
         let mut dc = DetachAndClaim {
@@ -279,7 +279,7 @@ pub fn control<Fd: AsFd>(fd: Fd, transfer: CtrlTransfer) -> io::Result<usize> {
     }
 }
 
-pub fn clear_halt<Fd: AsFd>(fd: Fd, endpoint: u8) -> io::Result<()> {
+pub async fn clear_halt<Fd: AsFd>(fd: Fd, endpoint: u8) -> io::Result<()> {
     unsafe {
         let ctl =
             ioctl::Setter::<ioctl::ReadOpcode<b'U', 21, c_uint>, c_uint>::new(endpoint.into());

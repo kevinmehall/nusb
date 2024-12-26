@@ -76,7 +76,7 @@ fn usb_controller_service_iter(
     }
 }
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+pub async fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(usb_service_iter()?.filter_map(probe_device))
 }
 

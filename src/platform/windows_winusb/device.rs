@@ -45,7 +45,7 @@ pub(crate) struct WindowsDevice {
 }
 
 impl WindowsDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
+    pub(crate) async fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
         debug!("Creating device for {:?}", d.instance_id);
 
         // Look up the device again in case the DeviceInfo is stale. In
@@ -85,7 +85,7 @@ impl WindowsDevice {
         self.config_descriptors.iter().map(|d| &d[..])
     }
 
-    pub(crate) fn set_configuration(&self, _configuration: u8) -> Result<(), Error> {
+    pub(crate) async fn set_configuration(&self, _configuration: u8) -> Result<(), Error> {
         Err(io::Error::new(
             ErrorKind::Unsupported,
             "set_configuration not supported by WinUSB",
@@ -101,14 +101,14 @@ impl WindowsDevice {
         HubPort::by_child_devinst(self.devinst)?.get_descriptor(desc_type, desc_index, language_id)
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
+    pub(crate) async fn reset(&self) -> Result<(), Error> {
         Err(io::Error::new(
             ErrorKind::Unsupported,
             "reset not supported by WinUSB",
         ))
     }
 
-    pub(crate) fn claim_interface(
+    pub(crate) async fn claim_interface(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
@@ -118,11 +118,11 @@ impl WindowsDevice {
 
         if driver.eq_ignore_ascii_case("winusb") {
             match handles.entry(0) {
-                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
+                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number).await,
                 Entry::Vacant(e) => {
                     let path = get_winusb_device_path(self.devinst)?;
                     let mut handle = WinusbFileHandle::new(&path, 0)?;
-                    let intf = handle.claim_interface(self, interface_number)?;
+                    let intf = handle.claim_interface(self, interface_number).await?;
                     e.insert(handle);
                     Ok(intf)
                 }
@@ -137,11 +137,11 @@ impl WindowsDevice {
             }
 
             match handles.entry(first_interface) {
-                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
+                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number).await,
                 Entry::Vacant(e) => {
                     let path = get_usbccgp_winusb_device_path(child_dev)?;
                     let mut handle = WinusbFileHandle::new(&path, first_interface)?;
-                    let intf = handle.claim_interface(self, interface_number)?;
+                    let intf = handle.claim_interface(self, interface_number).await?;
                     e.insert(handle);
                     Ok(intf)
                 }
@@ -154,11 +154,11 @@ impl WindowsDevice {
         }
     }
 
-    pub(crate) fn detach_and_claim_interface(
+    pub(crate) async fn detach_and_claim_interface(
         self: &Arc<Self>,
         interface: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
-        self.claim_interface(interface)
+        self.claim_interface(interface).await
     }
 }
 
@@ -226,7 +226,7 @@ impl WinusbFileHandle {
         })
     }
 
-    fn claim_interface(
+    async fn claim_interface(
         &mut self,
         device: &Arc<WindowsDevice>,
         interface_number: u8,
@@ -456,7 +456,7 @@ impl WindowsInterface {
         }
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
+    pub async fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
         unsafe {
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
@@ -467,7 +467,7 @@ impl WindowsInterface {
         }
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
+    pub async fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
         debug!("Clear halt, endpoint {endpoint:02x}");
         unsafe {
             let r = WinUsb_ResetPipe(self.winusb_handle, endpoint);

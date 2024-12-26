@@ -1,6 +1,6 @@
 [package]
 name = "nusb"
-version = "0.1.10"
+version = "0.1.12"
 description = "Cross-platform low-level access to USB devices in pure Rust"
 categories = ["hardware-support"]
 keywords = ["usb", "hardware"]
@@ -8,7 +8,8 @@ authors = ["Kevin Mehall <km@kevinmehall.net>"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/kevinmehall/nusb"
-rust-version = "1.76" # keep in sync with .github/workflows/rust.yml
+# Keep the version in sync with .github/workflows/rust.yml.
+rust-version = "1.80"
 
 [dependencies]
 atomic-waker = "1.1.2"
@@ -16,22 +17,56 @@ futures-core = "0.3.29"
 log = "0.4.20"
 once_cell = "1.18.0"
 slab = "0.4.9"
+tracing = "0.1"
 
 [dev-dependencies]
 env_logger = "0.10.0"
 futures-lite = "1.13.0"
+pollster = { version = "0.4", features = ["macro"] }
 
-[target.'cfg(any(target_os="linux", target_os="android"))'.dependencies]
+[target.'cfg(all(any(target_os="linux", target_os="android"), not(target_arch="wasm32")))'.dependencies]
 rustix = { version = "0.38.17", features = ["fs", "event", "net"] }
 libc = "0.2.155"
 
 [target.'cfg(target_os="windows")'.dependencies]
-windows-sys = { version = "0.48.0", features = ["Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Com"] }
+windows-sys = { version = "0.48.0", features = [
+    "Win32_Devices_Usb",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Devices_Properties",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Registry",
+    "Win32_System_Com",
+] }
 
 [target.'cfg(target_os="macos")'.dependencies]
 core-foundation = "0.9.3"
 core-foundation-sys = "0.8.4"
 io-kit-sys = "0.4.0"
+
+[target.'cfg(target_arch="wasm32")'.dependencies]
+web-sys = { version = "*", features = [
+    "Document",
+    "Window",
+    "Navigator",
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceRequestOptions",
+    "UsbConfiguration",
+    "UsbInterface",
+    "UsbAlternateInterface",
+    "UsbControlTransferParameters",
+    "UsbRequestType",
+    "UsbRecipient",
+    "UsbInTransferResult",
+    "UsbTransferStatus",
+    "UsbOutTransferResult",
+    "UsbDirection",
+    "UsbConnectionEvent",
+] }
+wasm-bindgen-futures = { version = "*" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

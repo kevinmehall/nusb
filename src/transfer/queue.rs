@@ -50,63 +50,66 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ### Example (read from an endpoint)
 ///
 /// ```no_run
-/// use futures_lite::future::block_on;
-/// use nusb::transfer::RequestBuffer;
-/// # let di = nusb::list_devices().unwrap().next().unwrap();
-/// # let device = di.open().unwrap();
-/// # let interface = device.claim_interface(0).unwrap();
-/// # fn handle_data(_: &[u8]) {}
-/// let mut queue = interface.bulk_in_queue(0x81);
+/// # #[pollster::main]
+/// # async fn main() {
+///     use nusb::transfer::RequestBuffer;
+///     # let di = nusb::list_devices().await.unwrap().next().unwrap();
+///     # let device = di.open().await.unwrap();
+///     # let interface = device.claim_interface(0).await.unwrap();
+///     # fn handle_data(_: &[u8]) {}
+///     let mut queue = interface.bulk_in_queue(0x81);
 ///
-/// let n_transfers = 8;
-/// let transfer_size = 256;
+///     let n_transfers = 8;
+///     let transfer_size = 256;
 ///
-/// while queue.pending() < n_transfers {
-///     queue.submit(RequestBuffer::new(transfer_size));
-/// }
-///
-/// loop {
-///     let completion = block_on(queue.next_complete());
-///     handle_data(&completion.data); // your function
-///
-///     if completion.status.is_err() {
-///         break;
+///     while queue.pending() < n_transfers {
+///         queue.submit(RequestBuffer::new(transfer_size));
 ///     }
-///     
-///     queue.submit(RequestBuffer::reuse(completion.data, transfer_size))
-/// }
+///
+///     loop {
+///         let completion = queue.next_complete().await;
+///         handle_data(&completion.data); // your function
+///
+///         if completion.status.is_err() {
+///             break;
+///         }
+///         
+///         queue.submit(RequestBuffer::reuse(completion.data, transfer_size))
+///     }
+/// # }
 /// ```
 ///
 /// ### Example (write to an endpoint)
 /// ```no_run
-/// use std::mem;
-/// use futures_lite::future::block_on;
-/// # let di = nusb::list_devices().unwrap().next().unwrap();
-/// # let device = di.open().unwrap();
-/// # let interface = device.claim_interface(0).unwrap();
-/// # fn fill_data(_: &mut Vec<u8>) {}
-/// # fn data_confirmed_sent(_: usize) {}
-/// let mut queue = interface.bulk_out_queue(0x02);
+/// # #[pollster::main]
+/// # async fn main() {
+///     use std::mem;
+///     # let di = nusb::list_devices().await.unwrap().next().unwrap();
+///     # let device = di.open().await.unwrap();
+///     # let interface = device.claim_interface(0).await.unwrap();
+///     # fn fill_data(_: &mut Vec<u8>) {}
+///     # fn data_confirmed_sent(_: usize) {}
+///     let mut queue = interface.bulk_out_queue(0x02);
 ///
-/// let n_transfers = 8;
+///     let n_transfers = 8;
 ///
-/// let mut next_buf = Vec::new();
+///     let mut next_buf = Vec::new();
 ///
-/// loop {
-///     while queue.pending() < n_transfers {
-///         let mut buf = mem::replace(&mut next_buf, Vec::new());
-///         fill_data(&mut buf); // your function
-///         queue.submit(buf);
+///     loop {
+///         while queue.pending() < n_transfers {
+///             let mut buf = mem::replace(&mut next_buf, Vec::new());
+///             fill_data(&mut buf); // your function
+///             queue.submit(buf);
+///         }
+///
+///         let completion = queue.next_complete().await;
+///         data_confirmed_sent(completion.data.actual_length()); // your function
+///         next_buf = completion.data.reuse();
+///         if completion.status.is_err() {
+///             break;
+///         }
 ///     }
-///
-///     let completion = block_on(queue.next_complete());
-///     data_confirmed_sent(completion.data.actual_length()); // your function
-///     next_buf = completion.data.reuse();
-
-///     if completion.status.is_err() {
-///         break;
-///     }
-/// }
+/// # }
 /// ```
 pub struct Queue<R: TransferRequest> {
     interface: Arc<platform::Interface>,
@@ -124,7 +127,7 @@ pub struct Queue<R: TransferRequest> {
 
 impl<R> Queue<R>
 where
-    R: TransferRequest + Send + Sync,
+    R: TransferRequest + crate::maybe::MaybeSend + crate::maybe::MaybeSync,
     platform::TransferData: PlatformSubmit<R>,
 {
     pub(crate) fn new(
@@ -165,9 +168,13 @@ where
     /// side effects, enabling its use in `select!{}` or similar.
     ///
     /// Panics if there are no transfers pending.
-    pub fn next_complete<'a>(
-        &'a mut self,
-    ) -> impl Future<Output = Completion<R::Response>> + Unpin + Send + Sync + 'a {
+    pub fn next_complete(
+        &mut self,
+    ) -> impl Future<Output = Completion<R::Response>>
+           + Unpin
+           + crate::maybe::MaybeSend
+           + crate::maybe::MaybeSync
+           + '_ {
         poll_fn(|cx| self.poll_next(cx))
     }
 
@@ -221,8 +228,8 @@ where
     /// the error and resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&mut self) -> Result<(), Error> {
-        self.interface.clear_halt(self.endpoint)
+    pub async fn clear_halt(&mut self) -> Result<(), Error> {
+        self.interface.clear_halt(self.endpoint).await
     }
 }
 

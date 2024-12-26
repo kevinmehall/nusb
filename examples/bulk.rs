@@ -1,19 +1,22 @@
-use futures_lite::future::block_on;
 use nusb::transfer::RequestBuffer;
 
-fn main() {
+#[pollster::main]
+async fn main() {
     env_logger::init();
     let di = nusb::list_devices()
+        .await
         .unwrap()
         .find(|d| d.vendor_id() == 0x59e3 && d.product_id() == 0x0a23)
         .expect("device should be connected");
 
     println!("Device info: {di:?}");
 
-    let device = di.open().unwrap();
-    let interface = device.claim_interface(0).unwrap();
+    let device = di.open().await.unwrap();
+    let interface = device.claim_interface(0).await.unwrap();
 
-    block_on(interface.bulk_out(0x02, Vec::from([1, 2, 3, 4, 5])))
+    interface
+        .bulk_out(0x02, Vec::from([1, 2, 3, 4, 5]))
+        .await
         .into_result()
         .unwrap();
 
@@ -23,7 +26,7 @@ fn main() {
         while queue.pending() < 8 {
             queue.submit(RequestBuffer::new(256));
         }
-        let result = block_on(queue.next_complete());
+        let result = queue.next_complete().await;
         println!("{result:?}");
         if result.status.is_err() {
             break;

@@ -129,6 +129,8 @@ pub mod transfer;
 
 pub mod hotplug;
 
+mod maybe;
+
 /// OS error returned from operations other than transfers.
 pub type Error = io::Error;
 
@@ -137,13 +139,16 @@ pub type Error = io::Error;
 /// ### Example
 ///
 /// ```no_run
+/// # #[pollster::main]
+/// # async fn main() {
 /// use nusb;
-/// let device = nusb::list_devices().unwrap()
+/// let device = nusb::list_devices().await.unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
+/// # }
 /// ```
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    platform::list_devices()
+pub async fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
+    platform::list_devices().await
 }
 
 /// Get an iterator listing the system USB buses.
@@ -153,15 +158,18 @@ pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
 /// Group devices by bus:
 ///
 /// ```no_run
+/// # #[pollster::main]
+/// # async fn main() {
 /// use std::collections::HashMap;
 ///
-/// let devices = nusb::list_devices().unwrap().collect::<Vec<_>>();
+/// let devices = nusb::list_devices().await.unwrap().collect::<Vec<_>>();
 /// let buses: HashMap<String, (nusb::BusInfo, Vec::<nusb::DeviceInfo>)> = nusb::list_buses().unwrap()
 ///     .map(|bus| {
 ///         let bus_id = bus.bus_id().to_owned();
 ///         (bus.bus_id().to_owned(), (bus, devices.clone().into_iter().filter(|dev| dev.bus_id() == bus_id).collect()))
 ///     })
 ///     .collect();
+/// # }
 /// ```
 ///
 /// ### Platform-specific notes
@@ -183,10 +191,12 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
 /// ## Example
 ///
 /// ```no_run
+/// # #[pollster::main]
+/// # async fn main() {
 /// use std::collections::HashMap;
 /// use nusb::{DeviceInfo, DeviceId, hotplug::HotplugEvent};
 /// let watch = nusb::watch_devices().unwrap();
-/// let mut devices: HashMap<DeviceId, DeviceInfo> = nusb::list_devices().unwrap()
+/// let mut devices: HashMap<DeviceId, DeviceInfo> = nusb::list_devices().await.unwrap()
 ///     .map(|d| (d.id(), d)).collect();
 /// for event in futures_lite::stream::block_on(watch) {
 ///     match event {
@@ -198,6 +208,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
 ///         }
 ///     }
 /// }
+/// # }
 /// ```
 ///
 /// ### Platform-specific notes:

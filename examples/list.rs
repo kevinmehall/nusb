@@ -1,6 +1,7 @@
-fn main() {
+#[pollster::main]
+async fn main() {
     env_logger::init();
-    for dev in nusb::list_devices().unwrap() {
+    for dev in nusb::list_devices().await.unwrap() {
         println!("{:#?}", dev);
     }
 }

@@ -13,11 +13,20 @@ use atomic_waker::AtomicWaker;
 
 use super::Completion;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub trait PlatformTransfer: Send {
     /// Request cancellation of a transfer that may or may not currently be
     /// pending.
     fn cancel(&self);
 }
+
+/// A transfer specific to the platform.
+///
+/// NOTE: For WebUSB we cannot implement Send as the raw pointers used by the WASM FFI are not Send.
+///
+/// Furthermore, it is not currently possible to cancel requests in WebUSB (see https://github.com/WICG/webusb/issues/25).
+#[cfg(target_arch = "wasm32")]
+pub trait PlatformTransfer {}
 
 pub trait TransferRequest {
     type Response;
@@ -35,7 +44,7 @@ pub trait PlatformSubmit<D: TransferRequest>: PlatformTransfer {
     unsafe fn take_completed(&mut self) -> Completion<D::Response>;
 }
 
-struct TransferInner<P: PlatformTransfer> {
+pub(crate) struct TransferInner<P: PlatformTransfer> {
     /// Platform-specific data.
     ///
     /// In an `UnsafeCell` because we provide `&mut` when the
@@ -48,6 +57,12 @@ struct TransferInner<P: PlatformTransfer> {
 
     /// Waker that is notified when transfer completes.
     waker: Arc<AtomicWaker>,
+}
+
+impl<P: PlatformTransfer> TransferInner<P> {
+    pub(crate) fn platform_data(&mut self) -> &mut P {
+        unsafe { &mut *self.platform_data.get() }
+    }
 }
 
 /// Handle to a transfer.
@@ -98,6 +113,7 @@ impl<P: PlatformTransfer> TransferHandle<P> {
         unsafe { self.ptr.as_ref() }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn platform_data(&self) -> &P {
         // SAFETY: while `TransferHandle` is alive, the only mutable access to `platform_data`
         // is via this `TransferHandle`.
@@ -124,7 +140,9 @@ impl<P: PlatformTransfer> TransferHandle<P> {
         }
     }
 
+    /// Note: This is a nop on WebUSB because of https://github.com/WICG/webusb/issues/25.
     pub(crate) fn cancel(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.platform_data().cancel();
     }
 
@@ -146,10 +164,7 @@ impl<P: PlatformTransfer> TransferHandle<P> {
         }
     }
 
-    pub fn poll_completion<D: TransferRequest>(
-        &mut self,
-        cx: &Context,
-    ) -> Poll<Completion<D::Response>>
+    pub fn poll_completion<D>(&mut self, cx: &Context) -> Poll<Completion<D::Response>>
     where
         D: TransferRequest,
         P: PlatformSubmit<D>,
