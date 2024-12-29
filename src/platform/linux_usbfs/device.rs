@@ -1,7 +1,7 @@
 use std::io::{ErrorKind, Seek};
 use std::{ffi::c_void, time::Duration};
 use std::{
-    fs::File,
+    fs::{read_link, File},
     io::Read,
     mem::ManuallyDrop,
     path::PathBuf,
@@ -35,6 +35,8 @@ use crate::{
     },
     DeviceInfo, Error,
 };
+
+const USBFS_DEVICE_PREFIX: &'static str = "/dev/bus/usb/";
 
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
@@ -404,6 +406,40 @@ impl LinuxDevice {
             fd.as_raw_fd()
         );
         return Err(ErrorKind::Other.into());
+    }
+
+    pub(crate) fn get_descriptors(&self) -> &[u8] {
+        &self.descriptors
+    }
+
+    pub(crate) fn get_busnum_and_devnum(&self) -> Result<(u8, u8), Error> {
+        let raw_fd = self.fd.as_raw_fd();
+        // The symbolic link points to the device file in `devfs` (usually mounted on /dev)
+        let fd_path = format!("/proc/self/fd/{}", raw_fd);
+
+        // Device path is like "/dev/bus/usb/002/003"
+        // The first number is the bus number, and the second is the device address on the bus
+        let device_path = read_link(&fd_path)?;
+
+        device_path
+            .as_os_str()
+            .to_str()
+            .and_then(|device_location| device_location.strip_prefix(USBFS_DEVICE_PREFIX))
+            .and_then(|device_location| device_location.split_once('/'))
+            .map(|(busnum, devnum)| {
+                (
+                    busnum.trim_start_matches('0').parse::<u8>().unwrap_or(0),
+                    devnum.trim_start_matches('0').parse::<u8>().unwrap_or(0),
+                )
+            })
+            .ok_or_else(|| {
+                warn!(
+                    "Unable to parse path \"{}\" for device fd {}",
+                    device_path.display(),
+                    raw_fd
+                );
+                ErrorKind::Other.into()
+            })
     }
 }
 

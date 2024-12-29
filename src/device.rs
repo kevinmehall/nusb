@@ -1,7 +1,8 @@
 use crate::{
     descriptors::{
-        decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
-        Configuration, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
+        decode_string_descriptor, language_id::US_ENGLISH, validate_device_descriptor,
+        validate_string_descriptor, ActiveConfigurationError, Configuration, DeviceDescriptor,
+        InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
     },
     platform,
     transfer::{
@@ -340,6 +341,76 @@ impl Device {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
+    }
+
+    /// Get the device descriptor.
+    ///
+    /// The only situation when it returns `None` is
+    /// that the cached descriptors contain no valid device descriptor.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * This is only supported on Linux.
+    /// * On Linux, this method uses descriptors cached in memory, instead
+    ///   of sending a request to the device for a descriptor.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn get_device_descriptor(&self) -> Option<DeviceDescriptor> {
+        let buf = self.backend.get_descriptors();
+        validate_device_descriptor(&buf).map(|len| DeviceDescriptor::new(&buf[0..len]))
+    }
+
+    /// Get [`DeviceInfo`] of this device.
+    /// This method calls [`Self::get_device_descriptor`] and [`Self::get_string_descriptor`]
+    /// for some information internally.
+    ///
+    /// **NOTICE: This method always returns a [`DeviceInfo`] with empty
+    /// `interfaces`, `port_chain` and `path` fields.**
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * Only available on Linux.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn get_device_info(&self) -> Result<DeviceInfo, Error> {
+        let Some(desc) = self.get_device_descriptor() else {
+            error!("No any valid device descriptor was found");
+            return Err(ErrorKind::Other.into());
+        };
+
+        let (busnum, device_address) = self.backend.get_busnum_and_devnum()?;
+        dbg!(&desc);
+        let manufacturer_string = self
+            .get_string_descriptor(desc.manufacturer_string_index(), US_ENGLISH, Duration::ZERO)
+            .ok();
+        let product_string = self
+            .get_string_descriptor(desc.product_string_index(), US_ENGLISH, Duration::ZERO)
+            .ok();
+        let serial_number = self
+            .get_string_descriptor(
+                desc.serial_number_string_index(),
+                US_ENGLISH,
+                Duration::ZERO,
+            )
+            .ok();
+
+        Ok(DeviceInfo {
+            path: platform::SysfsPath(std::path::PathBuf::default()),
+            busnum,
+            bus_id: format!("{busnum:03}"),
+            device_address,
+            port_chain: Vec::new(),
+            vendor_id: desc.vendor_id(),
+            product_id: desc.product_id(),
+            device_version: desc.device_version(),
+            class: desc.class(),
+            subclass: desc.subclass(),
+            protocol: desc.protocol(),
+            max_packet_size_0: desc.max_packet_size_0(),
+            speed: desc.speed(),
+            manufacturer_string,
+            product_string,
+            serial_number,
+            interfaces: Vec::new(),
+        })
     }
 }
 
