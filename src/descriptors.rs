@@ -13,10 +13,12 @@ use std::{
 use log::warn;
 
 use crate::{
+    enumeration::Speed,
     transfer::{Direction, EndpointType},
     Error,
 };
 
+pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
 
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
@@ -177,6 +179,123 @@ macro_rules! descriptor_fields {
                 $vis fn $name(&self) -> $ty { <$ty>::from_le_bytes(self.0[$pos..$pos + std::mem::size_of::<$ty>()].try_into().unwrap()) }
             )*
         }
+    }
+}
+
+/// Information about a USB device.
+#[derive(Clone)]
+pub struct DeviceDescriptor<'a>(&'a [u8]);
+
+impl<'a> DeviceDescriptor<'a> {
+    /// Create a `DeviceDescriptor` from a buffer containing a series of descriptors.
+    ///
+    /// You normally obtain a `DeviceDescriptor` from a [`Device`][crate::Device], but this allows creating
+    /// one from your own descriptor bytes for tests.
+    ///
+    /// ### Panics
+    ///  * when the buffer is too short for a device descriptor
+    ///  * when the first descriptor is not a device descriptor
+    pub fn new(buf: &'a [u8]) -> Self {
+        assert!(buf.len() >= DESCRIPTOR_LEN_DEVICE as usize);
+        assert!(buf[0] as usize >= DESCRIPTOR_LEN_DEVICE as usize);
+        assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
+        Self(buf)
+    }
+
+    /// Get speed of this device. The speed is judged by `usb_version` field.
+    pub fn speed(&self) -> Option<Speed> {
+        Speed::from_usb_version(self.usb_version())
+    }
+}
+
+descriptor_fields! {
+    impl<'a> DeviceDescriptor<'a> {
+        /// `bcdUSB` descriptor field: USB Specification Number.
+        #[doc(alias = "bcdUSB")]
+        pub fn usb_version at 2 -> u16;
+
+        /// `bDeviceClass` descriptor field: Class code, assigned by USB-IF.
+        #[doc(alias = "bDeviceClass")]
+        pub fn class at 4 -> u8;
+
+        /// `bDeviceSubClass` descriptor field: Subclass code, assigned by USB-IF.
+        #[doc(alias = "bDeviceSubClass")]
+        pub fn subclass at 5 -> u8;
+
+        /// `bDeviceProtocol` descriptor field: Protocol code, assigned by USB-IF.
+        #[doc(alias = "bDeviceProtocol")]
+        pub fn protocol at 6 -> u8;
+
+        /// `bMaxPacketSize0` descriptor field: Maximum packet size for 0 Endpoint.
+        #[doc(alias = "bMaxPacketSize0")]
+        pub fn max_packet_size_0 at 7 -> u8;
+
+        /// `idVendor` descriptor field: Vendor ID, assigned by USB-IF.
+        #[doc(alias = "idVendor")]
+        pub fn vendor_id at 8 -> u16;
+
+        /// `idProduct` descriptor field: Product ID, assigned by the manufacturer.
+        #[doc(alias = "idProduct")]
+        pub fn product_id at 10 -> u16;
+
+        /// `bcdDevice` descriptor field: Device release number.
+        #[doc(alias = "bcdDevice")]
+        pub fn device_version at 12 -> u16;
+
+        /// `iManufacturer` descriptor field: Index for manufacturer description string.
+        pub fn manufacturer_string_index at 14 -> u8;
+
+        /// `iProduct` descriptor field: Index for product description string.
+        pub fn product_string_index at 15 -> u8;
+
+        /// `iSerialNumber` descriptor field: Index for serial number string.
+        pub fn serial_number_string_index at 16 -> u8;
+
+        /// `bNumConfigurations` descriptor field: Number of configurations
+        #[doc(alias = "bNumConfigurations")]
+        pub fn num_configurations at 17 -> u8;
+    }
+}
+
+fn format_usb_version(ver: u16) -> &'static str {
+    match ver {
+        0x0100 => "1.0",
+        0x0110 => "1.1",
+        0x0200 => "2.0",
+        0x0210 => "2.0", // This means a USB 3.x device is running in USB 2.0 mode
+        0x0300 => "3.0",
+        0x0310 => "3.1",
+        0x0320 => "3.2",
+        _ => "unknown",
+    }
+}
+
+impl<'a> Debug for DeviceDescriptor<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceDescriptor")
+            .field("usb_version", &format_usb_version(self.usb_version()))
+            .field("class", &format_args!("0x{:02x}", self.class()))
+            .field("subclass", &format_args!("0x{:02x}", self.subclass()))
+            .field("protocol", &format_args!("0x{:02x}", self.protocol()))
+            .field("max_packet_size_0", &self.max_packet_size_0())
+            .field("vendor_id", &format_args!("0x{:04x}", self.vendor_id()))
+            .field("product_id", &format_args!("0x{:04x}", self.product_id()))
+            .field(
+                "device_version",
+                &format_args!("0x{:04x}", self.device_version()),
+            )
+            .field(
+                "manufacturer_string_index",
+                &self.manufacturer_string_index(),
+            )
+            .field("product_string_index", &self.product_string_index())
+            .field(
+                "serial_number_string_index",
+                &self.serial_number_string_index(),
+            )
+            .field("num_configurations", &self.num_configurations())
+            .field("speed", &self.speed())
+            .finish()
     }
 }
 
@@ -659,6 +778,24 @@ fn test_malformed() {
 #[test]
 #[rustfmt::skip]
 fn test_linux_root_hub() {
+    let dev = DeviceDescriptor::new(&[
+        0x12, 0x01, 0x00, 0x02, 0x09, 0x00, 0x01, 0x40, 0x6b,
+        0x1d, 0x02, 0x00, 0x10, 0x05, 0x03, 0x02, 0x01, 0x01
+    ]);
+    assert_eq!(dev.usb_version(), 0x0200);
+    assert_eq!(dev.speed(), Some(Speed::High));
+    assert_eq!(dev.class(), 0x09);
+    assert_eq!(dev.subclass(), 0x00);
+    assert_eq!(dev.protocol(), 0x01);
+    assert_eq!(dev.max_packet_size_0(), 64);
+    assert_eq!(dev.vendor_id(), 0x1d6b);
+    assert_eq!(dev.product_id(), 0x0002);
+    assert_eq!(dev.device_version(), 0x0510);
+    assert_eq!(dev.manufacturer_string_index(), 3);
+    assert_eq!(dev.product_string_index(), 2);
+    assert_eq!(dev.serial_number_string_index(), 1);
+    assert_eq!(dev.num_configurations(), 1);
+
     let c = Configuration(&[
         0x09, 0x02, 0x19, 0x00, 0x01, 0x01, 0x00, 0xe0, 0x00,
         0x09, 0x04, 0x00, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00,
