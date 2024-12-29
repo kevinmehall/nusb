@@ -181,6 +181,36 @@ macro_rules! descriptor_fields {
     }
 }
 
+/// Check whether the buffer contains a valid device descriptor.
+/// On success, it will return length of the descriptor, or returns `None`.
+pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
+    if buf.len() < DESCRIPTOR_LEN_DEVICE as usize {
+        if buf.len() != 0 {
+            warn!(
+                "device descriptor buffer is {} bytes, need {}",
+                buf.len(),
+                DESCRIPTOR_LEN_DEVICE
+            );
+        }
+        return None;
+    }
+
+    if buf[0] < DESCRIPTOR_LEN_DEVICE {
+        warn!("invalid device descriptor bLength");
+        return None;
+    }
+
+    if buf[1] != DESCRIPTOR_TYPE_DEVICE {
+        warn!(
+            "device bDescriptorType is {}, not a device descriptor",
+            buf[1]
+        );
+        return None;
+    }
+
+    return Some(buf[0] as usize);
+}
+
 /// Information about a USB device.
 #[derive(Clone)]
 pub struct DeviceDescriptor<'a>(&'a [u8]);
