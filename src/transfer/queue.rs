@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{platform, Error};
+use crate::{platform, Error, IoAction};
 
 use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRequest};
 
@@ -52,8 +52,9 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ```no_run
 /// use futures_lite::future::block_on;
 /// use nusb::transfer::RequestBuffer;
-/// # let di = nusb::list_devices().unwrap().next().unwrap();
-/// # let device = di.open().unwrap();
+/// # use nusb::IoAction;
+/// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+/// # let device = di.open().wait().unwrap();
 /// # let interface = device.claim_interface(0).unwrap();
 /// # fn handle_data(_: &[u8]) {}
 /// let mut queue = interface.bulk_in_queue(0x81);
@@ -81,8 +82,9 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ```no_run
 /// use std::mem;
 /// use futures_lite::future::block_on;
-/// # let di = nusb::list_devices().unwrap().next().unwrap();
-/// # let device = di.open().unwrap();
+/// # use nusb::IoAction;
+/// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+/// # let device = di.open().wait().unwrap();
 /// # let interface = device.claim_interface(0).unwrap();
 /// # fn fill_data(_: &mut Vec<u8>) {}
 /// # fn data_confirmed_sent(_: usize) {}
@@ -221,8 +223,8 @@ where
     /// the error and resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&mut self) -> Result<(), Error> {
-        self.interface.clear_halt(self.endpoint)
+    pub fn clear_halt(&mut self) -> impl IoAction<Output = Result<(), Error>> {
+        self.interface.clone().clear_halt(self.endpoint)
     }
 }
 
