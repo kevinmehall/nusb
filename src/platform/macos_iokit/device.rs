@@ -13,14 +13,14 @@ use log::{debug, error};
 
 use crate::{
     descriptors::DeviceDescriptor,
-    platform::macos_iokit::{enumeration::device_descriptor_from_fields, events::add_event_source},
+    ioaction::blocking::Blocking,
     transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
-    DeviceInfo, Error, Speed,
+    DeviceInfo, Error, IoAction, Speed,
 };
 
 use super::{
-    enumeration::service_by_registry_id,
-    events::EventRegistration,
+    enumeration::{device_descriptor_from_fields, service_by_registry_id},
+    events::{add_event_source, EventRegistration},
     iokit::{call_iokit_function, check_iokit_return},
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{EndpointInfo, IoKitDevice, IoKitInterface},
@@ -51,47 +51,53 @@ fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
 }
 
 impl MacDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<MacDevice>, Error> {
-        log::info!("Opening device from registry id {}", d.registry_id);
-        let service = service_by_registry_id(d.registry_id)?;
-        let device = IoKitDevice::new(&service)?;
-        let _event_registration = add_event_source(device.create_async_event_source()?);
+    pub(crate) fn from_device_info(
+        d: &DeviceInfo,
+    ) -> impl IoAction<Output = Result<crate::Device, Error>> {
+        let registry_id = d.registry_id;
+        let speed = d.speed;
+        Blocking::new(move || {
+            log::info!("Opening device from registry id {}", registry_id);
+            let service = service_by_registry_id(registry_id)?;
+            let device = IoKitDevice::new(&service)?;
+            let _event_registration = add_event_source(device.create_async_event_source()?);
 
-        let opened = match unsafe { call_iokit_function!(device.raw, USBDeviceOpen()) } {
-            io_kit_sys::ret::kIOReturnSuccess => true,
-            err => {
-                // Most methods don't require USBDeviceOpen() so this can be ignored
-                // to allow different processes to open different interfaces.
-                log::debug!("Could not open device for exclusive access: {err:x}");
-                false
-            }
-        };
+            let opened = match unsafe { call_iokit_function!(device.raw, USBDeviceOpen()) } {
+                io_kit_sys::ret::kIOReturnSuccess => true,
+                err => {
+                    // Most methods don't require USBDeviceOpen() so this can be ignored
+                    // to allow different processes to open different interfaces.
+                    log::debug!("Could not open device for exclusive access: {err:x}");
+                    false
+                }
+            };
 
-        let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
-            Error::new(
-                ErrorKind::Other,
-                "could not read properties for device descriptor",
-            )
-        })?;
+            let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Other,
+                    "could not read properties for device descriptor",
+                )
+            })?;
 
-        let active_config = if let Some(active_config) = guess_active_config(&device) {
-            log::debug!("Active config from single descriptor is {}", active_config);
-            active_config
-        } else {
-            let res = device.get_configuration();
-            log::debug!("Active config from request is {:?}", res);
-            res.unwrap_or(0)
-        };
+            let active_config = if let Some(active_config) = guess_active_config(&device) {
+                log::debug!("Active config from single descriptor is {}", active_config);
+                active_config
+            } else {
+                let res = device.get_configuration();
+                log::debug!("Active config from request is {:?}", res);
+                res.unwrap_or(0)
+            };
 
-        Ok(Arc::new(MacDevice {
-            _event_registration,
-            device,
-            device_descriptor,
-            speed: d.speed,
-            active_config: AtomicU8::new(active_config),
-            is_open_exclusive: Mutex::new(opened),
-            claimed_interfaces: AtomicUsize::new(0),
-        }))
+            Ok(crate::Device::wrap(Arc::new(MacDevice {
+                _event_registration,
+                device,
+                device_descriptor,
+                speed,
+                active_config: AtomicU8::new(active_config),
+                is_open_exclusive: Mutex::new(opened),
+                claimed_interfaces: AtomicUsize::new(0),
+            })))
+        })
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
@@ -128,27 +134,34 @@ impl MacDevice {
         Ok(())
     }
 
-    pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
-        self.require_open_exclusive()?;
-        unsafe {
-            check_iokit_return(call_iokit_function!(
-                self.device.raw,
-                SetConfiguration(configuration)
-            ))?
-        }
-        log::debug!("Set configuration {configuration}");
-        self.active_config.store(configuration, Ordering::SeqCst);
-        Ok(())
+    pub(crate) fn set_configuration(
+        self: Arc<Self>,
+        configuration: u8,
+    ) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            self.require_open_exclusive()?;
+            unsafe {
+                check_iokit_return(call_iokit_function!(
+                    self.device.raw,
+                    SetConfiguration(configuration)
+                ))?
+            }
+            log::debug!("Set configuration {configuration}");
+            self.active_config.store(configuration, Ordering::SeqCst);
+            Ok(())
+        })
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
-        self.require_open_exclusive()?;
-        unsafe {
-            check_iokit_return(call_iokit_function!(
-                self.device.raw,
-                USBDeviceReEnumerate(0)
-            ))
-        }
+    pub(crate) fn reset(self: Arc<Self>) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            self.require_open_exclusive()?;
+            unsafe {
+                check_iokit_return(call_iokit_function!(
+                    self.device.raw,
+                    USBDeviceReEnumerate(0)
+                ))
+            }
+        })
     }
 
     /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
@@ -217,38 +230,40 @@ impl MacDevice {
     }
 
     pub(crate) fn claim_interface(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         interface_number: u8,
-    ) -> Result<Arc<MacInterface>, Error> {
-        let intf_service = self
-            .device
-            .create_interface_iterator()?
-            .nth(interface_number as usize)
-            .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
+    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+        Blocking::new(move || {
+            let intf_service = self
+                .device
+                .create_interface_iterator()?
+                .nth(interface_number as usize)
+                .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
-        let mut interface = IoKitInterface::new(intf_service)?;
-        let _event_registration = add_event_source(interface.create_async_event_source()?);
+            let mut interface = IoKitInterface::new(intf_service)?;
+            let _event_registration = add_event_source(interface.create_async_event_source()?);
 
-        interface.open()?;
+            interface.open()?;
 
-        let endpoints = interface.endpoints()?;
-        debug!("Found endpoints: {endpoints:?}");
+            let endpoints = interface.endpoints()?;
+            debug!("Found endpoints: {endpoints:?}");
 
-        self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
+            self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
-        Ok(Arc::new(MacInterface {
-            device: self.clone(),
-            interface_number,
-            interface,
-            endpoints: Mutex::new(endpoints),
-            _event_registration,
-        }))
+            Ok(crate::Interface::wrap(Arc::new(MacInterface {
+                device: self.clone(),
+                interface_number,
+                interface,
+                endpoints: Mutex::new(endpoints),
+                _event_registration,
+            })))
+        })
     }
 
     pub(crate) fn detach_and_claim_interface(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         interface: u8,
-    ) -> Result<Arc<MacInterface>, Error> {
+    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -317,44 +332,51 @@ impl MacInterface {
         self.device.control_out_blocking(control, data, timeout)
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        debug!(
-            "Set interface {} alt setting to {alt_setting}",
-            self.interface_number
-        );
+    pub fn set_alt_setting(
+        self: Arc<Self>,
+        alt_setting: u8,
+    ) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            debug!(
+                "Set interface {} alt setting to {alt_setting}",
+                self.interface_number
+            );
 
-        let mut endpoints = self.endpoints.lock().unwrap();
+            let mut endpoints = self.endpoints.lock().unwrap();
 
-        unsafe {
-            check_iokit_return(call_iokit_function!(
-                self.interface.raw,
-                SetAlternateInterface(alt_setting)
-            ))?;
-        }
+            unsafe {
+                check_iokit_return(call_iokit_function!(
+                    self.interface.raw,
+                    SetAlternateInterface(alt_setting)
+                ))?;
+            }
 
-        *endpoints = self.interface.endpoints()?;
-        debug!("Found endpoints: {endpoints:?}");
+            *endpoints = self.interface.endpoints()?;
+            debug!("Found endpoints: {endpoints:?}");
 
-        Ok(())
+            Ok(())
+        })
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        debug!("Clear halt, endpoint {endpoint:02x}");
+    pub fn clear_halt(self: Arc<Self>, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            debug!("Clear halt, endpoint {endpoint:02x}");
 
-        let pipe_ref = {
-            let endpoints = self.endpoints.lock().unwrap();
-            let ep = endpoints
-                .get(&endpoint)
-                .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
-            ep.pipe_ref
-        };
+            let pipe_ref = {
+                let endpoints = self.endpoints.lock().unwrap();
+                let ep = endpoints
+                    .get(&endpoint)
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
+                ep.pipe_ref
+            };
 
-        unsafe {
-            check_iokit_return(call_iokit_function!(
-                self.interface.raw,
-                ClearPipeStallBothEnds(pipe_ref)
-            ))
-        }
+            unsafe {
+                check_iokit_return(call_iokit_function!(
+                    self.interface.raw,
+                    ClearPipeStallBothEnds(pipe_ref)
+                ))
+            }
+        })
     }
 }
 

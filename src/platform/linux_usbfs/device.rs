@@ -26,8 +26,10 @@ use super::{
     SysfsPath,
 };
 use crate::descriptors::{validate_device_descriptor, Configuration, DeviceDescriptor};
+use crate::ioaction::blocking::Blocking;
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
+use crate::IoAction;
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{
@@ -48,33 +50,39 @@ pub(crate) struct LinuxDevice {
 }
 
 impl LinuxDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<LinuxDevice>, Error> {
+    pub(crate) fn from_device_info(
+        d: &DeviceInfo,
+    ) -> impl IoAction<Output = Result<crate::Device, Error>> {
         let busnum = d.busnum();
         let devnum = d.device_address();
-        let active_config = d.path.read_attr("bConfigurationValue")?;
+        let sysfs_path = d.path.clone();
 
-        let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
-        let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
-            .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
+        Blocking::new(move || {
+            let active_config = sysfs_path.read_attr("bConfigurationValue")?;
+            let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
+            let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+                .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
 
-        let inner = Self::create_inner(fd, Some(d.path.clone()), Some(active_config));
-        if inner.is_ok() {
-            debug!("Opened device bus={busnum} addr={devnum}",);
-        }
-        inner
+            let inner = Self::create_inner(fd, Some(sysfs_path), Some(active_config));
+            if inner.is_ok() {
+                debug!("Opened device bus={busnum} addr={devnum}",);
+            }
+            inner
+        })
     }
 
-    pub(crate) fn from_fd(fd: OwnedFd) -> Result<Arc<LinuxDevice>, Error> {
-        debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
-
-        Self::create_inner(fd, None, None)
+    pub(crate) fn from_fd(fd: OwnedFd) -> impl IoAction<Output = Result<crate::Device, Error>> {
+        Blocking::new(move || {
+            debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
+            Self::create_inner(fd, None, None)
+        })
     }
 
     pub(crate) fn create_inner(
         fd: OwnedFd,
         sysfs: Option<SysfsPath>,
         active_config: Option<u8>,
-    ) -> Result<Arc<LinuxDevice>, Error> {
+    ) -> Result<crate::Device, Error> {
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
             // NOTE: Seek required on android
@@ -123,7 +131,7 @@ impl LinuxDevice {
             error!("Failed to initialize event loop: {err}");
             Err(err)
         } else {
-            Ok(arc)
+            Ok(crate::Device::wrap(arc))
         }
     }
 
@@ -182,15 +190,22 @@ impl LinuxDevice {
         self.active_config.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
-        usbfs::set_configuration(&self.fd, configuration)?;
-        self.active_config.store(configuration, Ordering::SeqCst);
-        Ok(())
+    pub(crate) fn set_configuration(
+        self: Arc<Self>,
+        configuration: u8,
+    ) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            usbfs::set_configuration(&self.fd, configuration)?;
+            self.active_config.store(configuration, Ordering::SeqCst);
+            Ok(())
+        })
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
-        usbfs::reset(&self.fd)?;
-        Ok(())
+    pub(crate) fn reset(self: Arc<Self>) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            usbfs::reset(&self.fd)?;
+            Ok(())
+        })
     }
 
     /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
@@ -265,40 +280,44 @@ impl LinuxDevice {
     }
 
     pub(crate) fn claim_interface(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         interface_number: u8,
-    ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
-            warn!(
-                "Failed to claim interface {interface_number} on device id {dev}: {e}",
+    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+        Blocking::new(move || {
+            usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
+                warn!(
+                    "Failed to claim interface {interface_number} on device id {dev}: {e}",
+                    dev = self.events_id
+                )
+            })?;
+            debug!(
+                "Claimed interface {interface_number} on device id {dev}",
                 dev = self.events_id
-            )
-        })?;
-        debug!(
-            "Claimed interface {interface_number} on device id {dev}",
-            dev = self.events_id
-        );
-        Ok(Arc::new(LinuxInterface {
-            device: self.clone(),
-            interface_number,
-            reattach: false,
-        }))
+            );
+            Ok(crate::Interface::wrap(Arc::new(LinuxInterface {
+                device: self,
+                interface_number,
+                reattach: false,
+            })))
+        })
     }
 
     pub(crate) fn detach_and_claim_interface(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         interface_number: u8,
-    ) -> Result<Arc<LinuxInterface>, Error> {
-        usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
-        debug!(
-            "Detached and claimed interface {interface_number} on device id {dev}",
-            dev = self.events_id
-        );
-        Ok(Arc::new(LinuxInterface {
-            device: self.clone(),
-            interface_number,
-            reattach: true,
-        }))
+    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+        Blocking::new(move || {
+            usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
+            debug!(
+                "Detached and claimed interface {interface_number} on device id {dev}",
+                dev = self.events_id
+            );
+            Ok(crate::Interface::wrap(Arc::new(LinuxInterface {
+                device: self,
+                interface_number,
+                reattach: true,
+            })))
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -478,21 +497,28 @@ impl LinuxInterface {
         self.device.control_out_blocking(control, data, timeout)
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        debug!(
-            "Set interface {} alt setting to {alt_setting}",
-            self.interface_number
-        );
-        Ok(usbfs::set_interface(
-            &self.device.fd,
-            self.interface_number,
-            alt_setting,
-        )?)
+    pub fn set_alt_setting(
+        self: Arc<Self>,
+        alt_setting: u8,
+    ) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            debug!(
+                "Set interface {} alt setting to {alt_setting}",
+                self.interface_number
+            );
+            Ok(usbfs::set_interface(
+                &self.device.fd,
+                self.interface_number,
+                alt_setting,
+            )?)
+        })
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        debug!("Clear halt, endpoint {endpoint:02x}");
-        Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)
+    pub fn clear_halt(self: Arc<Self>, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            debug!("Clear halt, endpoint {endpoint:02x}");
+            Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)
+        })
     }
 }
 

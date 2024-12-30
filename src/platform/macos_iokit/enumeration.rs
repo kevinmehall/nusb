@@ -16,8 +16,8 @@ use io_kit_sys::{
 use log::debug;
 
 use crate::{
-    descriptors::DeviceDescriptor, BusInfo, DeviceInfo, Error, InterfaceInfo, Speed,
-    UsbControllerType,
+    descriptors::DeviceDescriptor, ioaction::Ready, BusInfo, DeviceInfo, Error, InterfaceInfo,
+    IoAction, Speed, UsbControllerType,
 };
 
 use super::iokit::{IoService, IoServiceIterator};
@@ -79,14 +79,14 @@ fn usb_controller_service_iter(
     }
 }
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(usb_service_iter()?.filter_map(probe_device))
+pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = DeviceInfo>, Error>> {
+    Ready(usb_service_iter().map(|i| i.filter_map(probe_device)))
 }
 
-pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
+pub fn list_buses() -> impl IoAction<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     // Chain all the HCI types into one iterator
     // A bit of a hack, could maybe probe IOPCIDevice and filter on children with IOClass.starts_with("AppleUSB")
-    Ok([
+    Ready(Ok([
         UsbControllerType::XHCI,
         UsbControllerType::EHCI,
         UsbControllerType::OHCI,
@@ -97,7 +97,7 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
         usb_controller_service_iter(hci_type)
             .map(|iter| iter.flat_map(|dev| probe_bus(dev, hci_type)))
     })
-    .flatten())
+    .flatten()))
 }
 
 pub(crate) fn service_by_registry_id(registry_id: u64) -> Result<IoService, Error> {
