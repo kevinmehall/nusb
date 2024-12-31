@@ -370,6 +370,18 @@ impl Speed {
             _ => None,
         }
     }
+
+    #[allow(dead_code)] // not used on all platforms
+    pub(crate) fn from_usb_version(ver: u16) -> Option<Self> {
+        match ver {
+            0x0100 => Some(Speed::Low),
+            0x0110 => Some(Speed::Full),
+            0x0200 | 0x0210 => Some(Speed::High),
+            0x0300 => Some(Speed::Super),
+            0x0310 | 0x0320 => Some(Speed::SuperPlus),
+            _ => None,
+        }
+    }
 }
 
 /// Summary information about a device's interface, available before opening a device.
