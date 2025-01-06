@@ -141,6 +141,10 @@ impl MacHotplugWatch {
     }
 }
 
+// Safety: Structurally Send and only method is &mut self, so Sync
+// doesn't have any additional requirements.
+unsafe impl Sync for MacHotplugWatch {}
+
 fn register_notification(
     port: &NotificationPort,
     dictionary: &CFDictionary,
