@@ -33,3 +33,9 @@ pub enum HotplugEvent {
     /// A device has been disconnected.
     Disconnected(DeviceId),
 }
+
+#[test]
+fn assert_send_sync() {
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<HotplugWatch>();
+}

@@ -115,6 +115,12 @@ impl WindowsHotplugWatch {
     }
 }
 
+// Safety: Effectively a Box<HotplugInner>, which is Send+Sync;
+// `registration` is accessed only in `Drop` and `CM_Unregister_Notification`
+// docs mention using a threadpool to call the function.
+unsafe impl Send for WindowsHotplugWatch {}
+unsafe impl Sync for WindowsHotplugWatch {}
+
 impl Drop for WindowsHotplugWatch {
     fn drop(&mut self) {
         unsafe {
