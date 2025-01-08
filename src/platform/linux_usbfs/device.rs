@@ -405,6 +405,10 @@ impl LinuxDevice {
         );
         return Err(ErrorKind::Other.into());
     }
+
+    pub(crate) fn descriptors(&self) -> &[u8] {
+        &self.descriptors
+    }
 }
 
 impl Drop for LinuxDevice {
