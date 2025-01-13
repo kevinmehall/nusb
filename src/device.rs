@@ -9,7 +9,7 @@ use crate::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
         TransferFuture,
     },
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 use log::error;
 use std::{io::ErrorKind, sync::Arc, time::Duration};
@@ -357,6 +357,19 @@ impl Device {
     pub fn device_descriptor(&self) -> Option<DeviceDescriptor> {
         let buf = self.backend.descriptors();
         validate_device_descriptor(&buf).map(|len| DeviceDescriptor::new(&buf[0..len]))
+    }
+
+    /// Get device speed.
+    ///
+    /// On most platforms, the speed is stored by the OS, and calling this method should not
+    /// make any request to the device.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * This is only supported on Linux at present.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn get_speed(&self) -> Result<Option<Speed>, Error> {
+        self.backend.get_speed()
     }
 }
 

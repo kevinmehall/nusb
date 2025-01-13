@@ -33,7 +33,7 @@ use crate::{
     transfer::{
         notify_completion, Control, Direction, EndpointType, TransferError, TransferHandle,
     },
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 
 pub(crate) struct LinuxDevice {
@@ -408,6 +408,20 @@ impl LinuxDevice {
 
     pub(crate) fn descriptors(&self) -> &[u8] {
         &self.descriptors
+    }
+
+    pub(crate) fn get_speed(&self) -> Result<Option<Speed>, Error> {
+        usbfs::get_speed(&self.fd)
+            .map_err(|errno| errno.into())
+            .map(|raw_speed| match raw_speed {
+                1 => Some(Speed::Low),
+                2 => Some(Speed::Full),
+                3 => Some(Speed::High),
+                // 4 is wireless USB, but we don't support it
+                5 => Some(Speed::Super),
+                6 => Some(Speed::SuperPlus),
+                _ => None,
+            })
     }
 }
 
