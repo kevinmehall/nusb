@@ -231,6 +231,11 @@ impl DeviceDescriptor {
         Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
     }
 
+    /// Get the bytes of the descriptor.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     pub(crate) fn from_fields(
         usb_version: u16,
         class: u8,
