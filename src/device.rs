@@ -97,21 +97,11 @@ impl Device {
     /// Get the device descriptor.
     ///
     /// This returns cached data and does not perform IO.
-    ///
-    /// ### Platform-specific notes
-    ///
-    /// * This is only supported on Linux and Windows at present.
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     pub fn device_descriptor(&self) -> DeviceDescriptor {
         self.backend.device_descriptor()
     }
 
     /// Get device speed.
-    ///
-    /// ### Platform-specific notes
-    ///
-    /// * This is only supported on Linux and Windows at present.
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     pub fn speed(&self) -> Option<Speed> {
         self.backend.speed()
     }

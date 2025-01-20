@@ -230,6 +230,42 @@ impl DeviceDescriptor {
         assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
         Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
     }
+
+    pub(crate) fn from_fields(
+        usb_version: u16,
+        class: u8,
+        subclass: u8,
+        protocol: u8,
+        max_packet_size_0: u8,
+        vendor_id: u16,
+        product_id: u16,
+        device_version: u16,
+        manufacturer_string_index: u8,
+        product_string_index: u8,
+        serial_number_string_index: u8,
+        num_configurations: u8,
+    ) -> DeviceDescriptor {
+        DeviceDescriptor([
+            DESCRIPTOR_LEN_DEVICE,
+            DESCRIPTOR_TYPE_DEVICE,
+            usb_version.to_le_bytes()[0],
+            usb_version.to_le_bytes()[1],
+            class,
+            subclass,
+            protocol,
+            max_packet_size_0,
+            vendor_id.to_le_bytes()[0],
+            vendor_id.to_le_bytes()[1],
+            product_id.to_le_bytes()[0],
+            product_id.to_le_bytes()[1],
+            device_version.to_le_bytes()[0],
+            device_version.to_le_bytes()[1],
+            manufacturer_string_index,
+            product_string_index,
+            serial_number_string_index,
+            num_configurations,
+        ])
+    }
 }
 
 descriptor_fields! {

@@ -15,7 +15,10 @@ use io_kit_sys::{
 };
 use log::debug;
 
-use crate::{BusInfo, DeviceInfo, Error, InterfaceInfo, Speed, UsbControllerType};
+use crate::{
+    descriptors::DeviceDescriptor, BusInfo, DeviceInfo, Error, InterfaceInfo, Speed,
+    UsbControllerType,
+};
 
 use super::iokit::{IoService, IoServiceIterator};
 /// IOKit class name for PCI USB XHCI high-speed controllers (USB 3.0+)
@@ -266,6 +269,25 @@ fn parse_location_id(id: u32) -> Vec<u8> {
     }
 
     chain
+}
+
+/// There is no API in iokit to get the cached device descriptor as bytes, but
+/// we have all the fields to rebuild it exactly.
+pub(crate) fn device_descriptor_from_fields(device: &IoService) -> Option<DeviceDescriptor> {
+    Some(DeviceDescriptor::from_fields(
+        get_integer_property(&device, "bcdUSB")? as u16,
+        get_integer_property(&device, "bDeviceClass")? as u8,
+        get_integer_property(&device, "bDeviceSubClass")? as u8,
+        get_integer_property(&device, "bDeviceProtocol")? as u8,
+        get_integer_property(&device, "bMaxPacketSize0")? as u8,
+        get_integer_property(&device, "idVendor")? as u16,
+        get_integer_property(&device, "idProduct")? as u16,
+        get_integer_property(&device, "bcdDevice")? as u16,
+        get_integer_property(&device, "iManufacturer")? as u8,
+        get_integer_property(&device, "iProduct")? as u8,
+        get_integer_property(&device, "iSerialNumber")? as u8,
+        get_integer_property(&device, "bNumConfigurations")? as u8,
+    ))
 }
 
 #[test]
