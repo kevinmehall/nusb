@@ -29,14 +29,7 @@ fn inspect_device(dev: DeviceInfo) {
 
     let timeout = Duration::from_millis(100);
 
-    let dev_descriptor = dev.get_descriptor(0x01, 0, 0, timeout).unwrap();
-    if dev_descriptor.len() < 18
-        || dev_descriptor[0] as usize > dev_descriptor.len()
-        || dev_descriptor[1] != 0x01
-    {
-        println!("  Invalid device descriptor: {dev_descriptor:?}");
-        return;
-    }
+    let dev_descriptor = dev.device_descriptor();
 
     let languages: Vec<u16> = dev
         .get_string_descriptor_supported_languages(timeout)
@@ -46,20 +39,17 @@ fn inspect_device(dev: DeviceInfo) {
 
     let language = languages.first().copied().unwrap_or(US_ENGLISH);
 
-    let i_manufacturer = dev_descriptor[14];
-    if i_manufacturer != 0 {
+    if let Some(i_manufacturer) = dev_descriptor.manufacturer_string_index() {
         let s = dev.get_string_descriptor(i_manufacturer, language, timeout);
         println!("  Manufacturer({i_manufacturer}): {s:?}");
     }
 
-    let i_product = dev_descriptor[15];
-    if i_product != 0 {
+    if let Some(i_product) = dev_descriptor.product_string_index() {
         let s = dev.get_string_descriptor(i_product, language, timeout);
         println!("  Product({i_product}): {s:?}");
     }
 
-    let i_serial = dev_descriptor[16];
-    if i_serial != 0 {
+    if let Some(i_serial) = dev_descriptor.serial_number_string_index() {
         let s = dev.get_string_descriptor(i_serial, language, timeout);
         println!("  Serial({i_serial}): {s:?}");
     }

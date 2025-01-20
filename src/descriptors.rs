@@ -17,6 +17,7 @@ use crate::{
     Error,
 };
 
+pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
 
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
@@ -164,13 +165,13 @@ impl<'a> Iterator for Descriptors<'a> {
 }
 
 macro_rules! descriptor_fields {
-    (impl<'a> $tname:ident<'a> {
+    (impl $(<$( $i_lt:lifetime ),+>)? $tname:ident $(<$( $t_lt:lifetime ),+>)? {
         $(
             $(#[$attr:meta])*
             $vis:vis fn $name:ident at $pos:literal -> $ty:ty;
         )*
     }) => {
-        impl<'a> $tname<'a> {
+        impl $(<$( $i_lt ),+>)? $tname $(<$( $t_lt ),+>)? {
             $(
                 $(#[$attr])*
                 #[inline]
@@ -180,6 +181,189 @@ macro_rules! descriptor_fields {
     }
 }
 
+/// Check whether the buffer contains a valid device descriptor.
+/// On success, it will return length of the descriptor, or returns `None`.
+#[allow(unused)]
+pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
+    if buf.len() < DESCRIPTOR_LEN_DEVICE as usize {
+        if buf.len() != 0 {
+            warn!(
+                "device descriptor buffer is {} bytes, need {}",
+                buf.len(),
+                DESCRIPTOR_LEN_DEVICE
+            );
+        }
+        return None;
+    }
+
+    if buf[0] < DESCRIPTOR_LEN_DEVICE {
+        warn!("invalid device descriptor bLength");
+        return None;
+    }
+
+    if buf[1] != DESCRIPTOR_TYPE_DEVICE {
+        warn!(
+            "device bDescriptorType is {}, not a device descriptor",
+            buf[1]
+        );
+        return None;
+    }
+
+    return Some(buf[0] as usize);
+}
+
+/// Information about a USB device.
+#[derive(Clone)]
+pub struct DeviceDescriptor([u8; DESCRIPTOR_LEN_DEVICE as usize]);
+
+impl DeviceDescriptor {
+    /// Create a `DeviceDescriptor` from a buffer beginning with a device descriptor.
+    ///
+    /// You normally obtain a `DeviceDescriptor` from a [`Device`][crate::Device], but this allows creating
+    /// one from your own descriptor bytes for tests.
+    ///
+    /// ### Panics
+    ///  * when the buffer is too short for a device descriptor
+    ///  * when the first descriptor is not a device descriptor
+    pub fn new(buf: &[u8]) -> Self {
+        assert!(buf.len() >= DESCRIPTOR_LEN_DEVICE as usize);
+        assert!(buf[0] as usize >= DESCRIPTOR_LEN_DEVICE as usize);
+        assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
+        Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
+    }
+
+    /// Get the bytes of the descriptor.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    #[allow(unused)]
+    pub(crate) fn from_fields(
+        usb_version: u16,
+        class: u8,
+        subclass: u8,
+        protocol: u8,
+        max_packet_size_0: u8,
+        vendor_id: u16,
+        product_id: u16,
+        device_version: u16,
+        manufacturer_string_index: u8,
+        product_string_index: u8,
+        serial_number_string_index: u8,
+        num_configurations: u8,
+    ) -> DeviceDescriptor {
+        DeviceDescriptor([
+            DESCRIPTOR_LEN_DEVICE,
+            DESCRIPTOR_TYPE_DEVICE,
+            usb_version.to_le_bytes()[0],
+            usb_version.to_le_bytes()[1],
+            class,
+            subclass,
+            protocol,
+            max_packet_size_0,
+            vendor_id.to_le_bytes()[0],
+            vendor_id.to_le_bytes()[1],
+            product_id.to_le_bytes()[0],
+            product_id.to_le_bytes()[1],
+            device_version.to_le_bytes()[0],
+            device_version.to_le_bytes()[1],
+            manufacturer_string_index,
+            product_string_index,
+            serial_number_string_index,
+            num_configurations,
+        ])
+    }
+}
+
+descriptor_fields! {
+    impl DeviceDescriptor {
+        /// `bcdUSB` descriptor field: USB Specification Number.
+        #[doc(alias = "bcdUSB")]
+        pub fn usb_version at 2 -> u16;
+
+        /// `bDeviceClass` descriptor field: Class code, assigned by USB-IF.
+        #[doc(alias = "bDeviceClass")]
+        pub fn class at 4 -> u8;
+
+        /// `bDeviceSubClass` descriptor field: Subclass code, assigned by USB-IF.
+        #[doc(alias = "bDeviceSubClass")]
+        pub fn subclass at 5 -> u8;
+
+        /// `bDeviceProtocol` descriptor field: Protocol code, assigned by USB-IF.
+        #[doc(alias = "bDeviceProtocol")]
+        pub fn protocol at 6 -> u8;
+
+        /// `bMaxPacketSize0` descriptor field: Maximum packet size for 0 Endpoint.
+        #[doc(alias = "bMaxPacketSize0")]
+        pub fn max_packet_size_0 at 7 -> u8;
+
+        /// `idVendor` descriptor field: Vendor ID, assigned by USB-IF.
+        #[doc(alias = "idVendor")]
+        pub fn vendor_id at 8 -> u16;
+
+        /// `idProduct` descriptor field: Product ID, assigned by the manufacturer.
+        #[doc(alias = "idProduct")]
+        pub fn product_id at 10 -> u16;
+
+        /// `bcdDevice` descriptor field: Device release number.
+        #[doc(alias = "bcdDevice")]
+        pub fn device_version at 12 -> u16;
+
+        fn manufacturer_string_index_raw at 14 -> u8;
+        fn product_string_index_raw at 15 -> u8;
+        fn serial_number_string_index_raw at 16 -> u8;
+
+        /// `bNumConfigurations` descriptor field: Number of configurations
+        #[doc(alias = "bNumConfigurations")]
+        pub fn num_configurations at 17 -> u8;
+    }
+}
+
+impl DeviceDescriptor {
+    /// `iManufacturer` descriptor field: Index for manufacturer description string.
+    pub fn manufacturer_string_index(&self) -> Option<u8> {
+        Some(self.manufacturer_string_index_raw()).filter(|&i| i != 0)
+    }
+
+    /// `iProduct` descriptor field: Index for product description string.
+    pub fn product_string_index(&self) -> Option<u8> {
+        Some(self.product_string_index_raw()).filter(|&i| i != 0)
+    }
+
+    /// `iSerialNumber` descriptor field: Index for serial number string.
+    pub fn serial_number_string_index(&self) -> Option<u8> {
+        Some(self.serial_number_string_index_raw()).filter(|&i| i != 0)
+    }
+}
+impl Debug for DeviceDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceDescriptor")
+            .field("usb_version", &format_args!("0x{:04X}", self.usb_version()))
+            .field("class", &format_args!("0x{:02X}", self.class()))
+            .field("subclass", &format_args!("0x{:02X}", self.subclass()))
+            .field("protocol", &format_args!("0x{:02X}", self.protocol()))
+            .field("max_packet_size_0", &self.max_packet_size_0())
+            .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id()))
+            .field("product_id", &format_args!("0x{:04X}", self.product_id()))
+            .field(
+                "device_version",
+                &format_args!("0x{:04X}", self.device_version()),
+            )
+            .field(
+                "manufacturer_string_index",
+                &self.manufacturer_string_index(),
+            )
+            .field("product_string_index", &self.product_string_index())
+            .field(
+                "serial_number_string_index",
+                &self.serial_number_string_index(),
+            )
+            .field("num_configurations", &self.num_configurations())
+            .finish()
+    }
+}
+
+#[allow(unused)]
 pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
     if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
         if buf.len() != 0 {
@@ -549,6 +733,7 @@ impl From<ActiveConfigurationError> for Error {
 }
 
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
+#[allow(unused)]
 pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iterator<Item = &[u8]> {
     iter::from_fn(move || {
         let total_len = validate_config_descriptor(buf)?;
@@ -659,6 +844,23 @@ fn test_malformed() {
 #[test]
 #[rustfmt::skip]
 fn test_linux_root_hub() {
+    let dev = DeviceDescriptor::new(&[
+        0x12, 0x01, 0x00, 0x02, 0x09, 0x00, 0x01, 0x40, 0x6b,
+        0x1d, 0x02, 0x00, 0x10, 0x05, 0x03, 0x02, 0x01, 0x01
+    ]);
+    assert_eq!(dev.usb_version(), 0x0200);
+    assert_eq!(dev.class(), 0x09);
+    assert_eq!(dev.subclass(), 0x00);
+    assert_eq!(dev.protocol(), 0x01);
+    assert_eq!(dev.max_packet_size_0(), 64);
+    assert_eq!(dev.vendor_id(), 0x1d6b);
+    assert_eq!(dev.product_id(), 0x0002);
+    assert_eq!(dev.device_version(), 0x0510);
+    assert_eq!(dev.manufacturer_string_index(), Some(3));
+    assert_eq!(dev.product_string_index(), Some(2));
+    assert_eq!(dev.serial_number_string_index(), Some(1));
+    assert_eq!(dev.num_configurations(), 1);
+
     let c = Configuration(&[
         0x09, 0x02, 0x19, 0x00, 0x01, 0x01, 0x00, 0xe0, 0x00,
         0x09, 0x04, 0x00, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00,

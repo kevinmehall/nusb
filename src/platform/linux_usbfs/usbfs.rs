@@ -286,3 +286,10 @@ pub fn clear_halt<Fd: AsFd>(fd: Fd, endpoint: u8) -> io::Result<()> {
         ioctl::ioctl(fd, ctl)
     }
 }
+
+pub fn get_speed<Fd: AsFd>(fd: Fd) -> io::Result<usize> {
+    unsafe {
+        let ctl = Transfer::<ioctl::NoneOpcode<b'U', 31, ()>, ()>::new(());
+        ioctl::ioctl(fd, ctl)
+    }
+}

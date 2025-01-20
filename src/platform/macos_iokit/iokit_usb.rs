@@ -39,7 +39,7 @@ pub(crate) struct IoKitDevice {
 
 impl IoKitDevice {
     /// Get the raw USB device associated with the service.
-    pub(crate) fn new(service: IoService) -> Result<IoKitDevice, Error> {
+    pub(crate) fn new(service: &IoService) -> Result<IoKitDevice, Error> {
         unsafe {
             // According to the libusb maintainers, this will sometimes spuriously
             // return `kIOReturnNoResources` for reasons Apple won't explain, usually

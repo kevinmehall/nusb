@@ -25,6 +25,10 @@ fn inspect_device(dev: DeviceInfo) {
         }
     };
 
+    println!("{:#?}", dev.device_descriptor());
+
+    println!("Speed: {:?}", dev.speed());
+
     match dev.active_configuration() {
         Ok(config) => println!("Active configuration is {}", config.configuration_value()),
         Err(e) => println!("Unknown active configuration: {e}"),

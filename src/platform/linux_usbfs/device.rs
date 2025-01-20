@@ -25,7 +25,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
-use crate::descriptors::Configuration;
+use crate::descriptors::{validate_device_descriptor, Configuration, DeviceDescriptor};
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
 use crate::{
@@ -33,7 +33,7 @@ use crate::{
     transfer::{
         notify_completion, Control, Direction, EndpointType, TransferError, TransferHandle,
     },
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 
 pub(crate) struct LinuxDevice {
@@ -82,6 +82,13 @@ impl LinuxDevice {
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             buf
+        };
+
+        let Some(_) = validate_device_descriptor(&descriptors) else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid device descriptor",
+            ));
         };
 
         let active_config = if let Some(active_config) = active_config {
@@ -150,6 +157,10 @@ impl LinuxDevice {
                 error!("Unexpected error {e} from REAPURBNDELAY");
             }
         }
+    }
+
+    pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
+        DeviceDescriptor::new(&self.descriptors)
     }
 
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
@@ -404,6 +415,21 @@ impl LinuxDevice {
             fd.as_raw_fd()
         );
         return Err(ErrorKind::Other.into());
+    }
+
+    pub(crate) fn speed(&self) -> Option<Speed> {
+        usbfs::get_speed(&self.fd)
+            .inspect_err(|e| log::error!("USBDEVFS_GET_SPEED failed: {e}"))
+            .ok()
+            .and_then(|raw_speed| match raw_speed {
+                1 => Some(Speed::Low),
+                2 => Some(Speed::Full),
+                3 => Some(Speed::High),
+                // 4 is wireless USB, but we don't support it
+                5 => Some(Speed::Super),
+                6 => Some(Speed::SuperPlus),
+                _ => None,
+            })
     }
 }
 

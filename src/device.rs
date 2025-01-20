@@ -1,14 +1,14 @@
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
-        Configuration, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
+        Configuration, DeviceDescriptor, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
     },
     platform,
     transfer::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
         TransferFuture,
     },
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 use log::error;
 use std::{io::ErrorKind, sync::Arc, time::Duration};
@@ -92,6 +92,18 @@ impl Device {
         let _ = interface;
 
         Ok(())
+    }
+
+    /// Get the device descriptor.
+    ///
+    /// This returns cached data and does not perform IO.
+    pub fn device_descriptor(&self) -> DeviceDescriptor {
+        self.backend.device_descriptor()
+    }
+
+    /// Get device speed.
+    pub fn speed(&self) -> Option<Speed> {
+        self.backend.speed()
     }
 
     /// Get information about the active configuration.

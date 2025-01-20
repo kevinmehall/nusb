@@ -12,9 +12,10 @@ use std::{
 use log::{debug, error};
 
 use crate::{
-    platform::macos_iokit::events::add_event_source,
+    descriptors::DeviceDescriptor,
+    platform::macos_iokit::{enumeration::device_descriptor_from_fields, events::add_event_source},
     transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 
 use super::{
@@ -29,6 +30,8 @@ use super::{
 pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
     pub(super) device: IoKitDevice,
+    device_descriptor: DeviceDescriptor,
+    speed: Option<Speed>,
     active_config: AtomicU8,
     is_open_exclusive: Mutex<bool>,
     claimed_interfaces: AtomicUsize,
@@ -51,7 +54,7 @@ impl MacDevice {
     pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<MacDevice>, Error> {
         log::info!("Opening device from registry id {}", d.registry_id);
         let service = service_by_registry_id(d.registry_id)?;
-        let device = IoKitDevice::new(service)?;
+        let device = IoKitDevice::new(&service)?;
         let _event_registration = add_event_source(device.create_async_event_source()?);
 
         let opened = match unsafe { call_iokit_function!(device.raw, USBDeviceOpen()) } {
@@ -63,6 +66,13 @@ impl MacDevice {
                 false
             }
         };
+
+        let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Other,
+                "could not read properties for device descriptor",
+            )
+        })?;
 
         let active_config = if let Some(active_config) = guess_active_config(&device) {
             log::debug!("Active config from single descriptor is {}", active_config);
@@ -76,10 +86,20 @@ impl MacDevice {
         Ok(Arc::new(MacDevice {
             _event_registration,
             device,
+            device_descriptor,
+            speed: d.speed,
             active_config: AtomicU8::new(active_config),
             is_open_exclusive: Mutex::new(opened),
             claimed_interfaces: AtomicUsize::new(0),
         }))
+    }
+
+    pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
+        self.device_descriptor.clone()
+    }
+
+    pub(crate) fn speed(&self) -> Option<Speed> {
+        self.speed
     }
 
     pub(crate) fn active_configuration_value(&self) -> u8 {
