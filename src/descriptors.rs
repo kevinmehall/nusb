@@ -183,6 +183,7 @@ macro_rules! descriptor_fields {
 
 /// Check whether the buffer contains a valid device descriptor.
 /// On success, it will return length of the descriptor, or returns `None`.
+#[allow(unused)]
 pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
     if buf.len() < DESCRIPTOR_LEN_DEVICE as usize {
         if buf.len() != 0 {
@@ -236,6 +237,7 @@ impl DeviceDescriptor {
         &self.0
     }
 
+    #[allow(unused)]
     pub(crate) fn from_fields(
         usb_version: u16,
         class: u8,
@@ -361,6 +363,7 @@ impl Debug for DeviceDescriptor {
     }
 }
 
+#[allow(unused)]
 pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
     if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
         if buf.len() != 0 {
@@ -730,6 +733,7 @@ impl From<ActiveConfigurationError> for Error {
 }
 
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
+#[allow(unused)]
 pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iterator<Item = &[u8]> {
     iter::from_fn(move || {
         let total_len = validate_config_descriptor(buf)?;
