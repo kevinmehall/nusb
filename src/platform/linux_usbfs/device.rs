@@ -25,7 +25,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
-use crate::descriptors::{validate_device_descriptor, Configuration, DeviceDescriptor};
+use crate::descriptors::{validate_device_descriptor, ConfigurationDescriptor, DeviceDescriptor};
 use crate::maybe_future::{blocking::Blocking, MaybeFuture};
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
@@ -422,7 +422,7 @@ impl LinuxDevice {
         // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
         let mut descriptors =
             parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
-                .map(Configuration::new);
+                .map(ConfigurationDescriptor::new);
 
         if let Some(config) = descriptors.next() {
             return Ok(config.configuration_value());

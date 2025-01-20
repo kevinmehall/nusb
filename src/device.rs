@@ -1,7 +1,7 @@
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
-        Configuration, DeviceDescriptor, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
+        ConfigurationDescriptor, DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
     },
     platform,
     transfer::{
@@ -118,7 +118,9 @@ impl Device {
     /// This returns cached data and does not perform IO. However, it can fail if the
     /// device is unconfigured, or if it can't find a configuration descriptor for
     /// the configuration reported as active by the OS.
-    pub fn active_configuration(&self) -> Result<Configuration, ActiveConfigurationError> {
+    pub fn active_configuration(
+        &self,
+    ) -> Result<ConfigurationDescriptor, ActiveConfigurationError> {
         let active = self.backend.active_configuration_value();
 
         self.configurations()
@@ -131,10 +133,10 @@ impl Device {
     /// Get an iterator returning information about each configuration of the device.
     ///
     /// This returns cached data and does not perform IO.
-    pub fn configurations(&self) -> impl Iterator<Item = Configuration> {
+    pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor> {
         self.backend
             .configuration_descriptors()
-            .map(Configuration::new)
+            .map(ConfigurationDescriptor::new)
     }
 
     /// Set the device configuration.
@@ -596,14 +598,14 @@ impl Interface {
     /// Get the interface descriptors for the alternate settings of this interface.
     ///
     /// This returns cached data and does not perform IO.
-    pub fn descriptors(&self) -> impl Iterator<Item = InterfaceAltSetting> {
+    pub fn descriptors(&self) -> impl Iterator<Item = InterfaceDescriptor> {
         let active = self.backend.device.active_configuration_value();
 
         let configuration = self
             .backend
             .device
             .configuration_descriptors()
-            .map(Configuration::new)
+            .map(ConfigurationDescriptor::new)
             .find(|c| c.configuration_value() == active);
 
         configuration
