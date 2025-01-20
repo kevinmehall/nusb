@@ -302,14 +302,9 @@ descriptor_fields! {
         #[doc(alias = "bcdDevice")]
         pub fn device_version at 12 -> u16;
 
-        /// `iManufacturer` descriptor field: Index for manufacturer description string.
-        pub fn manufacturer_string_index at 14 -> u8;
-
-        /// `iProduct` descriptor field: Index for product description string.
-        pub fn product_string_index at 15 -> u8;
-
-        /// `iSerialNumber` descriptor field: Index for serial number string.
-        pub fn serial_number_string_index at 16 -> u8;
+        fn manufacturer_string_index_raw at 14 -> u8;
+        fn product_string_index_raw at 15 -> u8;
+        fn serial_number_string_index_raw at 16 -> u8;
 
         /// `bNumConfigurations` descriptor field: Number of configurations
         #[doc(alias = "bNumConfigurations")]
@@ -317,6 +312,22 @@ descriptor_fields! {
     }
 }
 
+impl DeviceDescriptor {
+    /// `iManufacturer` descriptor field: Index for manufacturer description string.
+    pub fn manufacturer_string_index(&self) -> Option<u8> {
+        Some(self.manufacturer_string_index_raw()).filter(|&i| i != 0)
+    }
+
+    /// `iProduct` descriptor field: Index for product description string.
+    pub fn product_string_index(&self) -> Option<u8> {
+        Some(self.product_string_index_raw()).filter(|&i| i != 0)
+    }
+
+    /// `iSerialNumber` descriptor field: Index for serial number string.
+    pub fn serial_number_string_index(&self) -> Option<u8> {
+        Some(self.serial_number_string_index_raw()).filter(|&i| i != 0)
+    }
+}
 impl Debug for DeviceDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeviceDescriptor")
@@ -836,9 +847,9 @@ fn test_linux_root_hub() {
     assert_eq!(dev.vendor_id(), 0x1d6b);
     assert_eq!(dev.product_id(), 0x0002);
     assert_eq!(dev.device_version(), 0x0510);
-    assert_eq!(dev.manufacturer_string_index(), 3);
-    assert_eq!(dev.product_string_index(), 2);
-    assert_eq!(dev.serial_number_string_index(), 1);
+    assert_eq!(dev.manufacturer_string_index(), Some(3));
+    assert_eq!(dev.product_string_index(), Some(2));
+    assert_eq!(dev.serial_number_string_index(), Some(1));
     assert_eq!(dev.num_configurations(), 1);
 
     let c = Configuration(&[
