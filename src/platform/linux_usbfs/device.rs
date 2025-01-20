@@ -417,10 +417,11 @@ impl LinuxDevice {
         return Err(ErrorKind::Other.into());
     }
 
-    pub(crate) fn get_speed(&self) -> Result<Option<Speed>, Error> {
+    pub(crate) fn speed(&self) -> Option<Speed> {
         usbfs::get_speed(&self.fd)
-            .map_err(|errno| errno.into())
-            .map(|raw_speed| match raw_speed {
+            .inspect_err(|e| log::error!("USBDEVFS_GET_SPEED failed: {e}"))
+            .ok()
+            .and_then(|raw_speed| match raw_speed {
                 1 => Some(Speed::Low),
                 2 => Some(Speed::Full),
                 3 => Some(Speed::High),

@@ -106,6 +106,16 @@ impl Device {
         self.backend.device_descriptor()
     }
 
+    /// Get device speed.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * This is only supported on Linux at present.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn speed(&self) -> Option<Speed> {
+        self.backend.speed()
+    }
+
     /// Get information about the active configuration.
     ///
     /// This returns cached data and does not perform IO. However, it can fail if the
@@ -352,18 +362,6 @@ impl Device {
         let mut t = self.backend.make_control_transfer();
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
-    }
-    /// Get device speed.
-    ///
-    /// On most platforms, the speed is stored by the OS, and calling this method should not
-    /// make any request to the device.
-    ///
-    /// ### Platform-specific notes
-    ///
-    /// * This is only supported on Linux at present.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub fn get_speed(&self) -> Result<Option<Speed>, Error> {
-        self.backend.get_speed()
     }
 }
 
