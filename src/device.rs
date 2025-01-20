@@ -1,8 +1,7 @@
 use crate::{
     descriptors::{
-        decode_string_descriptor, validate_device_descriptor, validate_string_descriptor,
-        ActiveConfigurationError, Configuration, DeviceDescriptor, InterfaceAltSetting,
-        DESCRIPTOR_TYPE_STRING,
+        decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
+        Configuration, DeviceDescriptor, InterfaceAltSetting, DESCRIPTOR_TYPE_STRING,
     },
     platform,
     transfer::{
@@ -93,6 +92,18 @@ impl Device {
         let _ = interface;
 
         Ok(())
+    }
+
+    /// Get the device descriptor.
+    ///
+    /// This returns cached data and does not perform IO.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * This is only supported on Linux at present.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn device_descriptor(&self) -> DeviceDescriptor {
+        self.backend.device_descriptor()
     }
 
     /// Get information about the active configuration.
@@ -342,23 +353,6 @@ impl Device {
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
-
-    /// Get the device descriptor.
-    ///
-    /// The only situation when it returns `None` is
-    /// that the cached descriptors contain no valid device descriptor.
-    ///
-    /// ### Platform-specific notes
-    ///
-    /// * This is only supported on Linux at present.
-    /// * On Linux, this method uses descriptors cached in memory, instead
-    ///   of sending a request to the device for a descriptor.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub fn device_descriptor(&self) -> Option<DeviceDescriptor> {
-        let buf = self.backend.descriptors();
-        validate_device_descriptor(&buf).map(|len| DeviceDescriptor::new(&buf[0..len]))
-    }
-
     /// Get device speed.
     ///
     /// On most platforms, the speed is stored by the OS, and calling this method should not

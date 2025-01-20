@@ -165,13 +165,13 @@ impl<'a> Iterator for Descriptors<'a> {
 }
 
 macro_rules! descriptor_fields {
-    (impl<'a> $tname:ident<'a> {
+    (impl $(<$( $i_lt:lifetime ),+>)? $tname:ident $(<$( $t_lt:lifetime ),+>)? {
         $(
             $(#[$attr:meta])*
             $vis:vis fn $name:ident at $pos:literal -> $ty:ty;
         )*
     }) => {
-        impl<'a> $tname<'a> {
+        impl $(<$( $i_lt ),+>)? $tname $(<$( $t_lt ),+>)? {
             $(
                 $(#[$attr])*
                 #[inline]
@@ -213,10 +213,10 @@ pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
 
 /// Information about a USB device.
 #[derive(Clone)]
-pub struct DeviceDescriptor<'a>(&'a [u8]);
+pub struct DeviceDescriptor([u8; DESCRIPTOR_LEN_DEVICE as usize]);
 
-impl<'a> DeviceDescriptor<'a> {
-    /// Create a `DeviceDescriptor` from a buffer containing a series of descriptors.
+impl DeviceDescriptor {
+    /// Create a `DeviceDescriptor` from a buffer beginning with a device descriptor.
     ///
     /// You normally obtain a `DeviceDescriptor` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
@@ -224,16 +224,16 @@ impl<'a> DeviceDescriptor<'a> {
     /// ### Panics
     ///  * when the buffer is too short for a device descriptor
     ///  * when the first descriptor is not a device descriptor
-    pub fn new(buf: &'a [u8]) -> Self {
+    pub fn new(buf: &[u8]) -> Self {
         assert!(buf.len() >= DESCRIPTOR_LEN_DEVICE as usize);
         assert!(buf[0] as usize >= DESCRIPTOR_LEN_DEVICE as usize);
         assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
-        Self(buf)
+        Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
     }
 }
 
 descriptor_fields! {
-    impl<'a> DeviceDescriptor<'a> {
+    impl DeviceDescriptor {
         /// `bcdUSB` descriptor field: USB Specification Number.
         #[doc(alias = "bcdUSB")]
         pub fn usb_version at 2 -> u16;
@@ -281,7 +281,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Debug for DeviceDescriptor<'a> {
+impl Debug for DeviceDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeviceDescriptor")
             .field("usb_version", &format_args!("0x{:04X}", self.usb_version()))

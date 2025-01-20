@@ -25,7 +25,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
-use crate::descriptors::Configuration;
+use crate::descriptors::{validate_device_descriptor, Configuration, DeviceDescriptor};
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
 use crate::{
@@ -82,6 +82,13 @@ impl LinuxDevice {
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             buf
+        };
+
+        let Some(_) = validate_device_descriptor(&descriptors) else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid device descriptor",
+            ));
         };
 
         let active_config = if let Some(active_config) = active_config {
@@ -150,6 +157,10 @@ impl LinuxDevice {
                 error!("Unexpected error {e} from REAPURBNDELAY");
             }
         }
+    }
+
+    pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
+        DeviceDescriptor::new(&self.descriptors)
     }
 
     pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
@@ -404,10 +415,6 @@ impl LinuxDevice {
             fd.as_raw_fd()
         );
         return Err(ErrorKind::Other.into());
-    }
-
-    pub(crate) fn descriptors(&self) -> &[u8] {
-        &self.descriptors
     }
 
     pub(crate) fn get_speed(&self) -> Result<Option<Speed>, Error> {
