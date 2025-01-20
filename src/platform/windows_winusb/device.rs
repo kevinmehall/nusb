@@ -2,7 +2,7 @@ use std::{
     collections::{btree_map::Entry, BTreeMap},
     ffi::c_void,
     io::{self, ErrorKind},
-    mem::size_of_val,
+    mem::{size_of_val, transmute},
     os::windows::{
         io::{AsRawHandle, RawHandle},
         prelude::OwnedHandle,
@@ -23,9 +23,12 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    descriptors::{validate_config_descriptor, DESCRIPTOR_TYPE_CONFIGURATION},
+    descriptors::{
+        validate_config_descriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
+        DESCRIPTOR_TYPE_CONFIGURATION,
+    },
     transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
-    DeviceInfo, Error,
+    DeviceInfo, Error, Speed,
 };
 
 use super::{
@@ -38,8 +41,10 @@ use super::{
 };
 
 pub(crate) struct WindowsDevice {
+    device_descriptor: DeviceDescriptor,
     config_descriptors: Vec<Vec<u8>>,
     active_config: u8,
+    speed: Option<Speed>,
     devinst: DevInst,
     handles: Mutex<BTreeMap<u8, WinusbFileHandle>>,
 }
@@ -54,8 +59,15 @@ impl WindowsDevice {
         // instead.
         let hub_port = HubPort::by_child_devinst(d.devinst)?;
         let connection_info = hub_port.get_info()?;
-        let num_configurations = connection_info.device_desc.bNumConfigurations;
 
+        // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
+        let device_descriptor = unsafe {
+            DeviceDescriptor::new(&transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
+                connection_info.device_desc,
+            ))
+        };
+
+        let num_configurations = connection_info.device_desc.bNumConfigurations;
         let config_descriptors = (0..num_configurations)
             .flat_map(|i| {
                 let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
@@ -70,11 +82,21 @@ impl WindowsDevice {
             .collect();
 
         Ok(Arc::new(WindowsDevice {
+            device_descriptor,
             config_descriptors,
+            speed: connection_info.speed,
             active_config: connection_info.active_config,
             devinst: d.devinst,
             handles: Mutex::new(BTreeMap::new()),
         }))
+    }
+
+    pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
+        self.device_descriptor.clone()
+    }
+
+    pub(crate) fn speed(&self) -> Option<Speed> {
+        self.speed
     }
 
     pub(crate) fn active_configuration_value(&self) -> u8 {
