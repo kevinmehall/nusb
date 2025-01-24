@@ -112,18 +112,6 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
 
     let location_id = get_integer_property(&device, "locationID")? as u32;
 
-    let serial_number = if let Some(sn) = get_string_property(&device, "kUSBSerialNumberString") {
-        Some(sn)
-    } else {
-        get_string_property(&device, "USB Serial Number")
-    };
-
-    let product_string = if let Some(product) = get_string_property(&device, "kUSBProductString") {
-        Some(product)
-    } else {
-        get_string_property(&device, "USB Product Name")
-    };
-
     // Can run `ioreg -p IOUSB -l` to see all properties
     Some(DeviceInfo {
         registry_id,
