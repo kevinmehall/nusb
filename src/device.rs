@@ -8,7 +8,7 @@ use crate::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
         TransferFuture,
     },
-    DeviceInfo, Error, Speed,
+    DeviceInfo, Error, IoAction, Speed,
 };
 use log::error;
 use std::{io::ErrorKind, sync::Arc, time::Duration};
@@ -18,12 +18,12 @@ use std::{io::ErrorKind, sync::Arc, time::Duration};
 /// Obtain a `Device` by calling [`DeviceInfo::open`]:
 ///
 /// ```no_run
-/// use nusb;
-/// let device_info = nusb::list_devices().unwrap()
+/// use nusb::{self, IoAction};
+/// let device_info = nusb::list_devices().wait().unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 ///
-/// let device = device_info.open().expect("failed to open device");
+/// let device = device_info.open().wait().expect("failed to open device");
 /// let interface = device.claim_interface(0);
 /// ```
 ///
@@ -39,23 +39,26 @@ pub struct Device {
 }
 
 impl Device {
-    pub(crate) fn open(d: &DeviceInfo) -> Result<Device, std::io::Error> {
-        let backend = platform::Device::from_device_info(d)?;
-        Ok(Device { backend })
+    pub(crate) fn wrap(backend: Arc<platform::Device>) -> Device {
+        Device { backend }
+    }
+
+    pub(crate) fn open(d: &DeviceInfo) -> impl IoAction<Output = Result<Device, std::io::Error>> {
+        platform::Device::from_device_info(d)
     }
 
     /// Wraps a device that is already open.
     #[cfg(any(target_os = "android", target_os = "linux"))]
-    pub fn from_fd(fd: std::os::fd::OwnedFd) -> Result<Device, Error> {
-        Ok(Device {
-            backend: platform::Device::from_fd(fd)?,
-        })
+    pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl IoAction<Output = Result<Device, Error>> {
+        platform::Device::from_fd(fd)
     }
 
     /// Open an interface of the device and claim it for exclusive use.
-    pub fn claim_interface(&self, interface: u8) -> Result<Interface, Error> {
-        let backend = self.backend.claim_interface(interface)?;
-        Ok(Interface { backend })
+    pub fn claim_interface(
+        &self,
+        interface: u8,
+    ) -> impl IoAction<Output = Result<Interface, Error>> {
+        self.backend.clone().claim_interface(interface)
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -63,9 +66,11 @@ impl Device {
     /// ### Platform notes
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// the same effect as [`claim_interface`][`Device::claim_interface`].
-    pub fn detach_and_claim_interface(&self, interface: u8) -> Result<Interface, Error> {
-        let backend = self.backend.detach_and_claim_interface(interface)?;
-        Ok(Interface { backend })
+    pub fn detach_and_claim_interface(
+        &self,
+        interface: u8,
+    ) -> impl IoAction<Output = Result<Interface, Error>> {
+        self.backend.clone().detach_and_claim_interface(interface)
     }
 
     /// Detach kernel drivers for the specified interface.
@@ -138,8 +143,11 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn set_configuration(&self, configuration: u8) -> Result<(), Error> {
-        self.backend.set_configuration(configuration)
+    pub fn set_configuration(
+        &self,
+        configuration: u8,
+    ) -> impl IoAction<Output = Result<(), Error>> {
+        self.backend.clone().set_configuration(configuration)
     }
 
     /// Request a descriptor from the device.
@@ -248,8 +256,8 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn reset(&self) -> Result<(), Error> {
-        self.backend.reset()
+    pub fn reset(&self) -> impl IoAction<Output = Result<(), Error>> {
+        self.backend.clone().reset()
     }
 
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
@@ -295,9 +303,10 @@ impl Device {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # use nusb::IoAction;
     /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
     ///
     /// let data: Vec<u8> = block_on(device.control_in(ControlIn {
     ///     control_type: ControlType::Vendor,
@@ -328,9 +337,10 @@ impl Device {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
+    /// # use nusb::IoAction;
     /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
     ///
     /// block_on(device.control_out(ControlOut {
     ///     control_type: ControlType::Vendor,
@@ -368,13 +378,16 @@ pub struct Interface {
 }
 
 impl Interface {
+    pub(crate) fn wrap(backend: Arc<platform::Interface>) -> Self {
+        Interface { backend }
+    }
     /// Select the alternate setting of this interface.
     ///
     /// An alternate setting is a mode of the interface that makes particular endpoints available
     /// and may enable or disable functionality of the device. The OS resets the device to the default
     /// alternate setting when the interface is released or the program exits.
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        self.backend.set_alt_setting(alt_setting)
+    pub fn set_alt_setting(&self, alt_setting: u8) -> impl IoAction<Output = Result<(), Error>> {
+        self.backend.clone().set_alt_setting(alt_setting)
     }
 
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
@@ -424,10 +437,11 @@ impl Interface {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # use nusb::IoAction;
     /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
-    /// # let interface = device.claim_interface(0).unwrap();
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
+    /// # let interface = device.claim_interface(0).wait().unwrap();
     ///
     /// let data: Vec<u8> = block_on(interface.control_in(ControlIn {
     ///     control_type: ControlType::Vendor,
@@ -459,10 +473,11 @@ impl Interface {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
+    /// # use nusb::IoAction;
     /// # fn main() -> Result<(), std::io::Error> {
-    /// # let di = nusb::list_devices().unwrap().next().unwrap();
-    /// # let device = di.open().unwrap();
-    /// # let interface = device.claim_interface(0).unwrap();
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
+    /// # let interface = device.claim_interface(0).wait().unwrap();
     ///
     /// block_on(interface.control_out(ControlOut {
     ///     control_type: ControlType::Vendor,
@@ -567,8 +582,8 @@ impl Interface {
     /// resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        self.backend.clear_halt(endpoint)
+    pub fn clear_halt(&self, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+        self.backend.clone().clear_halt(endpoint)
     }
 
     /// Get the interface number.

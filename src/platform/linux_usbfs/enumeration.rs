@@ -8,6 +8,8 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
+use crate::ioaction::Ready;
+use crate::IoAction;
 use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
@@ -119,27 +121,29 @@ impl FromHexStr for u16 {
 
 const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
-        let path = entry.ok()?.path();
-        let name = path.file_name()?;
+pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = DeviceInfo>, Error>> {
+    Ready((|| {
+        Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
+            let path = entry.ok()?.path();
+            let name = path.file_name()?;
 
-        // Device names look like `1-6` or `1-6.4.2`
-        // We'll ignore:
-        //  * root hubs (`usb1`) -- they're not useful to talk to and are not exposed on other platforms
-        //  * interfaces (`1-6:1.0`)
-        if !name
-            .as_encoded_bytes()
-            .iter()
-            .all(|c| matches!(c, b'0'..=b'9' | b'-' | b'.'))
-        {
-            return None;
-        }
+            // Device names look like `1-6` or `1-6.4.2`
+            // We'll ignore:
+            //  * root hubs (`usb1`) -- they're not useful to talk to and are not exposed on other platforms
+            //  * interfaces (`1-6:1.0`)
+            if !name
+                .as_encoded_bytes()
+                .iter()
+                .all(|c| matches!(c, b'0'..=b'9' | b'-' | b'.'))
+            {
+                return None;
+            }
 
-        probe_device(SysfsPath(path))
-            .inspect_err(|e| warn!("{e}; ignoring device"))
-            .ok()
-    }))
+            probe_device(SysfsPath(path))
+                .inspect_err(|e| warn!("{e}; ignoring device"))
+                .ok()
+        }))
+    })())
 }
 
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
@@ -158,29 +162,31 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     }))
 }
 
-pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
-    Ok(list_root_hubs()?.filter_map(|rh| {
-        // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
-        let parent_path = rh
-            .path
-            .0
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
+pub fn list_buses() -> impl IoAction<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
+    Ready((|| {
+        Ok(list_root_hubs()?.filter_map(|rh| {
+            // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
+            let parent_path = rh
+                .path
+                .0
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
 
-        debug!("Probing parent device {:?}", parent_path.0);
-        let driver = parent_path.readlink_attr_filename("driver").ok();
+            debug!("Probing parent device {:?}", parent_path.0);
+            let driver = parent_path.readlink_attr_filename("driver").ok();
 
-        Some(BusInfo {
-            bus_id: rh.bus_id.to_owned(),
-            path: rh.path.to_owned(),
-            parent_path: parent_path.to_owned(),
-            busnum: rh.busnum,
-            controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
-            driver,
-            root_hub: rh,
-        })
-    }))
+            Some(BusInfo {
+                bus_id: rh.bus_id.to_owned(),
+                path: rh.path.to_owned(),
+                parent_path: parent_path.to_owned(),
+                busnum: rh.busnum,
+                controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
+                driver,
+                root_hub: rh,
+            })
+        }))
+    })())
 }
 
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
