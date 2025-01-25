@@ -127,9 +127,12 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
         protocol: get_integer_property(&device, "bDeviceProtocol")? as u8,
         max_packet_size_0: get_integer_property(&device, "bMaxPacketSize0")? as u8,
         speed: get_integer_property(&device, "Device Speed").and_then(map_speed),
-        manufacturer_string: get_string_property(&device, "USB Vendor Name"),
-        product_string: get_string_property(&device, "USB Product Name"),
-        serial_number: get_string_property(&device, "USB Serial Number"),
+        manufacturer_string: get_string_property(&device, "kUSBVendorString")
+            .or_else(|| get_string_property(&device, "USB Vendor Name")),
+        product_string: get_string_property(&device, "kUSBProductString")
+            .or_else(|| get_string_property(&device, "USB Product Name")),
+        serial_number: get_string_property(&device, "kUSBSerialNumberString")
+            .or_else(|| get_string_property(&device, "USB Serial Number")),
         interfaces: get_children(&device).map_or(Vec::new(), |iter| {
             iter.flat_map(|child| {
                 Some(InterfaceInfo {
