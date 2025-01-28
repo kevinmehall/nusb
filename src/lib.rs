@@ -127,6 +127,7 @@ pub use device::{Device, Interface};
 
 pub mod transfer;
 
+pub mod cancellable_hotplug;
 pub mod hotplug;
 
 /// OS error returned from operations other than transfers.
@@ -208,4 +209,16 @@ pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
 ///     you should retry after a short delay if opening or claiming fails.
 pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
     Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
+}
+
+/// Returns CancellableHotplugWatch and HotplugCancellationToken.
+///
+pub fn watch_devices_cancellable() -> Result<
+    (
+        cancellable_hotplug::CancellableHotplugWatch,
+        cancellable_hotplug::HotplugCancellationToken,
+    ),
+    Error,
+> {
+    cancellable_hotplug::CancellableHotplugWatch::new()
 }
