@@ -1,7 +1,7 @@
 //! Types for receiving notifications when USB devices are connected or
 //! disconnected from the system.
 //!
-//! See [`super::watch_devices`] for a usage example.
+//! See [`super::watch_devices_cancellable`] for a usage example.
 
 use atomic_waker::AtomicWaker;
 use futures_core::Stream;
