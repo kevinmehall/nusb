@@ -1,5 +1,5 @@
 use std::io::{ErrorKind, Seek};
-use std::sync::Mutex;
+use std::sync::{Mutex, Weak};
 use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
@@ -20,6 +20,7 @@ use rustix::{
     fs::{Mode, OFlags},
     io::Errno,
 };
+use slab::Slab;
 
 use super::{
     errno_to_transfer_error, events,
@@ -28,7 +29,6 @@ use super::{
 };
 use crate::descriptors::{ConfigurationDescriptor, DeviceDescriptor};
 use crate::maybe_future::{blocking::Blocking, MaybeFuture};
-use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
@@ -37,6 +37,8 @@ use crate::{
     },
     DeviceInfo, Error, Speed,
 };
+
+static DEVICES: Mutex<Slab<Weak<LinuxDevice>>> = Mutex::new(Slab::new());
 
 pub(crate) struct LinuxDevice {
     fd: OwnedFd,
@@ -62,12 +64,7 @@ impl LinuxDevice {
             let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
             let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
                 .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
-
-            let inner = Self::create_inner(fd, Some(sysfs_path), Some(active_config));
-            if inner.is_ok() {
-                debug!("Opened device bus={busnum} addr={devnum}",);
-            }
-            inner
+            Self::create_inner(fd, Some(sysfs_path), Some(active_config))
         })
     }
 
@@ -105,19 +102,8 @@ impl LinuxDevice {
             Self::get_config(&descriptors, &fd)?
         };
 
-        // because there's no Arc::try_new_cyclic
-        let mut events_err = None;
         let arc = Arc::new_cyclic(|weak| {
-            let res = events::register(
-                fd.as_fd(),
-                Watch::Device(weak.clone()),
-                epoll::EventFlags::OUT,
-            );
-            let events_id = *res.as_ref().unwrap_or(&usize::MAX);
-            events_err = res.err();
-            if events_err.is_none() {
-                debug!("Opened device fd={} with id {}", fd.as_raw_fd(), events_id,);
-            }
+            let events_id = DEVICES.lock().unwrap().insert(weak.clone());
             LinuxDevice {
                 fd,
                 events_id,
@@ -127,15 +113,29 @@ impl LinuxDevice {
             }
         });
 
-        if let Some(err) = events_err {
-            error!("Failed to initialize event loop: {err}");
-            Err(err)
-        } else {
-            Ok(crate::Device::wrap(arc))
+        debug!(
+            "Opened device fd={} with id {}",
+            arc.fd.as_raw_fd(),
+            arc.events_id
+        );
+
+        events::register_fd(
+            arc.fd.as_fd(),
+            events::Tag::Device(arc.events_id),
+            epoll::EventFlags::OUT,
+        )?;
+
+        Ok(crate::Device::wrap(arc))
+    }
+
+    pub(crate) fn handle_usb_epoll(id: usize) {
+        let device = DEVICES.lock().unwrap().get(id).and_then(|w| w.upgrade());
+        if let Some(device) = device {
+            device.handle_events();
         }
     }
 
-    pub(crate) fn handle_events(&self) {
+    fn handle_events(&self) {
         debug!("Handling events for device {}", self.events_id);
         match usbfs::reap_urb_ndelay(&self.fd) {
             Ok(urb_ptr) => {
@@ -457,7 +457,8 @@ impl LinuxDevice {
 impl Drop for LinuxDevice {
     fn drop(&mut self) {
         debug!("Closing device {}", self.events_id);
-        events::unregister(self.fd.as_fd(), self.events_id)
+        events::unregister_fd(self.fd.as_fd());
+        DEVICES.lock().unwrap().remove(self.events_id);
     }
 }
 
