@@ -9,12 +9,14 @@ pub use enumeration::{list_buses, list_devices, SysfsPath};
 
 mod device;
 pub(crate) use device::LinuxDevice as Device;
+pub(crate) use device::LinuxEndpoint as Endpoint;
 pub(crate) use device::LinuxInterface as Interface;
+pub(crate) type Transfer = Idle<TransferData>;
 
 mod hotplug;
 pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
 
-use crate::transfer::TransferError;
+use crate::transfer::{internal::Idle, TransferError};
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DeviceId {
