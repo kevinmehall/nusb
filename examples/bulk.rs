@@ -1,5 +1,8 @@
 use futures_lite::future::block_on;
-use nusb::{transfer::RequestBuffer, MaybeFuture};
+use nusb::{
+    transfer::{Bulk, In, Out},
+    MaybeFuture,
+};
 
 fn main() {
     env_logger::init();
@@ -13,20 +16,22 @@ fn main() {
 
     let device = di.open().wait().unwrap();
     let interface = device.claim_interface(0).wait().unwrap();
+    let mut ep_out = interface.endpoint::<Bulk, Out>(0x02).unwrap();
+    let mut ep_in = interface.endpoint::<Bulk, In>(0x81).unwrap();
 
-    block_on(interface.bulk_out(0x02, Vec::from([1, 2, 3, 4, 5])))
-        .into_result()
-        .unwrap();
-
-    let mut queue = interface.bulk_in_queue(0x81);
+    let mut transfer = ep_out.allocate(64);
+    transfer.extend_from_slice(&[1, 2, 3, 4, 5]);
+    ep_out.submit(transfer);
+    block_on(ep_out.next_complete()).status().unwrap();
 
     loop {
-        while queue.pending() < 8 {
-            queue.submit(RequestBuffer::new(256));
+        while ep_in.pending() < 8 {
+            let transfer = ep_in.allocate(256);
+            ep_in.submit(transfer);
         }
-        let result = block_on(queue.next_complete());
+        let result = block_on(ep_in.next_complete());
         println!("{result:?}");
-        if result.status.is_err() {
+        if result.status().is_err() {
             break;
         }
     }

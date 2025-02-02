@@ -139,10 +139,11 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
+mod util;
 pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
-pub use device::{Device, Interface};
+pub use device::{ClaimEndpointError, Completion, Device, Endpoint, Interface, Request};
 
 pub mod transfer;
 
@@ -150,6 +151,8 @@ pub mod hotplug;
 
 mod maybe_future;
 pub use maybe_future::MaybeFuture;
+
+mod bitset;
 
 /// OS error returned from operations other than transfers.
 pub type Error = io::Error;

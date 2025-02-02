@@ -1,3 +1,5 @@
+use crate::transfer::{internal::Idle, TransferError};
+
 mod transfer;
 use io_kit_sys::ret::IOReturn;
 pub(crate) use transfer::TransferData;
@@ -8,12 +10,12 @@ pub use enumeration::{list_buses, list_devices};
 
 mod device;
 pub(crate) use device::MacDevice as Device;
+pub(crate) use device::MacEndpoint as Endpoint;
 pub(crate) use device::MacInterface as Interface;
+pub(crate) type Transfer = Idle<TransferData>;
 
 mod hotplug;
 pub(crate) use hotplug::MacHotplugWatch as HotplugWatch;
-
-use crate::transfer::TransferError;
 
 mod iokit;
 mod iokit_c;

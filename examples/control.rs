@@ -1,4 +1,5 @@
-use futures_lite::future::block_on;
+use std::time::Duration;
+
 use nusb::{
     transfer::{ControlIn, ControlOut, ControlType, Recipient},
     MaybeFuture,
@@ -19,47 +20,67 @@ fn main() {
     // Linux can make control transfers without claiming an interface
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let result = block_on(device.control_out(ControlOut {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request: 0x81,
-            value: 0x9999,
-            index: 0x9999,
-            data: &[1, 2, 3, 4],
-        }));
+        let result = device
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: 0x81,
+                    value: 0x9999,
+                    index: 0x9999,
+                    data: &[1, 2, 3, 4],
+                },
+                Duration::from_millis(100),
+            )
+            .wait();
         println!("{result:?}");
 
-        let result = block_on(device.control_in(ControlIn {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request: 0x81,
-            value: 0x9999,
-            index: 0x9999,
-            length: 256,
-        }));
+        let result = device
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: 0x81,
+                    value: 0x9999,
+                    index: 0x9999,
+                    length: 256,
+                },
+                Duration::from_millis(100),
+            )
+            .wait();
         println!("{result:?}");
     }
 
     // but we also provide an API on the `Interface` to support Windows
     let interface = device.claim_interface(0).wait().unwrap();
 
-    let result = block_on(interface.control_out(ControlOut {
-        control_type: ControlType::Vendor,
-        recipient: Recipient::Device,
-        request: 0x81,
-        value: 0x9999,
-        index: 0x9999,
-        data: &[1, 2, 3, 4],
-    }));
+    let result = interface
+        .control_out(
+            ControlOut {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: 0x81,
+                value: 0x9999,
+                index: 0x9999,
+                data: &[1, 2, 3, 4],
+            },
+            Duration::from_millis(100),
+        )
+        .wait();
     println!("{result:?}");
 
-    let result = block_on(interface.control_in(ControlIn {
-        control_type: ControlType::Vendor,
-        recipient: Recipient::Device,
-        request: 0x81,
-        value: 0x9999,
-        index: 0x9999,
-        length: 256,
-    }));
+    let result = interface
+        .control_in(
+            ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: 0x81,
+                value: 0x9999,
+                index: 0x9999,
+                length: 256,
+            },
+            Duration::from_millis(100),
+        )
+        .wait();
     println!("{result:?}");
 }

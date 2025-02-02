@@ -1,20 +1,30 @@
 use std::{
-    collections::BTreeMap,
+    collections::VecDeque,
     ffi::c_void,
     io::ErrorKind,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 
+use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 use log::{debug, error};
 
 use crate::{
-    descriptors::{ConfigurationDescriptor, DeviceDescriptor},
+    bitset::EndpointBitSet,
+    descriptors::{ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor},
+    device::ClaimEndpointError,
     maybe_future::blocking::Blocking,
-    transfer::{Control, Direction, TransferError, TransferHandle, TransferType},
+    transfer::{
+        internal::{
+            notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
+        },
+        ControlIn, ControlOut, Direction,
+    },
+    util::write_copy_of_slice,
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 
@@ -23,8 +33,8 @@ use super::{
     events::{add_event_source, EventRegistration},
     iokit::{call_iokit_function, check_iokit_return},
     iokit_c::IOUSBDevRequestTO,
-    iokit_usb::{EndpointInfo, IoKitDevice, IoKitInterface},
-    status_to_transfer_result,
+    iokit_usb::{IoKitDevice, IoKitInterface},
+    TransferData,
 };
 
 pub(crate) struct MacDevice {
@@ -168,71 +178,6 @@ impl MacDevice {
         })
     }
 
-    /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
-    unsafe fn control_blocking(
-        &self,
-        direction: Direction,
-        control: Control,
-        data: *mut u8,
-        len: usize,
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-        let mut req = IOUSBDevRequestTO {
-            bmRequestType: control.request_type(direction),
-            bRequest: control.request,
-            wValue: control.value,
-            wIndex: control.index,
-            wLength: len.try_into().expect("length must fit in u16"),
-            pData: data.cast::<c_void>(),
-            wLenDone: 0,
-            noDataTimeout: timeout_ms,
-            completionTimeout: timeout_ms,
-        };
-
-        let r = unsafe { call_iokit_function!(self.device.raw, DeviceRequestTO(&mut req)) };
-
-        status_to_transfer_result(r).map(|()| req.wLenDone as usize)
-    }
-
-    pub fn control_in_blocking(
-        &self,
-        control: Control,
-        data: &mut [u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        unsafe {
-            self.control_blocking(
-                Direction::In,
-                control,
-                data.as_mut_ptr(),
-                data.len(),
-                timeout,
-            )
-        }
-    }
-
-    pub fn control_out_blocking(
-        &self,
-        control: Control,
-        data: &[u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        unsafe {
-            self.control_blocking(
-                Direction::Out,
-                control,
-                data.as_ptr() as *mut u8,
-                data.len(),
-                timeout,
-            )
-        }
-    }
-
-    pub(crate) fn make_control_transfer(self: &Arc<Self>) -> TransferHandle<super::TransferData> {
-        TransferHandle::new(super::TransferData::new_control(self.clone()))
-    }
-
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
@@ -257,17 +202,12 @@ impl MacDevice {
             let _event_registration = add_event_source(interface.create_async_event_source()?);
 
             interface.open()?;
-
-            let endpoints = interface.endpoints()?;
-            debug!("Found endpoints: {endpoints:?}");
-
             self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
             Ok(Arc::new(MacInterface {
                 device: self.clone(),
                 interface_number,
                 interface,
-                endpoints: Mutex::new(endpoints),
                 state: Mutex::new(InterfaceState::default()),
                 _event_registration,
             }))
@@ -279,6 +219,92 @@ impl MacDevice {
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         self.claim_interface(interface)
+    }
+
+    pub fn control_in(
+        self: &Arc<Self>,
+        data: ControlIn,
+        timeout: Duration,
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+        let timeout = timeout.as_millis().try_into().expect("timeout too long");
+        let t = TransferData::new(0x80, data.length as usize);
+
+        let req = IOUSBDevRequestTO {
+            bmRequestType: data.request_type(),
+            bRequest: data.request,
+            wValue: data.value,
+            wIndex: data.index,
+            wLength: data.length,
+            pData: t.buf as *mut c_void,
+            wLenDone: 0,
+            completionTimeout: timeout,
+            noDataTimeout: timeout,
+        };
+
+        TransferFuture::new(t, |t| self.submit_control(t, req)).map(|mut t| {
+            t.status()?;
+            Ok(unsafe { t.take_vec() })
+        })
+    }
+
+    pub fn control_out(
+        self: &Arc<Self>,
+        data: ControlOut,
+        timeout: Duration,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        let timeout = timeout.as_millis().try_into().expect("timeout too long");
+        let mut t = TransferData::new(0, data.data.len());
+        write_copy_of_slice(t.buffer_mut(), &data.data);
+
+        let req = IOUSBDevRequestTO {
+            bmRequestType: data.request_type(),
+            bRequest: data.request,
+            wValue: data.value,
+            wIndex: data.index,
+            wLength: u16::try_from(data.data.len()).expect("request too long"),
+            pData: t.buf as *mut c_void,
+            wLenDone: 0,
+            completionTimeout: timeout,
+            noDataTimeout: timeout,
+        };
+
+        TransferFuture::new(t, |t| self.submit_control(t, req)).map(|t| {
+            t.status()?;
+            Ok(())
+        })
+    }
+
+    fn submit_control(
+        &self,
+        mut t: Idle<TransferData>,
+        mut req: IOUSBDevRequestTO,
+    ) -> Pending<TransferData> {
+        t.actual_len = 0;
+        let dir = Direction::from_address(t.endpoint_addr);
+        assert!(req.pData == t.buf.cast());
+
+        let t = t.pre_submit();
+        let ptr = t.as_ptr();
+
+        let res = unsafe {
+            call_iokit_function!(
+                self.device.raw,
+                DeviceRequestAsyncTO(&mut req, transfer_callback, ptr as *mut c_void)
+            )
+        };
+
+        if res == kIOReturnSuccess {
+            debug!("Submitted control {dir:?} {ptr:?}");
+        } else {
+            error!("Failed to submit control {dir:?} {ptr:?}: {res:x}");
+            unsafe {
+                // Complete the transfer in the place of the callback
+                (*ptr).status = res;
+                notify_completion::<super::TransferData>(ptr);
+            }
+        }
+
+        t
     }
 }
 
@@ -298,71 +324,31 @@ pub(crate) struct MacInterface {
     _event_registration: EventRegistration,
     pub(crate) interface: IoKitInterface,
     pub(crate) device: Arc<MacDevice>,
-    /// Map from address to a structure that contains the `pipe_ref` used by iokit
-    pub(crate) endpoints: Mutex<BTreeMap<u8, EndpointInfo>>,
     state: Mutex<InterfaceState>,
 }
 
 #[derive(Default)]
 struct InterfaceState {
     alt_setting: u8,
+    endpoints_used: EndpointBitSet,
 }
 
 impl MacInterface {
-    pub(crate) fn make_transfer(
-        self: &Arc<Self>,
-        endpoint: u8,
-        ep_type: TransferType,
-    ) -> TransferHandle<super::TransferData> {
-        if ep_type == TransferType::Control {
-            assert!(endpoint == 0);
-            TransferHandle::new(super::TransferData::new_control(self.device.clone()))
-        } else {
-            let endpoints = self.endpoints.lock().unwrap();
-
-            // This function can't fail, so if the endpoint is not found, use an invalid
-            // pipe_ref that will fail when submitting the transfer.
-            let pipe_ref = endpoints.get(&endpoint).map(|e| e.pipe_ref).unwrap_or(0);
-
-            TransferHandle::new(super::TransferData::new(
-                self.device.clone(),
-                self.clone(),
-                endpoint,
-                pipe_ref,
-            ))
-        }
-    }
-
-    pub fn control_in_blocking(
-        &self,
-        control: Control,
-        data: &mut [u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        self.device.control_in_blocking(control, data, timeout)
-    }
-
-    pub fn control_out_blocking(
-        &self,
-        control: Control,
-        data: &[u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        self.device.control_out_blocking(control, data, timeout)
-    }
-
     pub fn set_alt_setting(
         self: Arc<Self>,
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             let mut state = self.state.lock().unwrap();
-            debug!(
-                "Set interface {} alt setting to {alt_setting}",
-                self.interface_number
-            );
 
-            let mut endpoints = self.endpoints.lock().unwrap();
+            if !state.endpoints_used.is_empty() {
+                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
+
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "must drop endpoints before changing alt setting",
+                ));
+            }
 
             unsafe {
                 check_iokit_return(call_iokit_function!(
@@ -371,8 +357,11 @@ impl MacInterface {
                 ))?;
             }
 
-            *endpoints = self.interface.endpoints()?;
-            debug!("Found endpoints: {endpoints:?}");
+            debug!(
+                "Set interface {} alt setting to {alt_setting}",
+                self.interface_number
+            );
+
             state.alt_setting = alt_setting;
 
             Ok(())
@@ -383,27 +372,50 @@ impl MacInterface {
         self.state.lock().unwrap().alt_setting
     }
 
-    pub fn clear_halt(
-        self: Arc<Self>,
-        endpoint: u8,
+    pub fn control_in(
+        self: &Arc<Self>,
+        data: ControlIn,
+        timeout: Duration,
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+        self.device.control_in(data, timeout)
+    }
+
+    pub fn control_out(
+        self: &Arc<Self>,
+        data: ControlOut,
+        timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
-        Blocking::new(move || {
-            debug!("Clear halt, endpoint {endpoint:02x}");
+        self.device.control_out(data, timeout)
+    }
 
-            let pipe_ref = {
-                let endpoints = self.endpoints.lock().unwrap();
-                let ep = endpoints
-                    .get(&endpoint)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Endpoint not found"))?;
-                ep.pipe_ref
-            };
+    pub fn endpoint(
+        self: &Arc<Self>,
+        descriptor: EndpointDescriptor,
+    ) -> Result<MacEndpoint, ClaimEndpointError> {
+        let address = descriptor.address();
+        let max_packet_size = descriptor.max_packet_size();
 
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    self.interface.raw,
-                    ClearPipeStallBothEnds(pipe_ref)
-                ))
-            }
+        let mut state = self.state.lock().unwrap();
+
+        let Some(pipe_ref) = self.interface.find_pipe_ref(address) else {
+            debug!("Endpoint {address:02X} not found in iokit");
+            return Err(ClaimEndpointError::InvalidAddress);
+        };
+
+        if state.endpoints_used.is_set(address) {
+            return Err(ClaimEndpointError::Busy);
+        }
+        state.endpoints_used.set(address);
+
+        Ok(MacEndpoint {
+            inner: Arc::new(EndpointInner {
+                pipe_ref,
+                address,
+                interface: self.clone(),
+                notify: Notify::new(),
+            }),
+            max_packet_size,
+            pending: VecDeque::new(),
         })
     }
 }
@@ -416,5 +428,158 @@ impl Drop for MacInterface {
         self.device
             .claimed_interfaces
             .fetch_sub(1, Ordering::Release);
+    }
+}
+
+pub(crate) struct MacEndpoint {
+    inner: Arc<EndpointInner>,
+    pub(crate) max_packet_size: usize,
+
+    /// A queue of pending transfers, expected to complete in order
+    pending: VecDeque<Pending<TransferData>>,
+}
+
+struct EndpointInner {
+    interface: Arc<MacInterface>,
+    pipe_ref: u8,
+    address: u8,
+    notify: Notify,
+}
+
+impl MacEndpoint {
+    pub(crate) fn endpoint_address(&self) -> u8 {
+        self.inner.address
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        let r = unsafe {
+            call_iokit_function!(
+                self.inner.interface.interface.raw,
+                AbortPipe(self.inner.pipe_ref)
+            )
+        };
+        debug!(
+            "Cancelled all transfers on endpoint {ep:02x}. status={r:x}",
+            ep = self.inner.address
+        );
+    }
+
+    pub(crate) fn make_transfer(&mut self, len: usize) -> Idle<TransferData> {
+        Idle::new(
+            self.inner.clone(),
+            TransferData::new(self.inner.address, len),
+        )
+    }
+
+    pub(crate) fn submit(&mut self, mut t: Idle<TransferData>) {
+        assert!(
+            t.notify_eq(&self.inner),
+            "transfer can only be submitted on the same endpoint"
+        );
+        let endpoint = t.endpoint_addr;
+        let dir = Direction::from_address(endpoint);
+        let pipe_ref = self.inner.pipe_ref;
+        let len = t.request_len;
+        let buf = t.buf;
+        t.actual_len = 0;
+
+        let t = t.pre_submit();
+        let ptr = t.as_ptr();
+
+        let res = unsafe {
+            match dir {
+                Direction::Out => call_iokit_function!(
+                    self.inner.interface.interface.raw,
+                    WritePipeAsync(
+                        pipe_ref,
+                        buf as *mut c_void,
+                        u32::try_from(len).expect("request too large"),
+                        transfer_callback,
+                        ptr as *mut c_void
+                    )
+                ),
+                Direction::In => call_iokit_function!(
+                    self.inner.interface.interface.raw,
+                    ReadPipeAsync(
+                        pipe_ref,
+                        buf as *mut c_void,
+                        u32::try_from(len).expect("request too large"),
+                        transfer_callback,
+                        ptr as *mut c_void
+                    )
+                ),
+            }
+        };
+
+        if res == kIOReturnSuccess {
+            debug!("Submitted {dir:?} transfer {ptr:?} on endpoint {endpoint:02X}, {len} bytes");
+        } else {
+            error!("Failed to submit transfer {ptr:?} on endpoint {endpoint:02X}: {res:x}");
+            unsafe {
+                // Complete the transfer in the place of the callback
+                (*ptr).status = res;
+                notify_completion::<super::TransferData>(ptr);
+            }
+        }
+
+        self.pending.push_back(t);
+    }
+
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Idle<TransferData>> {
+        self.inner.notify.subscribe(cx);
+        if let Some(transfer) = take_completed_from_queue(&mut self.pending) {
+            Poll::Ready(transfer)
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub(crate) fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        let inner = self.inner.clone();
+        Blocking::new(move || {
+            debug!("Clear halt, endpoint {:02x}", inner.address);
+
+            unsafe {
+                check_iokit_return(call_iokit_function!(
+                    inner.interface.interface.raw,
+                    ClearPipeStallBothEnds(inner.pipe_ref)
+                ))
+            }
+        })
+    }
+}
+
+impl Drop for MacEndpoint {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+
+impl AsRef<Notify> for EndpointInner {
+    fn as_ref(&self) -> &Notify {
+        &self.notify
+    }
+}
+
+impl Drop for EndpointInner {
+    fn drop(&mut self) {
+        let mut state = self.interface.state.lock().unwrap();
+        state.endpoints_used.clear(self.address);
+    }
+}
+
+extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut c_void) {
+    let len = len as usize;
+    let transfer: *mut TransferData = refcon.cast();
+    debug!("Completion for transfer {transfer:?}, status={result:x}, len={len}");
+
+    unsafe {
+        (*transfer).actual_len = len;
+        (*transfer).status = result;
+        notify_completion::<TransferData>(transfer)
     }
 }
