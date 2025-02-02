@@ -1,5 +1,5 @@
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
     ffi::c_void,
     io::{self, ErrorKind},
     mem::{size_of_val, transmute},
@@ -7,28 +7,38 @@ use std::{
         io::{AsRawHandle, RawHandle},
         prelude::OwnedHandle,
     },
-    ptr,
+    ptr::{self, null_mut},
     sync::{Arc, Mutex},
+    task::{Context, Poll},
     time::Duration,
 };
 
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
         WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface, WinUsb_Initialize,
-        WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_SetPipePolicy,
-        PIPE_TRANSFER_TIMEOUT, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        WinUsb_ReadPipe, WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_WritePipe,
+        WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
-    Foundation::{GetLastError, FALSE, TRUE},
+    Foundation::{GetLastError, ERROR_IO_PENDING, ERROR_NOT_FOUND, FALSE, HANDLE, TRUE},
+    System::IO::{CancelIoEx, OVERLAPPED},
 };
 
 use crate::{
+    bitset::EndpointBitSet,
     descriptors::{
-        ConfigurationDescriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
+        ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
+    device::ClaimEndpointError,
     maybe_future::{blocking::Blocking, Ready},
-    transfer::{Control, Direction, Recipient, TransferError, TransferHandle, TransferType},
+    transfer::{
+        internal::{
+            notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
+        },
+        ControlIn, ControlOut, Direction, Recipient,
+    },
+    util::write_copy_of_slice,
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 
@@ -37,6 +47,7 @@ use super::{
         find_usbccgp_child, get_driver_name, get_usbccgp_winusb_device_path, get_winusb_device_path,
     },
     hub::HubPort,
+    transfer::TransferData,
     util::{create_file, raw_handle, WCStr},
     DevInst,
 };
@@ -127,12 +138,18 @@ impl WindowsDevice {
     }
 
     pub(crate) fn get_descriptor(
-        &self,
+        self: Arc<Self>,
         desc_type: u8,
         desc_index: u8,
         language_id: u16,
-    ) -> Result<Vec<u8>, Error> {
-        HubPort::by_child_devinst(self.devinst)?.get_descriptor(desc_type, desc_index, language_id)
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+        Blocking::new(move || {
+            HubPort::by_child_devinst(self.devinst)?.get_descriptor(
+                desc_type,
+                desc_index,
+                language_id,
+            )
+        })
     }
 
     pub(crate) fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
@@ -342,6 +359,7 @@ pub(crate) struct WindowsInterface {
 #[derive(Default)]
 struct InterfaceState {
     alt_setting: u8,
+    endpoints: EndpointBitSet,
 }
 
 unsafe impl Send for WindowsInterface {}
@@ -384,123 +402,55 @@ impl Drop for WindowsInterface {
 }
 
 impl WindowsInterface {
-    pub(crate) fn make_transfer(
+    pub fn control_in(
         self: &Arc<Self>,
-        endpoint: u8,
-        ep_type: TransferType,
-    ) -> TransferHandle<super::TransferData> {
-        TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
-    }
-
-    /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
-    unsafe fn control_blocking(
-        &self,
-        direction: Direction,
-        control: Control,
-        data: *mut u8,
-        len: usize,
+        data: ControlIn,
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        info!("Blocking control {direction:?}, {len} bytes");
-
-        if control.recipient == Recipient::Interface && control.index as u8 != self.interface_number
-        {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
-        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-        let r = WinUsb_SetPipePolicy(
-            self.winusb_handle,
-            0,
-            PIPE_TRANSFER_TIMEOUT,
-            size_of_val(&timeout_ms) as u32,
-            &timeout_ms as *const u32 as *const c_void,
-        );
-
-        if r != TRUE {
-            error!(
-                "WinUsb_SetPipePolicy PIPE_TRANSFER_TIMEOUT failed: {}",
-                io::Error::last_os_error()
-            );
-        }
+        let t = TransferData::new(0x80, data.length as usize);
 
         let pkt = WINUSB_SETUP_PACKET {
-            RequestType: control.request_type(direction),
-            Request: control.request,
-            Value: control.value,
-            Index: control.index,
-            Length: len.try_into().expect("request size too large"),
+            RequestType: data.request_type(),
+            Request: data.request,
+            Value: data.value,
+            Index: data.index,
+            Length: data.length,
         };
 
-        let mut actual_len = 0;
-
-        let r = WinUsb_ControlTransfer(
-            self.winusb_handle,
-            pkt,
-            data,
-            len.try_into().expect("request size too large"),
-            &mut actual_len,
-            ptr::null_mut(),
-        );
-
-        if r == TRUE {
-            Ok(actual_len as usize)
-        } else {
-            error!(
-                "WinUsb_ControlTransfer failed: {}",
-                io::Error::last_os_error()
-            );
-            Err(super::transfer::map_error(GetLastError()))
-        }
+        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(|mut t| {
+            t.status()?;
+            Ok(unsafe { t.take_vec() })
+        })
     }
 
-    pub fn control_in_blocking(
-        &self,
-        control: Control,
-        data: &mut [u8],
+    pub fn control_out(
+        self: &Arc<Self>,
+        data: ControlOut,
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        unsafe {
-            self.control_blocking(
-                Direction::In,
-                control,
-                data.as_mut_ptr(),
-                data.len(),
-                timeout,
-            )
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
+            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
-    }
 
-    pub fn control_out_blocking(
-        &self,
-        control: Control,
-        data: &[u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        // When passed a pointer to read-only memory (e.g. a constant slice),
-        // WinUSB fails with "Invalid access to memory location. (os error 998)".
-        // I assume the kernel is checking the pointer for write access
-        // regardless of the transfer direction. Copy the data to the stack to ensure
-        // we give it a pointer to writable memory.
-        let mut buf = [0; 4096];
-        let Some(buf) = buf.get_mut(..data.len()) else {
-            error!(
-                "Control transfer length {} exceeds limit of 4096",
-                data.len()
-            );
-            return Err(TransferError::Unknown);
+        let mut t = TransferData::new(0, data.data.len());
+        write_copy_of_slice(t.buffer_mut(), &data.data);
+
+        let pkt = WINUSB_SETUP_PACKET {
+            RequestType: data.request_type(),
+            Request: data.request,
+            Value: data.value,
+            Index: data.index,
+            Length: data.data.len().try_into().expect("transfer too large"),
         };
-        buf.copy_from_slice(data);
 
-        unsafe {
-            self.control_blocking(
-                Direction::Out,
-                control,
-                buf.as_mut_ptr(),
-                buf.len(),
-                timeout,
-            )
-        }
+        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(|t| {
+            t.status()?;
+            Ok(())
+        })
     }
 
     pub fn set_alt_setting(
@@ -509,6 +459,13 @@ impl WindowsInterface {
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || unsafe {
             let mut state = self.state.lock().unwrap();
+            if !state.endpoints.is_empty() {
+                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "must drop endpoints before changing alt setting",
+                ));
+            }
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
                 debug!(
@@ -527,14 +484,201 @@ impl WindowsInterface {
         self.state.lock().unwrap().alt_setting
     }
 
-    pub fn clear_halt(
-        self: Arc<Self>,
-        endpoint: u8,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    pub fn endpoint(
+        self: &Arc<Self>,
+        descriptor: EndpointDescriptor,
+    ) -> Result<WindowsEndpoint, ClaimEndpointError> {
+        let address = descriptor.address();
+        let max_packet_size = descriptor.max_packet_size();
+
+        let mut state = self.state.lock().unwrap();
+
+        if state.endpoints.is_set(address) {
+            return Err(ClaimEndpointError::Busy);
+        }
+        state.endpoints.set(address);
+
+        Ok(WindowsEndpoint {
+            inner: Arc::new(EndpointInner {
+                address,
+                interface: self.clone(),
+                notify: Notify::new(),
+            }),
+            max_packet_size,
+            pending: VecDeque::new(),
+        })
+    }
+
+    fn submit(&self, mut t: Idle<TransferData>) -> Pending<TransferData> {
+        let endpoint = t.endpoint;
+        let dir = Direction::from_address(endpoint);
+        let len = t.request_len;
+        let buf = t.buf;
+        t.overlapped.InternalHigh = 0;
+
+        let t = t.pre_submit();
+        let ptr = t.as_ptr();
+
+        debug!("Submit transfer {ptr:?} on endpoint {endpoint:02X} for {len} bytes {dir:?}");
+
+        let r = unsafe {
+            match dir {
+                Direction::Out => WinUsb_WritePipe(
+                    self.winusb_handle,
+                    endpoint,
+                    buf,
+                    len.try_into().expect("transfer size should fit in u32"),
+                    null_mut(),
+                    ptr as *mut OVERLAPPED,
+                ),
+                Direction::In => WinUsb_ReadPipe(
+                    self.winusb_handle,
+                    endpoint,
+                    buf,
+                    len.try_into().expect("transfer size should fit in u32"),
+                    null_mut(),
+                    ptr as *mut OVERLAPPED,
+                ),
+            }
+        };
+
+        self.post_submit(r, t)
+    }
+
+    fn submit_control(
+        &self,
+        mut t: Idle<TransferData>,
+        pkt: WINUSB_SETUP_PACKET,
+    ) -> Pending<TransferData> {
+        let endpoint = t.endpoint;
+        let dir = Direction::from_address(endpoint);
+        let len = t.request_len;
+        let buf = t.buf;
+        t.overlapped.InternalHigh = 0;
+
+        let t = t.pre_submit();
+        let ptr = t.as_ptr();
+
+        debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
+
+        let r = unsafe {
+            WinUsb_ControlTransfer(
+                self.winusb_handle,
+                pkt,
+                buf,
+                len,
+                null_mut(),
+                ptr as *mut OVERLAPPED,
+            )
+        };
+
+        self.post_submit(r, t)
+    }
+
+    fn post_submit(&self, r: i32, t: Pending<TransferData>) -> Pending<TransferData> {
+        if r == TRUE {
+            error!("Transfer submit completed synchronously")
+        }
+
+        let err = unsafe { GetLastError() };
+
+        if err != ERROR_IO_PENDING {
+            error!("submit failed: {}", io::Error::from_raw_os_error(err as _));
+
+            // Safety: Transfer was not submitted, so we still own it
+            // and must complete it in place of the event thread.
+            unsafe {
+                (&mut *t.as_ptr()).overlapped.Internal = err as _;
+                notify_completion::<TransferData>(t.as_ptr());
+            }
+        }
+
+        t
+    }
+
+    fn cancel(&self, t: &mut Pending<TransferData>) {
+        debug!("Cancelling transfer {:?}", t.as_ptr());
+        unsafe {
+            let r = CancelIoEx(self.handle as HANDLE, t.as_ptr() as *mut OVERLAPPED);
+            if r == 0 {
+                let err = GetLastError();
+                if err != ERROR_NOT_FOUND {
+                    error!(
+                        "CancelIoEx failed: {}",
+                        io::Error::from_raw_os_error(err as i32)
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub(crate) struct WindowsEndpoint {
+    inner: Arc<EndpointInner>,
+
+    pub(crate) max_packet_size: usize,
+
+    /// A queue of pending transfers, expected to complete in order
+    pending: VecDeque<Pending<TransferData>>,
+}
+
+struct EndpointInner {
+    interface: Arc<WindowsInterface>,
+    address: u8,
+    notify: Notify,
+}
+
+impl WindowsEndpoint {
+    pub(crate) fn endpoint_address(&self) -> u8 {
+        self.inner.address
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        // Cancel transfers in reverse order to ensure subsequent transfers
+        // can't complete out of order while we're going through them.
+        for transfer in self.pending.iter_mut().rev() {
+            self.inner.interface.cancel(transfer);
+        }
+    }
+
+    pub(crate) fn make_transfer(&mut self, len: usize) -> Idle<TransferData> {
+        let t = Idle::new(
+            self.inner.clone(),
+            TransferData::new(self.inner.address, len),
+        );
+
+        t
+    }
+
+    pub(crate) fn submit(&mut self, transfer: Idle<TransferData>) {
+        assert!(
+            transfer.notify_eq(&self.inner),
+            "transfer can only be submitted on the same endpoint"
+        );
+        let transfer = self.inner.interface.submit(transfer);
+        self.pending.push_back(transfer);
+    }
+
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Idle<TransferData>> {
+        self.inner.notify.subscribe(cx);
+        if let Some(transfer) = take_completed_from_queue(&mut self.pending) {
+            Poll::Ready(transfer)
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub(crate) fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        let inner = self.inner.clone();
         Blocking::new(move || {
+            let endpoint = inner.address;
             debug!("Clear halt, endpoint {endpoint:02x}");
             unsafe {
-                let r = WinUsb_ResetPipe(self.winusb_handle, endpoint);
+                let r = WinUsb_ResetPipe(inner.interface.winusb_handle, endpoint);
                 if r == TRUE {
                     Ok(())
                 } else {
@@ -542,5 +686,24 @@ impl WindowsInterface {
                 }
             }
         })
+    }
+}
+
+impl Drop for WindowsEndpoint {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+
+impl AsRef<Notify> for EndpointInner {
+    fn as_ref(&self) -> &Notify {
+        &self.notify
+    }
+}
+
+impl Drop for EndpointInner {
+    fn drop(&mut self) {
+        let mut state = self.interface.state.lock().unwrap();
+        state.endpoints.clear(self.address);
     }
 }
