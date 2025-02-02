@@ -4,37 +4,37 @@
 //! [usbfs]: https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#the-usb-character-device-nodes
 //! [uapi]: https://github.com/torvalds/linux/blob/master/tools/include/uapi/linux/usbdevice_fs.h
 #![allow(dead_code)]
-use std::{
-    ffi::{c_int, c_uchar, c_uint, c_void},
-    marker::PhantomData,
-};
+use std::ffi::{c_int, c_uchar, c_uint, c_void};
 
 use rustix::{
     fd::AsFd,
     io,
-    ioctl::{self, CompileTimeOpcode, Ioctl, IoctlOutput},
+    ioctl::{self, Ioctl, IoctlOutput, Opcode},
 };
 
 pub fn set_configuration<Fd: AsFd>(fd: Fd, configuration: u8) -> io::Result<()> {
     unsafe {
-        let ctl =
-            ioctl::Setter::<ioctl::ReadOpcode<b'U', 5, c_uint>, c_uint>::new(configuration.into());
+        let ctl = ioctl::Setter::<{ ioctl::opcode::read::<c_uint>(b'U', 5) }, c_uint>::new(
+            configuration.into(),
+        );
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
-        let ctl =
-            ioctl::Setter::<ioctl::ReadOpcode<b'U', 15, c_uint>, c_uint>::new(interface.into());
+        let ctl = ioctl::Setter::<{ ioctl::opcode::read::<c_uint>(b'U', 15) }, c_uint>::new(
+            interface.into(),
+        );
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn release_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
-        let ctl =
-            ioctl::Setter::<ioctl::ReadOpcode<b'U', 16, c_uint>, c_uint>::new(interface.into());
+        let ctl = ioctl::Setter::<{ ioctl::opcode::read::<c_uint>(b'U', 16) }, c_uint>::new(
+            interface.into(),
+        );
         ioctl::ioctl(fd, ctl)
     }
 }
@@ -57,7 +57,7 @@ pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result
 
         dc.driver[0..6].copy_from_slice(b"usbfs\0");
 
-        let ctl = ioctl::Setter::<opcodes::USBDEVFS_DISCONNECT_CLAIM, DetachAndClaim>::new(dc);
+        let ctl = ioctl::Setter::<{ opcodes::USBDEVFS_DISCONNECT_CLAIM }, DetachAndClaim>::new(dc);
 
         ioctl::ioctl(&fd, ctl)
     }
@@ -78,17 +78,19 @@ struct UsbFsIoctl {
 // TODO: Move the rest of the opcodes into here.
 #[allow(non_camel_case_types)]
 mod opcodes {
+    use rustix::ioctl::Opcode;
+
     use super::*;
 
-    pub type USBDEVFS_IOCTL = ioctl::ReadWriteOpcode<b'U', 18, UsbFsIoctl>;
-    pub type USBDEVFS_DISCONNECT_CLAIM = ioctl::ReadOpcode<b'U', 27, DetachAndClaim>;
+    pub const USBDEVFS_IOCTL: Opcode = ioctl::opcode::read_write::<UsbFsIoctl>(b'U', 18);
+    pub const USBDEVFS_DISCONNECT_CLAIM: Opcode = ioctl::opcode::read::<DetachAndClaim>(b'U', 27);
 
     /// These opcodes are nested inside a [`USBDEVFS_IOCTL`] operation.
     pub mod nested {
         use super::*;
 
-        pub type USBDEVFS_DISCONNECT = ioctl::NoneOpcode<b'U', 22, ()>;
-        pub type USBDEVFS_CONNECT = ioctl::NoneOpcode<b'U', 23, ()>;
+        pub const USBDEVFS_DISCONNECT: Opcode = ioctl::opcode::none(b'U', 22);
+        pub const USBDEVFS_CONNECT: Opcode = ioctl::opcode::none(b'U', 23);
     }
 }
 
@@ -96,11 +98,11 @@ pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
         // NOTE: Cast needed since on android this type is i32 vs u32 on linux
-        ioctl_code: opcodes::nested::USBDEVFS_DISCONNECT::OPCODE.raw() as _,
+        ioctl_code: opcodes::nested::USBDEVFS_DISCONNECT as _,
         data: std::ptr::null_mut(),
     };
     unsafe {
-        let ctl = ioctl::Setter::<opcodes::USBDEVFS_IOCTL, UsbFsIoctl>::new(command);
+        let ctl = ioctl::Setter::<{ opcodes::USBDEVFS_IOCTL }, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
     }
 }
@@ -108,11 +110,11 @@ pub fn detach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
 pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     let command = UsbFsIoctl {
         interface: interface.into(),
-        ioctl_code: opcodes::nested::USBDEVFS_CONNECT::OPCODE.raw() as _,
+        ioctl_code: opcodes::nested::USBDEVFS_CONNECT as _,
         data: std::ptr::null_mut(),
     };
     unsafe {
-        let ctl = ioctl::Setter::<opcodes::USBDEVFS_IOCTL, UsbFsIoctl>::new(command);
+        let ctl = ioctl::Setter::<{ opcodes::USBDEVFS_IOCTL }, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
     }
 }
@@ -125,22 +127,22 @@ struct SetAltSetting {
 
 pub fn set_interface<Fd: AsFd>(fd: Fd, interface: u8, alt_setting: u8) -> io::Result<()> {
     unsafe {
-        let ctl = ioctl::Setter::<ioctl::ReadOpcode<b'U', 4, SetAltSetting>, SetAltSetting>::new(
-            SetAltSetting {
-                interface: interface.into(),
-                alt_setting: alt_setting.into(),
-            },
-        );
+        let ctl =
+            ioctl::Setter::<{ ioctl::opcode::read::<SetAltSetting>(b'U', 4) }, SetAltSetting>::new(
+                SetAltSetting {
+                    interface: interface.into(),
+                    alt_setting: alt_setting.into(),
+                },
+            );
         ioctl::ioctl(fd, ctl)
     }
 }
 
-pub struct PassPtr<Opcode, Input> {
+pub struct PassPtr<const OPCODE: Opcode, Input> {
     input: *mut Input,
-    _opcode: PhantomData<Opcode>,
 }
 
-impl<Opcode: CompileTimeOpcode, Input> PassPtr<Opcode, Input> {
+impl<const OPCODE: Opcode, Input> PassPtr<OPCODE, Input> {
     /// Create a new pointer setter-style `ioctl` object.
     ///
     /// # Safety
@@ -150,18 +152,18 @@ impl<Opcode: CompileTimeOpcode, Input> PassPtr<Opcode, Input> {
     ///   get.
     #[inline]
     pub unsafe fn new(input: *mut Input) -> Self {
-        Self {
-            input,
-            _opcode: PhantomData,
-        }
+        Self { input }
     }
 }
 
-unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for PassPtr<Opcode, Input> {
+unsafe impl<const OPCODE: Opcode, Input> Ioctl for PassPtr<OPCODE, Input> {
     type Output = ();
 
     const IS_MUTATING: bool = false;
-    const OPCODE: rustix::ioctl::Opcode = Opcode::OPCODE;
+
+    fn opcode(&self) -> ioctl::Opcode {
+        OPCODE
+    }
 
     fn as_ptr(&mut self) -> *mut c_void {
         self.input as *mut c_void
@@ -174,28 +176,28 @@ unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for PassPtr<Opcode, Input> {
 
 pub unsafe fn submit_urb<Fd: AsFd>(fd: Fd, urb: *mut Urb) -> io::Result<()> {
     unsafe {
-        let ctl = PassPtr::<ioctl::ReadOpcode<b'U', 10, Urb>, Urb>::new(urb);
+        let ctl = PassPtr::<{ ioctl::opcode::read::<Urb>(b'U', 10) }, Urb>::new(urb);
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn reap_urb_ndelay<Fd: AsFd>(fd: Fd) -> io::Result<*mut Urb> {
     unsafe {
-        let ctl = ioctl::Getter::<ioctl::WriteOpcode<b'U', 13, *mut Urb>, *mut Urb>::new();
+        let ctl = ioctl::Getter::<{ ioctl::opcode::write::<*mut Urb>(b'U', 13) }, *mut Urb>::new();
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub unsafe fn discard_urb<Fd: AsFd>(fd: Fd, urb: *mut Urb) -> io::Result<()> {
     unsafe {
-        let ctl = PassPtr::<ioctl::NoneOpcode<b'U', 11, ()>, Urb>::new(urb);
+        let ctl = PassPtr::<{ ioctl::opcode::none(b'U', 11) }, Urb>::new(urb);
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn reset<Fd: AsFd>(fd: Fd) -> io::Result<()> {
     unsafe {
-        let ctl = ioctl::NoArg::<ioctl::NoneOpcode<b'U', 20, ()>>::new();
+        let ctl = ioctl::NoArg::<{ ioctl::opcode::none(b'U', 20) }>::new();
         ioctl::ioctl(fd, ctl)
     }
 }
@@ -229,26 +231,25 @@ pub struct Urb {
     // + variable size array of iso_packet_desc
 }
 
-pub struct Transfer<Opcode, Input> {
+pub struct Transfer<const OPCODE: Opcode, Input> {
     input: Input,
-    _opcode: PhantomData<Opcode>,
 }
 
-impl<Opcode: CompileTimeOpcode, Input> Transfer<Opcode, Input> {
+impl<const OPCODE: Opcode, Input> Transfer<OPCODE, Input> {
     #[inline]
     pub unsafe fn new(input: Input) -> Self {
-        Self {
-            input,
-            _opcode: PhantomData,
-        }
+        Self { input }
     }
 }
 
-unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for Transfer<Opcode, Input> {
+unsafe impl<const OPCODE: Opcode, Input> Ioctl for Transfer<OPCODE, Input> {
     type Output = usize;
 
     const IS_MUTATING: bool = true;
-    const OPCODE: rustix::ioctl::Opcode = Opcode::OPCODE;
+
+    fn opcode(&self) -> ioctl::Opcode {
+        OPCODE
+    }
 
     fn as_ptr(&mut self) -> *mut c_void {
         &mut self.input as *mut Input as *mut c_void
@@ -274,22 +275,25 @@ pub struct CtrlTransfer {
 pub fn control<Fd: AsFd>(fd: Fd, transfer: CtrlTransfer) -> io::Result<usize> {
     unsafe {
         let ctl =
-            Transfer::<ioctl::ReadWriteOpcode<b'U', 0, CtrlTransfer>, CtrlTransfer>::new(transfer);
+            Transfer::<{ ioctl::opcode::read_write::<CtrlTransfer>(b'U', 0) }, CtrlTransfer>::new(
+                transfer,
+            );
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn clear_halt<Fd: AsFd>(fd: Fd, endpoint: u8) -> io::Result<()> {
     unsafe {
-        let ctl =
-            ioctl::Setter::<ioctl::ReadOpcode<b'U', 21, c_uint>, c_uint>::new(endpoint.into());
+        let ctl = ioctl::Setter::<{ ioctl::opcode::read::<c_uint>(b'U', 21) }, c_uint>::new(
+            endpoint.into(),
+        );
         ioctl::ioctl(fd, ctl)
     }
 }
 
 pub fn get_speed<Fd: AsFd>(fd: Fd) -> io::Result<usize> {
     unsafe {
-        let ctl = Transfer::<ioctl::NoneOpcode<b'U', 31, ()>, ()>::new(());
+        let ctl = Transfer::<{ ioctl::opcode::none(b'U', 31) }, ()>::new(());
         ioctl::ioctl(fd, ctl)
     }
 }
