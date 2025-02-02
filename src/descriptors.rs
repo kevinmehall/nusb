@@ -14,7 +14,7 @@ use std::{
 use log::warn;
 
 use crate::{
-    transfer::{Direction, EndpointType},
+    transfer::{Direction, TransferType},
     Error,
 };
 
@@ -640,12 +640,12 @@ impl<'a> EndpointDescriptor<'a> {
     }
 
     /// Get the endpoint's transfer type.
-    pub fn transfer_type(&self) -> EndpointType {
+    pub fn transfer_type(&self) -> TransferType {
         match self.attributes() & 0x03 {
-            0 => EndpointType::Control,
-            1 => EndpointType::Isochronous,
-            2 => EndpointType::Bulk,
-            3 => EndpointType::Interrupt,
+            0 => TransferType::Control,
+            1 => TransferType::Isochronous,
+            2 => TransferType::Bulk,
+            3 => TransferType::Interrupt,
             _ => unreachable!(),
         }
     }
@@ -891,7 +891,7 @@ fn test_linux_root_hub() {
 
     let endpoint = alt.endpoints().next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Interrupt);
+    assert_eq!(endpoint.transfer_type(), TransferType::Interrupt);
     assert_eq!(endpoint.max_packet_size(), 4);
     assert_eq!(endpoint.interval(), 12);
 
@@ -1024,7 +1024,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x83);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Interrupt);
+    assert_eq!(endpoint.transfer_type(), TransferType::Interrupt);
     assert_eq!(endpoint.max_packet_size(), 16);
 
     assert_eq!(endpoint.descriptors().next().unwrap().descriptor_type(), 0x25);
@@ -1057,7 +1057,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 128);
 
     assert!(endpoints.next().is_none());
@@ -1073,7 +1073,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 256);
     assert_eq!(endpoint.packets_per_microframe(), 1);
 
@@ -1090,7 +1090,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 1);
 
@@ -1107,7 +1107,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 2);
 
@@ -1122,7 +1122,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 3);
 
@@ -1137,7 +1137,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 1024);
     assert_eq!(endpoint.packets_per_microframe(), 3);
 

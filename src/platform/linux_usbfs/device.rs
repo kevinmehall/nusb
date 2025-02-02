@@ -32,7 +32,7 @@ use crate::transfer::{ControlType, Recipient};
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{
-        notify_completion, Control, Direction, EndpointType, TransferError, TransferHandle,
+        notify_completion, Control, Direction, TransferError, TransferHandle, TransferType,
     },
     DeviceInfo, Error, Speed,
 };
@@ -276,7 +276,7 @@ impl LinuxDevice {
             self.clone(),
             None,
             0,
-            EndpointType::Control,
+            TransferType::Control,
         ))
     }
 
@@ -468,7 +468,7 @@ impl LinuxInterface {
     pub(crate) fn make_transfer(
         self: &Arc<Self>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(
             self.device.clone(),

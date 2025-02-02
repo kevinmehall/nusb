@@ -21,8 +21,8 @@ use windows_sys::Win32::{
 };
 
 use crate::transfer::{
-    notify_completion, Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit,
-    PlatformTransfer, Recipient, RequestBuffer, ResponseBuffer, TransferError,
+    notify_completion, Completion, ControlIn, ControlOut, PlatformSubmit, PlatformTransfer,
+    Recipient, RequestBuffer, ResponseBuffer, TransferError, TransferType,
 };
 
 #[repr(C)]
@@ -38,7 +38,7 @@ pub struct TransferData {
     buf: *mut u8,
     capacity: usize,
     endpoint: u8,
-    ep_type: EndpointType,
+    ep_type: TransferType,
     submit_error: Option<WIN32_ERROR>,
 }
 
@@ -48,7 +48,7 @@ impl TransferData {
     pub(crate) fn new(
         interface: std::sync::Arc<super::Interface>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferData {
         TransferData {
             interface,
@@ -225,7 +225,7 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
 impl PlatformSubmit<ControlIn> for TransferData {
     unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
         assert_eq!(self.endpoint, 0);
-        assert_eq!(self.ep_type, EndpointType::Control);
+        assert_eq!(self.ep_type, TransferType::Control);
 
         if data.recipient == Recipient::Interface
             && data.index as u8 != self.interface.interface_number
@@ -274,7 +274,7 @@ impl PlatformSubmit<ControlIn> for TransferData {
 impl PlatformSubmit<ControlOut<'_>> for TransferData {
     unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
         assert_eq!(self.endpoint, 0);
-        assert_eq!(self.ep_type, EndpointType::Control);
+        assert_eq!(self.ep_type, TransferType::Control);
 
         if data.recipient == Recipient::Interface
             && data.index as u8 != self.interface.interface_number

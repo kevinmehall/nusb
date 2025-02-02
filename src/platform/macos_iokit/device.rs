@@ -14,7 +14,7 @@ use log::{debug, error};
 use crate::{
     descriptors::DeviceDescriptor,
     maybe_future::blocking::Blocking,
-    transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
+    transfer::{Control, Direction, TransferError, TransferHandle, TransferType},
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 
@@ -293,9 +293,9 @@ impl MacInterface {
     pub(crate) fn make_transfer(
         self: &Arc<Self>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferHandle<super::TransferData> {
-        if ep_type == EndpointType::Control {
+        if ep_type == TransferType::Control {
             assert!(endpoint == 0);
             TransferHandle::new(super::TransferData::new_control(self.device.clone()))
         } else {

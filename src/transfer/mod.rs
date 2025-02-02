@@ -32,7 +32,7 @@ pub(crate) use internal::{
 /// Endpoint type.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum EndpointType {
+pub enum TransferType {
     /// Control endpoint.
     Control = 0,
 

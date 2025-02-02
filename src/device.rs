@@ -5,8 +5,8 @@ use crate::{
     },
     platform,
     transfer::{
-        Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
-        TransferFuture,
+        Control, ControlIn, ControlOut, Queue, RequestBuffer, TransferError, TransferFuture,
+        TransferType,
     },
     DeviceInfo, Error, MaybeFuture, Speed,
 };
@@ -462,7 +462,7 @@ impl Interface {
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
-        let mut t = self.backend.make_transfer(0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, TransferType::Control);
         t.submit::<ControlIn>(data);
         TransferFuture::new(t)
     }
@@ -498,7 +498,7 @@ impl Interface {
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
-        let mut t = self.backend.make_transfer(0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, TransferType::Control);
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
@@ -508,7 +508,7 @@ impl Interface {
     /// * The requested length must be a multiple of the endpoint's maximum packet size
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
-        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
+        let mut t = self.backend.make_transfer(endpoint, TransferType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -517,7 +517,7 @@ impl Interface {
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
-        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
+        let mut t = self.backend.make_transfer(endpoint, TransferType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -526,14 +526,14 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Bulk)
     }
 
     /// Create a queue for managing multiple **OUT (host-to-device)** transfers on a **bulk** endpoint.
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Bulk)
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the specified **interrupt** endpoint.
@@ -543,7 +543,7 @@ impl Interface {
     pub fn interrupt_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self
             .backend
-            .make_transfer(endpoint, EndpointType::Interrupt);
+            .make_transfer(endpoint, TransferType::Interrupt);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -554,7 +554,7 @@ impl Interface {
     pub fn interrupt_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
         let mut t = self
             .backend
-            .make_transfer(endpoint, EndpointType::Interrupt);
+            .make_transfer(endpoint, TransferType::Interrupt);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -563,14 +563,14 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn interrupt_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Interrupt)
     }
 
     /// Create a queue for managing multiple **OUT (device-to-host)** transfers on an **interrupt** endpoint.
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn interrupt_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Interrupt)
     }
 
     /// Clear a bulk or interrupt endpoint's halt / stall condition.

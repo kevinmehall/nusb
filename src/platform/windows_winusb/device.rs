@@ -27,9 +27,9 @@ use crate::{
         ConfigurationDescriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
-    maybe_future::{blocking::Blocking, MaybeFuture, Ready},
-    transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
-    DeviceInfo, Error, Speed,
+    maybe_future::{blocking::Blocking, Ready},
+    transfer::{Control, Direction, Recipient, TransferError, TransferHandle, TransferType},
+    DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
@@ -388,7 +388,7 @@ impl WindowsInterface {
     pub(crate) fn make_transfer(
         self: &Arc<Self>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
     }
