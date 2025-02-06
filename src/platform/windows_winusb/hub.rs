@@ -83,6 +83,24 @@ impl HubHandle {
             );
 
             if r == TRUE {
+                const ZERO_DESC: USB_DEVICE_DESCRIPTOR = unsafe { mem::zeroed() };
+                if memx::memcmp(
+                    std::slice::from_raw_parts(
+                        &info.DeviceDescriptor as *const _ as *const u8,
+                        mem::size_of_val(&info.DeviceDescriptor),
+                    ),
+                    std::slice::from_raw_parts(
+                        &ZERO_DESC as *const _ as *const u8,
+                        mem::size_of_val(&ZERO_DESC),
+                    ),
+                ) == std::cmp::Ordering::Equal
+                {
+                    // Win returns false positive in a case where device is detached while DeviceIoControl is invoked.
+                    return Err(Error::new(
+                        std::io::ErrorKind::Other,
+                        "DeviceIoControl returned success but fields are 0",
+                    ));
+                }
                 Ok(info)
             } else {
                 let err = Error::last_os_error();
