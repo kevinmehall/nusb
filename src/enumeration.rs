@@ -46,6 +46,9 @@ pub struct DeviceInfo {
     #[cfg(target_os = "windows")]
     pub(crate) driver: Option<String>,
 
+    #[cfg(target_os = "windows")]
+    pub(crate) friendly_name: Option<String>,
+
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
 
@@ -141,6 +144,12 @@ impl DeviceInfo {
     #[cfg(target_os = "windows")]
     pub fn port_number(&self) -> u32 {
         self.port_number
+    }
+
+    /// *(Windows-only)* Friendly name
+    #[cfg(target_os = "windows")]
+    pub fn friendly_name(&self) -> Option<&str> {
+        self.friendly_name.as_deref()
     }
 
     /// Path of port numbers identifying the port where the device is connected.
@@ -316,6 +325,7 @@ impl std::fmt::Debug for DeviceInfo {
 
         #[cfg(target_os = "windows")]
         {
+            s.field("friendly_name", &self.friendly_name);
             s.field("instance_id", &self.instance_id);
             s.field("parent_instance_id", &self.parent_instance_id);
             s.field("location_paths", &self.location_paths);
