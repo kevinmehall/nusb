@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use nusb::{descriptors::language_id::US_ENGLISH, DeviceInfo, IoAction};
+use nusb::{descriptors::language_id::US_ENGLISH, DeviceInfo, MaybeFuture};
 
 fn main() {
     env_logger::init();

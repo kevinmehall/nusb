@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::platform::SysfsPath;
 
-use crate::{Device, Error, IoAction};
+use crate::{Device, Error, MaybeFuture};
 
 /// Opaque device identifier
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -277,7 +277,7 @@ impl DeviceInfo {
     }
 
     /// Open the device
-    pub fn open(&self) -> impl IoAction<Output = Result<Device, Error>> {
+    pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
     }
 }

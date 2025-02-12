@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{platform, Error, IoAction};
+use crate::{platform, Error, MaybeFuture};
 
 use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRequest};
 
@@ -52,7 +52,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ```no_run
 /// use futures_lite::future::block_on;
 /// use nusb::transfer::RequestBuffer;
-/// # use nusb::IoAction;
+/// # use nusb::MaybeFuture;
 /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
 /// # let device = di.open().wait().unwrap();
 /// # let interface = device.claim_interface(0).wait().unwrap();
@@ -82,7 +82,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 /// ```no_run
 /// use std::mem;
 /// use futures_lite::future::block_on;
-/// # use nusb::IoAction;
+/// # use nusb::MaybeFuture;
 /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
 /// # let device = di.open().wait().unwrap();
 /// # let interface = device.claim_interface(0).wait().unwrap();
@@ -223,7 +223,7 @@ where
     /// the error and resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&mut self) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.interface.clone().clear_halt(self.endpoint)
     }
 }

@@ -2,9 +2,9 @@ use std::future::IntoFuture;
 
 /// IO that may be performed synchronously or asynchronously.
 ///
-/// An `IOAction` can be run asynchronously with `.await`, or
+/// A `MaybeFuture` can be run asynchronously with `.await`, or
 /// run synchronously (blocking the current thread) with `.wait()`.
-pub trait IoAction: IntoFuture {
+pub trait MaybeFuture: IntoFuture {
     /// Block waiting for the action to complete
     #[cfg(not(target_arch = "wasm32"))]
     fn wait(self) -> Self::Output;
@@ -17,7 +17,7 @@ pub trait IoAction: IntoFuture {
     target_os = "macos"
 ))]
 pub mod blocking {
-    use super::IoAction;
+    use super::MaybeFuture;
     use std::future::IntoFuture;
 
     /// Wrapper that invokes a FnOnce on a background thread when
@@ -46,7 +46,7 @@ pub mod blocking {
         }
     }
 
-    impl<F, R> IoAction for Blocking<F>
+    impl<F, R> MaybeFuture for Blocking<F>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -68,7 +68,7 @@ impl<T> IntoFuture for Ready<T> {
     }
 }
 
-impl<T> IoAction for Ready<T> {
+impl<T> MaybeFuture for Ready<T> {
     fn wait(self) -> Self::Output {
         self.0
     }

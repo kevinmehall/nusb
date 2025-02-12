@@ -8,7 +8,7 @@ use crate::{
         Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
         TransferFuture,
     },
-    DeviceInfo, Error, IoAction, Speed,
+    DeviceInfo, Error, MaybeFuture, Speed,
 };
 use log::error;
 use std::{io::ErrorKind, sync::Arc, time::Duration};
@@ -18,7 +18,7 @@ use std::{io::ErrorKind, sync::Arc, time::Duration};
 /// Obtain a `Device` by calling [`DeviceInfo::open`]:
 ///
 /// ```no_run
-/// use nusb::{self, IoAction};
+/// use nusb::{self, MaybeFuture};
 /// let device_info = nusb::list_devices().wait().unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
@@ -43,13 +43,15 @@ impl Device {
         Device { backend }
     }
 
-    pub(crate) fn open(d: &DeviceInfo) -> impl IoAction<Output = Result<Device, std::io::Error>> {
+    pub(crate) fn open(
+        d: &DeviceInfo,
+    ) -> impl MaybeFuture<Output = Result<Device, std::io::Error>> {
         platform::Device::from_device_info(d)
     }
 
     /// Wraps a device that is already open.
     #[cfg(any(target_os = "android", target_os = "linux"))]
-    pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl IoAction<Output = Result<Device, Error>> {
+    pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
         platform::Device::from_fd(fd)
     }
 
@@ -57,7 +59,7 @@ impl Device {
     pub fn claim_interface(
         &self,
         interface: u8,
-    ) -> impl IoAction<Output = Result<Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
         self.backend.clone().claim_interface(interface)
     }
 
@@ -69,7 +71,7 @@ impl Device {
     pub fn detach_and_claim_interface(
         &self,
         interface: u8,
-    ) -> impl IoAction<Output = Result<Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
         self.backend.clone().detach_and_claim_interface(interface)
     }
 
@@ -146,7 +148,7 @@ impl Device {
     pub fn set_configuration(
         &self,
         configuration: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_configuration(configuration)
     }
 
@@ -256,7 +258,7 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn reset(&self) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().reset()
     }
 
@@ -303,7 +305,7 @@ impl Device {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
-    /// # use nusb::IoAction;
+    /// # use nusb::MaybeFuture;
     /// # fn main() -> Result<(), std::io::Error> {
     /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
     /// # let device = di.open().wait().unwrap();
@@ -337,7 +339,7 @@ impl Device {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
-    /// # use nusb::IoAction;
+    /// # use nusb::MaybeFuture;
     /// # fn main() -> Result<(), std::io::Error> {
     /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
     /// # let device = di.open().wait().unwrap();
@@ -386,7 +388,7 @@ impl Interface {
     /// An alternate setting is a mode of the interface that makes particular endpoints available
     /// and may enable or disable functionality of the device. The OS resets the device to the default
     /// alternate setting when the interface is released or the program exits.
-    pub fn set_alt_setting(&self, alt_setting: u8) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn set_alt_setting(&self, alt_setting: u8) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_alt_setting(alt_setting)
     }
 
@@ -437,7 +439,7 @@ impl Interface {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
-    /// # use nusb::IoAction;
+    /// # use nusb::MaybeFuture;
     /// # fn main() -> Result<(), std::io::Error> {
     /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
     /// # let device = di.open().wait().unwrap();
@@ -473,7 +475,7 @@ impl Interface {
     /// ```no_run
     /// use futures_lite::future::block_on;
     /// use nusb::transfer::{ ControlOut, ControlType, Recipient };
-    /// # use nusb::IoAction;
+    /// # use nusb::MaybeFuture;
     /// # fn main() -> Result<(), std::io::Error> {
     /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
     /// # let device = di.open().wait().unwrap();
@@ -582,7 +584,7 @@ impl Interface {
     /// resume use of the endpoint.
     ///
     /// This should not be called when transfers are pending on the endpoint.
-    pub fn clear_halt(&self, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn clear_halt(&self, endpoint: u8) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().clear_halt(endpoint)
     }
 

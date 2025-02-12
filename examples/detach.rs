@@ -1,7 +1,7 @@
 //! Detach the kernel driver for an FTDI device and then reattach it.
 use std::{thread::sleep, time::Duration};
 
-use nusb::IoAction;
+use nusb::MaybeFuture;
 fn main() {
     env_logger::init();
     let di = nusb::list_devices()

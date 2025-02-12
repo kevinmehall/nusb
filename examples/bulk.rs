@@ -1,5 +1,5 @@
 use futures_lite::future::block_on;
-use nusb::{transfer::RequestBuffer, IoAction};
+use nusb::{transfer::RequestBuffer, MaybeFuture};
 
 fn main() {
     env_logger::init();

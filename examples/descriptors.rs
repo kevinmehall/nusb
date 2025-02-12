@@ -1,4 +1,4 @@
-use nusb::{DeviceInfo, IoAction};
+use nusb::{DeviceInfo, MaybeFuture};
 
 fn main() {
     env_logger::init();

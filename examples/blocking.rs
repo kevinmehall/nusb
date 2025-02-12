@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use nusb::{
     transfer::{Control, ControlType, Recipient},
-    IoAction,
+    MaybeFuture,
 };
 
 fn main() {

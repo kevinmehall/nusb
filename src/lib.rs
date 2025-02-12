@@ -129,8 +129,8 @@ pub mod transfer;
 
 pub mod hotplug;
 
-mod ioaction;
-pub use ioaction::IoAction;
+mod maybe_future;
+pub use maybe_future::MaybeFuture;
 
 /// OS error returned from operations other than transfers.
 pub type Error = io::Error;
@@ -140,12 +140,13 @@ pub type Error = io::Error;
 /// ### Example
 ///
 /// ```no_run
-/// use nusb::{self, IoAction};
+/// use nusb::{self, MaybeFuture};
 /// let device = nusb::list_devices().wait().unwrap()
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 /// ```
-pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = DeviceInfo>, Error>> {
+pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
+{
     platform::list_devices()
 }
 
@@ -157,7 +158,7 @@ pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = Devi
 ///
 /// ```no_run
 /// use std::collections::HashMap;
-/// use nusb::IoAction;
+/// use nusb::MaybeFuture;
 ///
 /// let devices = nusb::list_devices().wait().unwrap().collect::<Vec<_>>();
 /// let buses: HashMap<String, (nusb::BusInfo, Vec::<nusb::DeviceInfo>)> = nusb::list_buses().wait().unwrap()
@@ -171,7 +172,7 @@ pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = Devi
 /// ### Platform-specific notes
 /// * On Linux, the abstraction of the "bus" is a phony device known as the root hub. This device is available at bus.root_hub()
 /// * On Android, this will only work on rooted devices due to sysfs path usage
-pub fn list_buses() -> impl IoAction<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
+pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     platform::list_buses()
 }
 
@@ -188,7 +189,7 @@ pub fn list_buses() -> impl IoAction<Output = Result<impl Iterator<Item = BusInf
 ///
 /// ```no_run
 /// use std::collections::HashMap;
-/// use nusb::{IoAction, DeviceInfo, DeviceId, hotplug::HotplugEvent};
+/// use nusb::{MaybeFuture, DeviceInfo, DeviceId, hotplug::HotplugEvent};
 /// let watch = nusb::watch_devices().unwrap();
 /// let mut devices: HashMap<DeviceId, DeviceInfo> = nusb::list_devices().wait().unwrap()
 ///     .map(|d| (d.id(), d)).collect();

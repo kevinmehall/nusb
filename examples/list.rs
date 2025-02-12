@@ -1,4 +1,4 @@
-use nusb::IoAction;
+use nusb::MaybeFuture;
 
 fn main() {
     env_logger::init();

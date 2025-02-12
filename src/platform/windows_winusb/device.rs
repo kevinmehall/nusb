@@ -27,9 +27,9 @@ use crate::{
         validate_config_descriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
-    ioaction::{blocking::Blocking, Ready},
+    maybe_future::{blocking::Blocking, MaybeFuture, Ready},
     transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
-    DeviceInfo, Error, IoAction, Speed,
+    DeviceInfo, Error, Speed,
 };
 
 use super::{
@@ -53,7 +53,7 @@ pub(crate) struct WindowsDevice {
 impl WindowsDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl IoAction<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
         let instance_id = d.instance_id.clone();
         let devinst = d.devinst;
         Blocking::new(move || {
@@ -117,7 +117,7 @@ impl WindowsDevice {
     pub(crate) fn set_configuration(
         &self,
         _configuration: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Ready(Err(io::Error::new(
             ErrorKind::Unsupported,
             "set_configuration not supported by WinUSB",
@@ -133,7 +133,7 @@ impl WindowsDevice {
         HubPort::by_child_devinst(self.devinst)?.get_descriptor(desc_type, desc_index, language_id)
     }
 
-    pub(crate) fn reset(&self) -> impl IoAction<Output = Result<(), Error>> {
+    pub(crate) fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         Ready(Err(io::Error::new(
             ErrorKind::Unsupported,
             "reset not supported by WinUSB",
@@ -143,7 +143,7 @@ impl WindowsDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         Blocking::new(move || {
             self.claim_interface_blocking(interface_number)
                 .map(crate::Interface::wrap)
@@ -199,7 +199,7 @@ impl WindowsDevice {
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -501,7 +501,7 @@ impl WindowsInterface {
     pub fn set_alt_setting(
         self: Arc<Self>,
         alt_setting: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || unsafe {
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
@@ -512,7 +512,10 @@ impl WindowsInterface {
         })
     }
 
-    pub fn clear_halt(self: Arc<Self>, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn clear_halt(
+        self: Arc<Self>,
+        endpoint: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             debug!("Clear halt, endpoint {endpoint:02x}");
             unsafe {

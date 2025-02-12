@@ -26,10 +26,9 @@ use super::{
     SysfsPath,
 };
 use crate::descriptors::{validate_device_descriptor, Configuration, DeviceDescriptor};
-use crate::ioaction::blocking::Blocking;
+use crate::maybe_future::{blocking::Blocking, MaybeFuture};
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
-use crate::IoAction;
 use crate::{
     descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
     transfer::{
@@ -52,7 +51,7 @@ pub(crate) struct LinuxDevice {
 impl LinuxDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl IoAction<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
         let busnum = d.busnum();
         let devnum = d.device_address();
         let sysfs_path = d.path.clone();
@@ -71,7 +70,7 @@ impl LinuxDevice {
         })
     }
 
-    pub(crate) fn from_fd(fd: OwnedFd) -> impl IoAction<Output = Result<crate::Device, Error>> {
+    pub(crate) fn from_fd(fd: OwnedFd) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
         Blocking::new(move || {
             debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
             Self::create_inner(fd, None, None)
@@ -193,7 +192,7 @@ impl LinuxDevice {
     pub(crate) fn set_configuration(
         self: Arc<Self>,
         configuration: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             usbfs::set_configuration(&self.fd, configuration)?;
             self.active_config.store(configuration, Ordering::SeqCst);
@@ -201,7 +200,7 @@ impl LinuxDevice {
         })
     }
 
-    pub(crate) fn reset(self: Arc<Self>) -> impl IoAction<Output = Result<(), Error>> {
+    pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             usbfs::reset(&self.fd)?;
             Ok(())
@@ -282,7 +281,7 @@ impl LinuxDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         Blocking::new(move || {
             usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
                 warn!(
@@ -305,7 +304,7 @@ impl LinuxDevice {
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         Blocking::new(move || {
             usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
             debug!(
@@ -500,7 +499,7 @@ impl LinuxInterface {
     pub fn set_alt_setting(
         self: Arc<Self>,
         alt_setting: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
@@ -514,7 +513,10 @@ impl LinuxInterface {
         })
     }
 
-    pub fn clear_halt(self: Arc<Self>, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn clear_halt(
+        self: Arc<Self>,
+        endpoint: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             debug!("Clear halt, endpoint {endpoint:02x}");
             Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)

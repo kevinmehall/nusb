@@ -8,8 +8,7 @@ use log::debug;
 use log::warn;
 
 use crate::enumeration::InterfaceInfo;
-use crate::ioaction::Ready;
-use crate::IoAction;
+use crate::maybe_future::{MaybeFuture, Ready};
 use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
@@ -121,7 +120,8 @@ impl FromHexStr for u16 {
 
 const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
 
-pub fn list_devices() -> impl IoAction<Output = Result<impl Iterator<Item = DeviceInfo>, Error>> {
+pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
+{
     Ready((|| {
         Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
             let path = entry.ok()?.path();
@@ -162,7 +162,7 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     }))
 }
 
-pub fn list_buses() -> impl IoAction<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
+pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     Ready((|| {
         Ok(list_root_hubs()?.filter_map(|rh| {
             // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus

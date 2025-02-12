@@ -1,7 +1,7 @@
 use futures_lite::future::block_on;
 use nusb::{
     transfer::{ControlIn, ControlOut, ControlType, Recipient},
-    IoAction,
+    MaybeFuture,
 };
 
 fn main() {

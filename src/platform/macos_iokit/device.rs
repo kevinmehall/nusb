@@ -13,9 +13,9 @@ use log::{debug, error};
 
 use crate::{
     descriptors::DeviceDescriptor,
-    ioaction::blocking::Blocking,
+    maybe_future::blocking::Blocking,
     transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
-    DeviceInfo, Error, IoAction, Speed,
+    DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
@@ -53,7 +53,7 @@ fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
 impl MacDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl IoAction<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
         let registry_id = d.registry_id;
         let speed = d.speed;
         Blocking::new(move || {
@@ -137,7 +137,7 @@ impl MacDevice {
     pub(crate) fn set_configuration(
         self: Arc<Self>,
         configuration: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
             unsafe {
@@ -152,7 +152,7 @@ impl MacDevice {
         })
     }
 
-    pub(crate) fn reset(self: Arc<Self>) -> impl IoAction<Output = Result<(), Error>> {
+    pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
             unsafe {
@@ -232,7 +232,7 @@ impl MacDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         Blocking::new(move || {
             let intf_service = self
                 .device
@@ -263,7 +263,7 @@ impl MacDevice {
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface: u8,
-    ) -> impl IoAction<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -335,7 +335,7 @@ impl MacInterface {
     pub fn set_alt_setting(
         self: Arc<Self>,
         alt_setting: u8,
-    ) -> impl IoAction<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
@@ -358,7 +358,10 @@ impl MacInterface {
         })
     }
 
-    pub fn clear_halt(self: Arc<Self>, endpoint: u8) -> impl IoAction<Output = Result<(), Error>> {
+    pub fn clear_halt(
+        self: Arc<Self>,
+        endpoint: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             debug!("Clear halt, endpoint {endpoint:02x}");
 
