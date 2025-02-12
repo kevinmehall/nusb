@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use nusb::{descriptors::language_id::US_ENGLISH, DeviceInfo};
+use nusb::{descriptors::language_id::US_ENGLISH, DeviceInfo, MaybeFuture};
 
 fn main() {
     env_logger::init();
-    for dev in nusb::list_devices().unwrap() {
+    for dev in nusb::list_devices().wait().unwrap() {
         inspect_device(dev);
     }
 }
@@ -19,7 +19,7 @@ fn inspect_device(dev: DeviceInfo) {
         dev.manufacturer_string().unwrap_or(""),
         dev.product_string().unwrap_or("")
     );
-    let dev = match dev.open() {
+    let dev = match dev.open().wait() {
         Ok(dev) => dev,
         Err(e) => {
             println!("Failed to open device: {}", e);

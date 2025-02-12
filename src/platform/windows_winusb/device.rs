@@ -27,6 +27,7 @@ use crate::{
         validate_config_descriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
+    maybe_future::{blocking::Blocking, MaybeFuture, Ready},
     transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
     DeviceInfo, Error, Speed,
 };
@@ -50,45 +51,51 @@ pub(crate) struct WindowsDevice {
 }
 
 impl WindowsDevice {
-    pub(crate) fn from_device_info(d: &DeviceInfo) -> Result<Arc<WindowsDevice>, Error> {
-        debug!("Creating device for {:?}", d.instance_id);
+    pub(crate) fn from_device_info(
+        d: &DeviceInfo,
+    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+        let instance_id = d.instance_id.clone();
+        let devinst = d.devinst;
+        Blocking::new(move || {
+            debug!("Creating device for {:?}", instance_id);
 
-        // Look up the device again in case the DeviceInfo is stale. In
-        // particular, don't trust its `port_number` because another device
-        // might now be connected to that port, and we'd get its descriptors
-        // instead.
-        let hub_port = HubPort::by_child_devinst(d.devinst)?;
-        let connection_info = hub_port.get_info()?;
+            // Look up the device again in case the DeviceInfo is stale. In
+            // particular, don't trust its `port_number` because another device
+            // might now be connected to that port, and we'd get its descriptors
+            // instead.
+            let hub_port = HubPort::by_child_devinst(devinst)?;
+            let connection_info = hub_port.get_info()?;
 
-        // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
-        let device_descriptor = unsafe {
-            DeviceDescriptor::new(&transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
-                connection_info.device_desc,
-            ))
-        };
+            // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
+            let device_descriptor = unsafe {
+                DeviceDescriptor::new(&transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
+                    connection_info.device_desc,
+                ))
+            };
 
-        let num_configurations = connection_info.device_desc.bNumConfigurations;
-        let config_descriptors = (0..num_configurations)
-            .flat_map(|i| {
-                let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
-                match res {
-                    Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
-                    Err(e) => {
-                        error!("Failed to read config descriptor {}: {}", i, e);
-                        None
+            let num_configurations = connection_info.device_desc.bNumConfigurations;
+            let config_descriptors = (0..num_configurations)
+                .flat_map(|i| {
+                    let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
+                    match res {
+                        Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
+                        Err(e) => {
+                            error!("Failed to read config descriptor {}: {}", i, e);
+                            None
+                        }
                     }
-                }
-            })
-            .collect();
+                })
+                .collect();
 
-        Ok(Arc::new(WindowsDevice {
-            device_descriptor,
-            config_descriptors,
-            speed: connection_info.speed,
-            active_config: connection_info.active_config,
-            devinst: d.devinst,
-            handles: Mutex::new(BTreeMap::new()),
-        }))
+            Ok(crate::Device::wrap(Arc::new(WindowsDevice {
+                device_descriptor,
+                config_descriptors,
+                speed: connection_info.speed,
+                active_config: connection_info.active_config,
+                devinst: devinst,
+                handles: Mutex::new(BTreeMap::new()),
+            })))
+        })
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
@@ -107,11 +114,14 @@ impl WindowsDevice {
         self.config_descriptors.iter().map(|d| &d[..])
     }
 
-    pub(crate) fn set_configuration(&self, _configuration: u8) -> Result<(), Error> {
-        Err(io::Error::new(
+    pub(crate) fn set_configuration(
+        &self,
+        _configuration: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Ready(Err(io::Error::new(
             ErrorKind::Unsupported,
             "set_configuration not supported by WinUSB",
-        ))
+        )))
     }
 
     pub(crate) fn get_descriptor(
@@ -123,14 +133,24 @@ impl WindowsDevice {
         HubPort::by_child_devinst(self.devinst)?.get_descriptor(desc_type, desc_index, language_id)
     }
 
-    pub(crate) fn reset(&self) -> Result<(), Error> {
-        Err(io::Error::new(
+    pub(crate) fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Ready(Err(io::Error::new(
             ErrorKind::Unsupported,
             "reset not supported by WinUSB",
-        ))
+        )))
     }
 
     pub(crate) fn claim_interface(
+        self: Arc<Self>,
+        interface_number: u8,
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+        Blocking::new(move || {
+            self.claim_interface_blocking(interface_number)
+                .map(crate::Interface::wrap)
+        })
+    }
+
+    fn claim_interface_blocking(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<Arc<WindowsInterface>, Error> {
@@ -177,9 +197,9 @@ impl WindowsDevice {
     }
 
     pub(crate) fn detach_and_claim_interface(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         interface: u8,
-    ) -> Result<Arc<WindowsInterface>, Error> {
+    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -478,26 +498,34 @@ impl WindowsInterface {
         }
     }
 
-    pub fn set_alt_setting(&self, alt_setting: u8) -> Result<(), Error> {
-        unsafe {
+    pub fn set_alt_setting(
+        self: Arc<Self>,
+        alt_setting: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || unsafe {
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
                 Ok(())
             } else {
                 Err(io::Error::last_os_error())
             }
-        }
+        })
     }
 
-    pub fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        debug!("Clear halt, endpoint {endpoint:02x}");
-        unsafe {
-            let r = WinUsb_ResetPipe(self.winusb_handle, endpoint);
-            if r == TRUE {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
+    pub fn clear_halt(
+        self: Arc<Self>,
+        endpoint: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            debug!("Clear halt, endpoint {endpoint:02x}");
+            unsafe {
+                let r = WinUsb_ResetPipe(self.winusb_handle, endpoint);
+                if r == TRUE {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
             }
-        }
+        })
     }
 }

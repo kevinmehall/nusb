@@ -18,6 +18,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
         Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
+    maybe_future::{blocking::Blocking, MaybeFuture},
     BusInfo, DeviceInfo, Error, InterfaceInfo, UsbControllerType,
 };
 
@@ -27,26 +28,31 @@ use super::{
     util::WCString,
 };
 
-pub fn list_devices() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
-        // get USB_HUB devices as well, like other platforms. ROOT_HUBs will be dropped by probe_device
-        .iter()
-        .chain(cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None).iter())
-        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
-        .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(probe_device)
-        .collect();
-    Ok(devs.into_iter())
+pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
+{
+    Blocking::new(|| {
+        let devs: Vec<DeviceInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_DEVICE, None)
+            // get USB_HUB devices as well, like other platforms. ROOT_HUBs will be dropped by probe_device
+            .iter()
+            .chain(cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None).iter())
+            .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
+            .flat_map(|d| DevInst::from_instance_id(&d))
+            .flat_map(probe_device)
+            .collect();
+        Ok(devs.into_iter())
+    })
 }
 
-pub fn list_buses() -> Result<impl Iterator<Item = BusInfo>, Error> {
-    let devs: Vec<BusInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
-        .iter()
-        .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
-        .flat_map(|d| DevInst::from_instance_id(&d))
-        .flat_map(probe_bus)
-        .collect();
-    Ok(devs.into_iter())
+pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
+    Blocking::new(|| {
+        let devs: Vec<BusInfo> = cfgmgr32::list_interfaces(GUID_DEVINTERFACE_USB_HUB, None)
+            .iter()
+            .flat_map(|i| get_device_interface_property::<WCString>(i, DEVPKEY_Device_InstanceId))
+            .flat_map(|d| DevInst::from_instance_id(&d))
+            .flat_map(probe_bus)
+            .collect();
+        Ok(devs.into_iter())
+    })
 }
 
 pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
