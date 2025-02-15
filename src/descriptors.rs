@@ -17,6 +17,8 @@ use crate::{
     Error,
 };
 
+#[allow(dead_code)]
+pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
 
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
