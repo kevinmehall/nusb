@@ -7,7 +7,7 @@ use std::{
     os::windows::prelude::{
         AsHandle, AsRawHandle, HandleOrInvalid, OsStrExt, OsStringExt, OwnedHandle, RawHandle,
     },
-    ptr::null,
+    ptr::{self, null},
     slice,
 };
 
@@ -28,7 +28,7 @@ pub fn create_file(path: &WCStr) -> Result<OwnedHandle, io::Error> {
             null(),
             OPEN_EXISTING,
             FILE_FLAG_OVERLAPPED,
-            0,
+            ptr::null_mut(),
         );
         HandleOrInvalid::from_raw_handle(r as RawHandle)
             .try_into()

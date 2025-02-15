@@ -3,7 +3,7 @@ use std::{
     ffi::c_void,
     io::ErrorKind,
     mem::size_of,
-    ptr::addr_of,
+    ptr::{self, addr_of},
     sync::Mutex,
     task::{Context, Poll},
 };
@@ -57,7 +57,7 @@ impl WindowsHotplugWatch {
             waker: AtomicWaker::new(),
         }));
 
-        let mut registration = 0;
+        let mut registration = ptr::null_mut();
         let filter = CM_NOTIFY_FILTER {
             cbSize: size_of::<CM_NOTIFY_FILTER>() as u32,
             Flags: 0,
