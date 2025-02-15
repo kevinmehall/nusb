@@ -7,7 +7,7 @@ use std::{
         io::{AsRawHandle, RawHandle},
         prelude::OwnedHandle,
     },
-    ptr::null_mut,
+    ptr,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -244,13 +244,17 @@ pub(crate) struct WinusbFileHandle {
     claimed_interfaces: BitSet256,
 }
 
+// SAFETY: WinUSB methods on the interface handle are thread-safe
+unsafe impl Send for WinusbFileHandle {}
+unsafe impl Sync for WinusbFileHandle {}
+
 impl WinusbFileHandle {
     fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
         let handle = create_file(&path)?;
         super::events::register(&handle)?;
 
         let winusb_handle = unsafe {
-            let mut h = 0;
+            let mut h = ptr::null_mut();
             if WinUsb_Initialize(raw_handle(&handle), &mut h) == FALSE {
                 error!("WinUsb_Initialize failed: {:?}", io::Error::last_os_error());
                 return Err(io::Error::last_os_error());
@@ -286,7 +290,7 @@ impl WinusbFileHandle {
             self.winusb_handle
         } else {
             unsafe {
-                let mut out_handle = 0;
+                let mut out_handle = ptr::null_mut();
                 let idx = interface_number - self.first_interface - 1;
                 if WinUsb_GetAssociatedInterface(self.winusb_handle, idx, &mut out_handle) == FALSE
                 {
@@ -435,7 +439,7 @@ impl WindowsInterface {
             data,
             len.try_into().expect("request size too large"),
             &mut actual_len,
-            null_mut(),
+            ptr::null_mut(),
         );
 
         if r == TRUE {

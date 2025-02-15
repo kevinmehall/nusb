@@ -5,7 +5,7 @@ use std::{
         io::HandleOrNull,
         prelude::{OwnedHandle, RawHandle},
     },
-    thread,
+    ptr, thread,
 };
 use windows_sys::Win32::{
     Foundation::{GetLastError, FALSE, INVALID_HANDLE_VALUE},
@@ -21,7 +21,7 @@ struct IoCompletionPort(OwnedHandle);
 impl IoCompletionPort {
     fn new() -> Result<IoCompletionPort, Error> {
         unsafe {
-            let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 0);
+            let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 0);
             match HandleOrNull::from_raw_handle(port as RawHandle).try_into() {
                 Ok(handle) => Ok(IoCompletionPort(handle)),
                 Err(_) => {
@@ -36,7 +36,7 @@ impl IoCompletionPort {
     fn register(&self, handle: &OwnedHandle) -> Result<(), Error> {
         unsafe {
             let r = CreateIoCompletionPort(raw_handle(handle), raw_handle(&self.0), 0, 0);
-            if r == 0 {
+            if r == ptr::null_mut() {
                 let err = std::io::Error::last_os_error();
                 error!("CreateIoCompletionPort (register) failed: {err:?}");
                 Err(err)
