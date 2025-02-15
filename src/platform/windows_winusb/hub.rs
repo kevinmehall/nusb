@@ -36,7 +36,7 @@ const DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER: u32 = 0x02;
 const DEVICE_IS_OPERATING_AT_SUPER_SPEED_PLUS_OR_HIGHER: u32 = 0x04;
 const DEVICE_IS_SUPER_SPEED_PLUS_CAPABLE_OR_HIGHER: u32 = 0x08;
 
-use crate::{Error, Speed};
+use crate::{descriptors::DESCRIPTOR_TYPE_DEVICE, Error, Speed};
 
 use super::{
     cfgmgr32::DevInst,
@@ -83,6 +83,15 @@ impl HubHandle {
             );
 
             if r == TRUE {
+                if info.DeviceDescriptor.bDescriptorType != DESCRIPTOR_TYPE_DEVICE {
+                    // When the device is disconnected during this call, Windows is observed to
+                    // sometimes return an all-zero device descriptor.
+                    return Err(Error::new(
+                       std::io::ErrorKind::Other,
+                       "IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX returned an invalid device descriptor",
+                    ));
+                }
+
                 Ok(info)
             } else {
                 let err = Error::last_os_error();
