@@ -7,6 +7,7 @@ use std::{
     fmt::{Debug, Display},
     io::ErrorKind,
     iter,
+    num::NonZeroU8,
     ops::Deref,
 };
 
@@ -321,18 +322,18 @@ descriptor_fields! {
 
 impl DeviceDescriptor {
     /// `iManufacturer` descriptor field: Index for manufacturer description string.
-    pub fn manufacturer_string_index(&self) -> Option<u8> {
-        Some(self.manufacturer_string_index_raw()).filter(|&i| i != 0)
+    pub fn manufacturer_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.manufacturer_string_index_raw())
     }
 
     /// `iProduct` descriptor field: Index for product description string.
-    pub fn product_string_index(&self) -> Option<u8> {
-        Some(self.product_string_index_raw()).filter(|&i| i != 0)
+    pub fn product_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.product_string_index_raw())
     }
 
     /// `iSerialNumber` descriptor field: Index for serial number string.
-    pub fn serial_number_string_index(&self) -> Option<u8> {
-        Some(self.serial_number_string_index_raw()).filter(|&i| i != 0)
+    pub fn serial_number_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.serial_number_string_index_raw())
     }
 }
 impl Debug for DeviceDescriptor {
@@ -484,8 +485,8 @@ descriptor_fields! {
 impl<'a> ConfigurationDescriptor<'a> {
     /// Index of the string descriptor describing this configuration.
     #[doc(alias = "iConfiguration")]
-    pub fn string_index(&self) -> Option<u8> {
-        Some(self.string_index_raw()).filter(|&i| i != 0)
+    pub fn string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.string_index_raw())
     }
 }
 
@@ -607,8 +608,8 @@ descriptor_fields! {
 impl<'a> InterfaceDescriptor<'a> {
     /// Index of the string descriptor describing this interface or alternate setting.
     #[doc(alias = "iInterface")]
-    pub fn string_index(&self) -> Option<u8> {
-        Some(self.string_index_raw()).filter(|&i| i != 0)
+    pub fn string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.string_index_raw())
     }
 }
 
@@ -856,9 +857,9 @@ fn test_linux_root_hub() {
     assert_eq!(dev.vendor_id(), 0x1d6b);
     assert_eq!(dev.product_id(), 0x0002);
     assert_eq!(dev.device_version(), 0x0510);
-    assert_eq!(dev.manufacturer_string_index(), Some(3));
-    assert_eq!(dev.product_string_index(), Some(2));
-    assert_eq!(dev.serial_number_string_index(), Some(1));
+    assert_eq!(dev.manufacturer_string_index(), NonZeroU8::new(3));
+    assert_eq!(dev.product_string_index(), NonZeroU8::new(2));
+    assert_eq!(dev.serial_number_string_index(), NonZeroU8::new(1));
     assert_eq!(dev.num_configurations(), 1);
 
     let c = ConfigurationDescriptor(&[

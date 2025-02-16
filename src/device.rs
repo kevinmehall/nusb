@@ -11,7 +11,7 @@ use crate::{
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 use log::error;
-use std::{io::ErrorKind, sync::Arc, time::Duration};
+use std::{io::ErrorKind, num::NonZeroU8, sync::Arc, time::Duration};
 
 /// An opened USB device.
 ///
@@ -237,17 +237,16 @@ impl Device {
     /// See notes on [`get_descriptor`][`Self::get_descriptor`].
     pub fn get_string_descriptor(
         &self,
-        desc_index: u8,
+        desc_index: NonZeroU8,
         language_id: u16,
         timeout: Duration,
     ) -> Result<String, Error> {
-        if desc_index == 0 {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "string descriptor index 0 is reserved for the language table",
-            ));
-        }
-        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)?;
+        let data = self.get_descriptor(
+            DESCRIPTOR_TYPE_STRING,
+            desc_index.get(),
+            language_id,
+            timeout,
+        )?;
 
         decode_string_descriptor(&data)
             .map_err(|_| Error::new(ErrorKind::InvalidData, "string descriptor data was invalid"))
