@@ -403,9 +403,9 @@ pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
 
 /// Information about a USB configuration with access to all associated interfaces, endpoints, and other descriptors.
 #[derive(Clone)]
-pub struct Configuration<'a>(&'a [u8]);
+pub struct ConfigurationDescriptor<'a>(&'a [u8]);
 
-impl<'a> Configuration<'a> {
+impl<'a> ConfigurationDescriptor<'a> {
     /// Create a `Configuration` from a buffer containing a series of descriptors.
     ///
     /// You normally obtain a `Configuration` from a [`Device`][crate::Device], but this allows creating
@@ -415,12 +415,12 @@ impl<'a> Configuration<'a> {
     ///  * when the buffer is too short for a configuration descriptor
     ///  * when the bLength and wTotalLength fields are longer than the buffer
     ///  * when the first descriptor is not a configuration descriptor
-    pub fn new(buf: &[u8]) -> Configuration {
+    pub fn new(buf: &[u8]) -> ConfigurationDescriptor {
         assert!(buf.len() >= DESCRIPTOR_LEN_CONFIGURATION as usize);
         assert!(buf[0] as usize >= DESCRIPTOR_LEN_CONFIGURATION as usize);
         assert!(buf[1] == DESCRIPTOR_TYPE_CONFIGURATION);
         assert!(buf.len() == u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize);
-        Configuration(buf)
+        ConfigurationDescriptor(buf)
     }
 
     /// Get the configuration descriptor followed by all trailing interface and other descriptors.
@@ -429,14 +429,14 @@ impl<'a> Configuration<'a> {
     }
 
     /// Iterate all interfaces and alternate settings settings of this configuration.
-    pub fn interface_alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting<'a>> {
+    pub fn interface_alt_settings(&self) -> impl Iterator<Item = InterfaceDescriptor<'a>> {
         self.descriptors()
             .split_by_type(DESCRIPTOR_TYPE_INTERFACE, DESCRIPTOR_LEN_INTERFACE)
-            .map(InterfaceAltSetting)
+            .map(InterfaceDescriptor)
     }
 
     /// Iterate the interfaces of this configuration, grouping together alternate settings of the same interface.
-    pub fn interfaces(&self) -> impl Iterator<Item = InterfaceGroup<'a>> {
+    pub fn interfaces(&self) -> impl Iterator<Item = InterfaceDescriptors<'a>> {
         let mut interfaces = BTreeMap::new();
 
         for intf in self.interface_alt_settings() {
@@ -448,7 +448,7 @@ impl<'a> Configuration<'a> {
 
         interfaces
             .into_iter()
-            .map(|(intf_number, interfaces)| InterfaceGroup {
+            .map(|(intf_number, interfaces)| InterfaceDescriptors {
                 intf_number,
                 interfaces,
             })
@@ -456,7 +456,7 @@ impl<'a> Configuration<'a> {
 }
 
 descriptor_fields! {
-    impl<'a> Configuration<'a> {
+    impl<'a> ConfigurationDescriptor<'a> {
         /// `bNumInterfaces` descriptor field: Number of interfaces.
         #[doc(alias = "bNumInterfaces")]
         pub fn num_interfaces at 4 -> u8;
@@ -481,7 +481,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Configuration<'a> {
+impl<'a> ConfigurationDescriptor<'a> {
     /// Index of the string descriptor describing this configuration.
     #[doc(alias = "iConfiguration")]
     pub fn string_index(&self) -> Option<u8> {
@@ -502,7 +502,7 @@ where
     }
 }
 
-impl<'a> Debug for Configuration<'a> {
+impl<'a> Debug for ConfigurationDescriptor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Configuration")
             .field("configuration_value", &self.configuration_value())
@@ -520,12 +520,12 @@ impl<'a> Debug for Configuration<'a> {
 
 /// Interface descriptors for alternate settings, grouped by the interface number.
 #[derive(Clone)]
-pub struct InterfaceGroup<'a> {
+pub struct InterfaceDescriptors<'a> {
     intf_number: u8,
-    interfaces: Vec<InterfaceAltSetting<'a>>,
+    interfaces: Vec<InterfaceDescriptor<'a>>,
 }
 
-impl<'a> InterfaceGroup<'a> {
+impl<'a> InterfaceDescriptors<'a> {
     /// `bInterfaceNumber` descriptor field: Identifier for the interface.
     ///
     /// Pass this to [`Device::claim_interface`][crate::Device::claim_interface] to work with the interface.
@@ -535,14 +535,14 @@ impl<'a> InterfaceGroup<'a> {
     }
 
     /// Iterator over alternate settings of the interface.
-    pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting> {
+    pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceDescriptor<'a>> + '_ {
         self.interfaces.iter().cloned()
     }
 
     /// Get the descriptor for the first alt setting.
     ///
     /// There is guaranteed to be at least one alt setting or this would not have been found.
-    pub fn first_alt_setting(&self) -> InterfaceAltSetting<'a> {
+    pub fn first_alt_setting(&self) -> InterfaceDescriptor<'a> {
         self.interfaces[0].clone()
     }
 }
@@ -553,25 +553,25 @@ impl<'a> InterfaceGroup<'a> {
 /// an interface. Multiple interface descriptors with the same [`interface_number`][Self::interface_number]
 /// but different [`alternate_setting`][Self::alternate_setting] values represent different alternate settings.
 #[derive(Clone)]
-pub struct InterfaceAltSetting<'a>(&'a [u8]);
+pub struct InterfaceDescriptor<'a>(&'a [u8]);
 
-impl<'a> InterfaceAltSetting<'a> {
+impl<'a> InterfaceDescriptor<'a> {
     /// Get the interface descriptor followed by all trailing endpoint and other
     /// descriptors up to the next interface descriptor.
-    pub fn descriptors(&self) -> Descriptors {
+    pub fn descriptors(&self) -> Descriptors<'a> {
         Descriptors(self.0)
     }
 
     /// Get the endpoints of this interface.
-    pub fn endpoints(&self) -> impl Iterator<Item = Endpoint> {
+    pub fn endpoints(&self) -> impl Iterator<Item = EndpointDescriptor<'a>> {
         self.descriptors()
             .split_by_type(DESCRIPTOR_TYPE_ENDPOINT, DESCRIPTOR_LEN_ENDPOINT)
-            .map(Endpoint)
+            .map(EndpointDescriptor)
     }
 }
 
 descriptor_fields! {
-    impl<'a> InterfaceAltSetting<'a> {
+    impl<'a> InterfaceDescriptor<'a> {
         /// `bInterfaceNumber` descriptor field: Identifier for the interface.
         ///
         /// Pass this to [`Device::claim_interface`][crate::Device::claim_interface] to work with the interface.
@@ -604,7 +604,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> InterfaceAltSetting<'a> {
+impl<'a> InterfaceDescriptor<'a> {
     /// Index of the string descriptor describing this interface or alternate setting.
     #[doc(alias = "iInterface")]
     pub fn string_index(&self) -> Option<u8> {
@@ -612,7 +612,7 @@ impl<'a> InterfaceAltSetting<'a> {
     }
 }
 
-impl<'a> Debug for InterfaceAltSetting<'a> {
+impl<'a> Debug for InterfaceDescriptor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterfaceAltSetting")
             .field("interface_number", &self.interface_number())
@@ -628,11 +628,11 @@ impl<'a> Debug for InterfaceAltSetting<'a> {
 }
 
 /// Information about a USB endpoint, with access to any associated descriptors.
-pub struct Endpoint<'a>(&'a [u8]);
+pub struct EndpointDescriptor<'a>(&'a [u8]);
 
-impl<'a> Endpoint<'a> {
+impl<'a> EndpointDescriptor<'a> {
     /// Get the endpoint descriptor followed by all trailing descriptors up to the next endpoint or interface descriptor.
-    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor> {
+    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor<'a>> {
         Descriptors(self.0)
     }
 
@@ -667,7 +667,7 @@ impl<'a> Endpoint<'a> {
 }
 
 descriptor_fields! {
-    impl<'a> Endpoint<'a> {
+    impl<'a> EndpointDescriptor<'a> {
         /// Get the `bEndpointAddress` descriptor field: Endpoint address.
         #[doc(alias = "bEndpointAddress")]
         pub fn address at 2 -> u8;
@@ -691,7 +691,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Debug for Endpoint<'a> {
+impl<'a> Debug for EndpointDescriptor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
             .field("address", &format_args!("0x{:02X}", self.address()))
@@ -828,7 +828,7 @@ mod test_concatenated {
 
 #[test]
 fn test_empty_config() {
-    let c = Configuration(&[9, 2, 9, 0, 0, 1, 0, 0, 250]);
+    let c = ConfigurationDescriptor(&[9, 2, 9, 0, 0, 1, 0, 0, 250]);
     assert_eq!(c.num_interfaces(), 0);
     assert_eq!(c.configuration_value(), 1);
     assert_eq!(c.string_index(), None);
@@ -837,7 +837,7 @@ fn test_empty_config() {
 
 #[test]
 fn test_malformed() {
-    let c = Configuration(&[9, 2, 0, 0, 0, 1, 0, 0, 2, 5, 250, 0, 0, 0]);
+    let c = ConfigurationDescriptor(&[9, 2, 0, 0, 0, 1, 0, 0, 2, 5, 250, 0, 0, 0]);
     assert!(c.interfaces().next().is_none());
 }
 
@@ -861,7 +861,7 @@ fn test_linux_root_hub() {
     assert_eq!(dev.serial_number_string_index(), Some(1));
     assert_eq!(dev.num_configurations(), 1);
 
-    let c = Configuration(&[
+    let c = ConfigurationDescriptor(&[
         0x09, 0x02, 0x19, 0x00, 0x01, 0x01, 0x00, 0xe0, 0x00,
         0x09, 0x04, 0x00, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00,
         0x07, 0x05, 0x81, 0x03, 0x04, 0x00, 0x0c
@@ -897,7 +897,7 @@ fn test_linux_root_hub() {
 #[test]
 #[rustfmt::skip]
 fn test_dell_webcam() {
-    let c = Configuration(&[
+    let c = ConfigurationDescriptor(&[
         0x09, 0x02, 0xa3, 0x02, 0x02, 0x01, 0x00, 0x80, 0xfa,
         
         // unknown (skipped)
