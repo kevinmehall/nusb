@@ -161,7 +161,10 @@ unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for PassPtr<Opcode, Input> {
     type Output = ();
 
     const IS_MUTATING: bool = false;
-    const OPCODE: rustix::ioctl::Opcode = Opcode::OPCODE;
+
+    fn opcode(&self) -> ioctl::Opcode {
+        Opcode::OPCODE
+    }
 
     fn as_ptr(&mut self) -> *mut c_void {
         self.input as *mut c_void
@@ -248,7 +251,10 @@ unsafe impl<Opcode: CompileTimeOpcode, Input> Ioctl for Transfer<Opcode, Input> 
     type Output = usize;
 
     const IS_MUTATING: bool = true;
-    const OPCODE: rustix::ioctl::Opcode = Opcode::OPCODE;
+
+    fn opcode(&self) -> ioctl::Opcode {
+        Opcode::OPCODE
+    }
 
     fn as_ptr(&mut self) -> *mut c_void {
         &mut self.input as *mut Input as *mut c_void

@@ -71,9 +71,9 @@ pub(super) fn unregister(fd: BorrowedFd, events_id: usize) {
 
 fn event_loop() {
     let epoll_fd = EPOLL_FD.get().unwrap();
-    let mut event_list = epoll::EventVec::with_capacity(4);
+    let mut event_list = Vec::with_capacity(4);
     loop {
-        retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, -1)).unwrap();
+        retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, None)).unwrap();
         for event in &event_list {
             let key = event.data.u64() as usize;
             log::trace!("event on {key}");
