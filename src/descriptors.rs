@@ -86,9 +86,9 @@ impl<'a> Deref for Descriptor<'a> {
 
 /// An iterator over a sequence of USB descriptors.
 #[derive(Clone)]
-pub struct Descriptors<'a>(&'a [u8]);
+pub struct DescriptorIter<'a>(&'a [u8]);
 
-impl<'a> Descriptors<'a> {
+impl<'a> DescriptorIter<'a> {
     /// Get the concatenated bytes of the remaining descriptors.
     pub fn as_bytes(&self) -> &'a [u8] {
         self.0
@@ -152,7 +152,7 @@ impl<'a> Descriptors<'a> {
     }
 }
 
-impl<'a> Iterator for Descriptors<'a> {
+impl<'a> Iterator for DescriptorIter<'a> {
     type Item = Descriptor<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -355,9 +355,9 @@ impl Debug for DeviceDescriptor {
 pub struct ConfigurationDescriptor<'a>(&'a [u8]);
 
 impl<'a> ConfigurationDescriptor<'a> {
-    /// Create a `Configuration` from a buffer containing a series of descriptors.
+    /// Create a `ConfigurationDescriptor` from a buffer containing a series of descriptors.
     ///
-    /// You normally obtain a `Configuration` from a [`Device`][crate::Device], but this allows creating
+    /// You normally obtain a `ConfigurationDescriptor` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
     ///
     /// This ignores any trailing data after the length specified in `wTotalLen`.
@@ -403,9 +403,14 @@ impl<'a> ConfigurationDescriptor<'a> {
         Self(d)
     }
 
-    /// Get the configuration descriptor followed by all trailing interface and other descriptors.
-    pub fn descriptors(&self) -> Descriptors<'a> {
-        Descriptors(self.0)
+    /// The bytes of the configuration descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Iterate all trailing interface and other descriptors.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Iterate all interfaces and alternate settings settings of this configuration.
@@ -536,10 +541,15 @@ impl<'a> InterfaceDescriptors<'a> {
 pub struct InterfaceDescriptor<'a>(&'a [u8]);
 
 impl<'a> InterfaceDescriptor<'a> {
-    /// Get the interface descriptor followed by all trailing endpoint and other
-    /// descriptors up to the next interface descriptor.
-    pub fn descriptors(&self) -> Descriptors<'a> {
-        Descriptors(self.0)
+    /// The bytes of the interface descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0
+    }
+
+    /// Iterate all trailing endpoint and other descriptors up to the next
+    /// interface descriptor.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Get the endpoints of this interface.
@@ -611,9 +621,14 @@ impl<'a> Debug for InterfaceDescriptor<'a> {
 pub struct EndpointDescriptor<'a>(&'a [u8]);
 
 impl<'a> EndpointDescriptor<'a> {
-    /// Get the endpoint descriptor followed by all trailing descriptors up to the next endpoint or interface descriptor.
-    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor<'a>> {
-        Descriptors(self.0)
+    /// The bytes of the endpoint descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Iterate all trailing descriptors up to the next endpoint or interface descriptor.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Get the endpoint's direction.
@@ -786,14 +801,14 @@ mod test_concatenated {
     fn test_one_config() {
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 9, 0, 0, 0, 0, 0, 0])
-                .map(|d| d.descriptors().as_bytes())
+                .map(|d| d.as_bytes())
                 .collect::<Vec<_>>(),
             vec![&[9, 2, 9, 0, 0, 0, 0, 0, 0]]
         );
 
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0])
-                .map(|d| d.descriptors().as_bytes())
+                .map(|d| d.as_bytes())
                 .collect::<Vec<_>>(),
             vec![&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0]]
         );
@@ -805,7 +820,7 @@ mod test_concatenated {
             parse_concatenated_config_descriptors(&[
                 9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 9, 2, 9, 0, 0, 0, 0, 0, 0
             ])
-            .map(|d| d.descriptors().as_bytes())
+            .map(|d| d.as_bytes())
             .collect::<Vec<_>>(),
             vec![
                 [9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0].as_slice(),
@@ -998,7 +1013,6 @@ fn test_dell_webcam() {
     assert_eq!(alt.protocol(), 0);
 
     let mut descriptors = alt.descriptors();
-    assert_eq!(descriptors.next().unwrap().descriptor_type(), DESCRIPTOR_TYPE_INTERFACE);
     for _ in 0..6 {
         assert_eq!(descriptors.next().unwrap().descriptor_type(), 0x24);
     }
@@ -1013,7 +1027,7 @@ fn test_dell_webcam() {
     assert_eq!(endpoint.transfer_type(), EndpointType::Interrupt);
     assert_eq!(endpoint.max_packet_size(), 16);
 
-    assert_eq!(endpoint.descriptors().nth(1).unwrap().descriptor_type(), 0x25);
+    assert_eq!(endpoint.descriptors().next().unwrap().descriptor_type(), 0x25);
     
     assert!(endpoints.next().is_none());
     assert!(alts.next().is_none());
