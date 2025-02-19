@@ -8,7 +8,17 @@ pub enum Direction {
     Out = 0,
 
     /// Device to host
-    In = 1,
+    In = 0x80,
+}
+
+impl Direction {
+    pub(crate) fn from_address(addr: u8) -> Direction {
+        match addr & Self::MASK {
+            0 => Self::Out,
+            _ => Self::In,
+        }
+    }
+    pub(crate) const MASK: u8 = 0x80;
 }
 
 /// Specification defining the request.
@@ -200,10 +210,14 @@ fn pack_setup(
     ]
 }
 
-fn request_type(direction: Direction, control_type: ControlType, recipient: Recipient) -> u8 {
-    ((direction as u8) << 7) | ((control_type as u8) << 5) | (recipient as u8)
-}
-
 impl TransferRequest for ControlIn {
     type Response = Vec<u8>;
+}
+
+pub(crate) fn request_type(
+    direction: Direction,
+    control_type: ControlType,
+    recipient: Recipient,
+) -> u8 {
+    (direction as u8) | ((control_type as u8) << 5) | (recipient as u8)
 }

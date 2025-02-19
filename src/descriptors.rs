@@ -633,10 +633,7 @@ impl<'a> EndpointDescriptor<'a> {
 
     /// Get the endpoint's direction.
     pub fn direction(&self) -> Direction {
-        match self.address() & 0x80 {
-            0 => Direction::Out,
-            _ => Direction::In,
-        }
+        Direction::from_address(self.address())
     }
 
     /// Get the endpoint's transfer type.
