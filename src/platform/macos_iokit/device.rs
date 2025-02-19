@@ -12,7 +12,7 @@ use std::{
 use log::{debug, error};
 
 use crate::{
-    descriptors::DeviceDescriptor,
+    descriptors::{ConfigurationDescriptor, DeviceDescriptor},
     maybe_future::blocking::Blocking,
     transfer::{Control, Direction, TransferError, TransferHandle, TransferType},
     DeviceInfo, Error, MaybeFuture, Speed,
@@ -112,9 +112,13 @@ impl MacDevice {
         self.active_config.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+    pub(crate) fn configuration_descriptors(
+        &self,
+    ) -> impl Iterator<Item = ConfigurationDescriptor> {
         let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
-        (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())
+        (0..num_configs)
+            .flat_map(|i| self.device.get_configuration_descriptor(i).ok())
+            .flat_map(ConfigurationDescriptor::new)
     }
 
     fn require_open_exclusive(&self) -> Result<(), Error> {
@@ -255,6 +259,7 @@ impl MacDevice {
                 interface_number,
                 interface,
                 endpoints: Mutex::new(endpoints),
+                state: Mutex::new(InterfaceState::default()),
                 _event_registration,
             })))
         })
@@ -284,9 +289,14 @@ pub(crate) struct MacInterface {
     _event_registration: EventRegistration,
     pub(crate) interface: IoKitInterface,
     pub(crate) device: Arc<MacDevice>,
-
     /// Map from address to a structure that contains the `pipe_ref` used by iokit
     pub(crate) endpoints: Mutex<BTreeMap<u8, EndpointInfo>>,
+    state: Mutex<InterfaceState>,
+}
+
+#[derive(Default)]
+struct InterfaceState {
+    alt_setting: u8,
 }
 
 impl MacInterface {
@@ -337,6 +347,7 @@ impl MacInterface {
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
+            let mut state = self.state.lock().unwrap();
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
                 self.interface_number
@@ -353,9 +364,14 @@ impl MacInterface {
 
             *endpoints = self.interface.endpoints()?;
             debug!("Found endpoints: {endpoints:?}");
+            state.alt_setting = alt_setting;
 
             Ok(())
         })
+    }
+
+    pub fn get_alt_setting(&self) -> u8 {
+        self.state.lock().unwrap().alt_setting
     }
 
     pub fn clear_halt(

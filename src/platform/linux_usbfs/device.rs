@@ -1,4 +1,5 @@
 use std::io::{ErrorKind, Seek};
+use std::sync::Mutex;
 use std::{ffi::c_void, time::Duration};
 use std::{
     fs::File,
@@ -299,6 +300,7 @@ impl LinuxDevice {
                 device: self,
                 interface_number,
                 reattach: false,
+                state: Mutex::new(Default::default()),
             })))
         })
     }
@@ -317,6 +319,7 @@ impl LinuxDevice {
                 device: self,
                 interface_number,
                 reattach: true,
+                state: Mutex::new(Default::default()),
             })))
         })
     }
@@ -461,7 +464,13 @@ impl Drop for LinuxDevice {
 pub(crate) struct LinuxInterface {
     pub(crate) interface_number: u8,
     pub(crate) device: Arc<LinuxDevice>,
-    pub(crate) reattach: bool,
+    reattach: bool,
+    state: Mutex<InterfaceState>,
+}
+
+#[derive(Default)]
+struct InterfaceState {
+    alt_setting: u8,
 }
 
 impl LinuxInterface {
@@ -496,20 +505,23 @@ impl LinuxInterface {
         self.device.control_out_blocking(control, data, timeout)
     }
 
+    pub fn get_alt_setting(&self) -> u8 {
+        self.state.lock().unwrap().alt_setting
+    }
+
     pub fn set_alt_setting(
         self: Arc<Self>,
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
+            let mut state = self.state.lock().unwrap();
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
                 self.interface_number
             );
-            Ok(usbfs::set_interface(
-                &self.device.fd,
-                self.interface_number,
-                alt_setting,
-            )?)
+            usbfs::set_interface(&self.device.fd, self.interface_number, alt_setting)?;
+            state.alt_setting = alt_setting;
+            Ok(())
         })
     }
 

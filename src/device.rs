@@ -391,6 +391,11 @@ impl Interface {
         self.backend.clone().set_alt_setting(alt_setting)
     }
 
+    /// Get the current alternate setting of this interface.
+    pub fn get_alt_setting(&self) -> u8 {
+        self.backend.get_alt_setting()
+    }
+
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
@@ -608,6 +613,12 @@ impl Interface {
             .into_iter()
             .flat_map(|i| i.interface_alt_settings())
             .filter(|g| g.interface_number() == self.backend.interface_number)
+    }
+
+    /// Get the interface descriptor for the current alternate setting.
+    pub fn descriptor(&self) -> Option<InterfaceDescriptor> {
+        self.descriptors()
+            .find(|i| i.alternate_setting() == self.get_alt_setting())
     }
 }
 

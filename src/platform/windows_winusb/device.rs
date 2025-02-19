@@ -321,6 +321,7 @@ impl WinusbFileHandle {
             interface_number,
             first_interface_number: self.first_interface,
             winusb_handle,
+            state: Mutex::new(InterfaceState::default()),
         }))
     }
 }
@@ -343,6 +344,12 @@ pub(crate) struct WindowsInterface {
     pub(crate) first_interface_number: u8,
     pub(crate) interface_number: u8,
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
+    state: Mutex<InterfaceState>,
+}
+
+#[derive(Default)]
+struct InterfaceState {
+    alt_setting: u8,
 }
 
 unsafe impl Send for WindowsInterface {}
@@ -509,13 +516,23 @@ impl WindowsInterface {
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || unsafe {
+            let mut state = self.state.lock().unwrap();
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
+                debug!(
+                    "Set interface {} alt setting to {alt_setting}",
+                    self.interface_number
+                );
+                state.alt_setting = alt_setting;
                 Ok(())
             } else {
                 Err(io::Error::last_os_error())
             }
         })
+    }
+
+    pub fn get_alt_setting(&self) -> u8 {
+        self.state.lock().unwrap().alt_setting
     }
 
     pub fn clear_halt(
