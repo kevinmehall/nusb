@@ -182,37 +182,6 @@ macro_rules! descriptor_fields {
     }
 }
 
-/// Check whether the buffer contains a valid device descriptor.
-/// On success, it will return length of the descriptor, or returns `None`.
-#[allow(unused)]
-pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
-    if buf.len() < DESCRIPTOR_LEN_DEVICE as usize {
-        if buf.len() != 0 {
-            warn!(
-                "device descriptor buffer is {} bytes, need {}",
-                buf.len(),
-                DESCRIPTOR_LEN_DEVICE
-            );
-        }
-        return None;
-    }
-
-    if buf[0] < DESCRIPTOR_LEN_DEVICE {
-        warn!("invalid device descriptor bLength");
-        return None;
-    }
-
-    if buf[1] != DESCRIPTOR_TYPE_DEVICE {
-        warn!(
-            "device bDescriptorType is {}, not a device descriptor",
-            buf[1]
-        );
-        return None;
-    }
-
-    return Some(buf[0] as usize);
-}
-
 /// Information about a USB device.
 #[derive(Clone)]
 pub struct DeviceDescriptor([u8; DESCRIPTOR_LEN_DEVICE as usize]);
@@ -223,14 +192,31 @@ impl DeviceDescriptor {
     /// You normally obtain a `DeviceDescriptor` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
     ///
-    /// ### Panics
-    ///  * when the buffer is too short for a device descriptor
-    ///  * when the first descriptor is not a device descriptor
-    pub fn new(buf: &[u8]) -> Self {
-        assert!(buf.len() >= DESCRIPTOR_LEN_DEVICE as usize);
-        assert!(buf[0] as usize >= DESCRIPTOR_LEN_DEVICE as usize);
-        assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
-        Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
+    /// This ignores any trailing data after the `bLength` specified in the descriptor.
+    pub fn new(buf: &[u8]) -> Option<Self> {
+        let Some(buf) = buf.get(0..DESCRIPTOR_LEN_DEVICE as usize) else {
+            if buf.len() != 0 {
+                warn!(
+                    "device descriptor buffer is {} bytes, need {}",
+                    buf.len(),
+                    DESCRIPTOR_LEN_DEVICE
+                );
+            }
+            return None;
+        };
+        let buf: [u8; DESCRIPTOR_LEN_DEVICE as usize] = buf.try_into().ok()?;
+        if buf[0] < DESCRIPTOR_LEN_DEVICE {
+            warn!("invalid device descriptor bLength");
+            None
+        } else if buf[1] != DESCRIPTOR_TYPE_DEVICE {
+            warn!(
+                "device bDescriptorType is {}, not a device descriptor",
+                buf[1]
+            );
+            None
+        } else {
+            Some(Self(buf))
+        }
     }
 
     /// Get the bytes of the descriptor.
@@ -364,44 +350,6 @@ impl Debug for DeviceDescriptor {
     }
 }
 
-#[allow(unused)]
-pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
-    if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
-        if buf.len() != 0 {
-            warn!(
-                "config descriptor buffer is {} bytes, need {}",
-                buf.len(),
-                DESCRIPTOR_LEN_CONFIGURATION
-            );
-        }
-        return None;
-    }
-
-    if buf[0] < DESCRIPTOR_LEN_CONFIGURATION {
-        warn!("invalid config descriptor bLength");
-        return None;
-    }
-
-    if buf[1] != DESCRIPTOR_TYPE_CONFIGURATION {
-        warn!(
-            "config bDescriptorType is {}, not a configuration descriptor",
-            buf[0]
-        );
-        return None;
-    }
-
-    let total_len = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
-    if total_len < buf[0] as usize || total_len > buf.len() {
-        warn!(
-            "invalid config descriptor wTotalLen of {total_len} (buffer size is {bufsize})",
-            bufsize = buf.len()
-        );
-        return None;
-    }
-
-    Some(total_len)
-}
-
 /// Information about a USB configuration with access to all associated interfaces, endpoints, and other descriptors.
 #[derive(Clone)]
 pub struct ConfigurationDescriptor<'a>(&'a [u8]);
@@ -412,16 +360,47 @@ impl<'a> ConfigurationDescriptor<'a> {
     /// You normally obtain a `Configuration` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
     ///
-    /// ### Panics
-    ///  * when the buffer is too short for a configuration descriptor
-    ///  * when the bLength and wTotalLength fields are longer than the buffer
-    ///  * when the first descriptor is not a configuration descriptor
-    pub fn new(buf: &[u8]) -> ConfigurationDescriptor {
-        assert!(buf.len() >= DESCRIPTOR_LEN_CONFIGURATION as usize);
-        assert!(buf[0] as usize >= DESCRIPTOR_LEN_CONFIGURATION as usize);
-        assert!(buf[1] == DESCRIPTOR_TYPE_CONFIGURATION);
-        assert!(buf.len() == u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize);
-        ConfigurationDescriptor(buf)
+    /// This ignores any trailing data after the length specified in `wTotalLen`.
+    pub fn new(buf: &[u8]) -> Option<ConfigurationDescriptor> {
+        if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
+            if buf.len() != 0 {
+                warn!(
+                    "config descriptor buffer is {} bytes, need {}",
+                    buf.len(),
+                    DESCRIPTOR_LEN_CONFIGURATION
+                );
+            }
+            return None;
+        }
+
+        if buf[0] < DESCRIPTOR_LEN_CONFIGURATION {
+            warn!("invalid config descriptor bLength");
+            return None;
+        }
+
+        if buf[1] != DESCRIPTOR_TYPE_CONFIGURATION {
+            warn!(
+                "config bDescriptorType is {}, not a configuration descriptor",
+                buf[0]
+            );
+            return None;
+        }
+
+        let total_len = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
+        if total_len < buf[0] as usize || total_len > buf.len() {
+            warn!(
+                "invalid config descriptor wTotalLen of {total_len} (buffer size is {bufsize})",
+                bufsize = buf.len()
+            );
+            return None;
+        }
+
+        Some(ConfigurationDescriptor(&buf[..total_len]))
+    }
+
+    #[allow(unused)]
+    pub(crate) fn new_unchecked(d: &'a [u8]) -> Self {
+        Self(d)
     }
 
     /// Get the configuration descriptor followed by all trailing interface and other descriptors.
@@ -735,12 +714,13 @@ impl From<ActiveConfigurationError> for Error {
 
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
 #[allow(unused)]
-pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub(crate) fn parse_concatenated_config_descriptors(
+    mut buf: &[u8],
+) -> impl Iterator<Item = ConfigurationDescriptor> {
     iter::from_fn(move || {
-        let total_len = validate_config_descriptor(buf)?;
-        let descriptors = &buf[..total_len];
-        buf = &buf[total_len..];
-        Some(descriptors)
+        let desc = ConfigurationDescriptor::new(buf)?;
+        buf = &buf[desc.0.len()..];
+        Some(desc)
     })
 }
 
@@ -775,15 +755,19 @@ mod test_concatenated {
     #[test]
     fn test_empty() {
         assert_eq!(
-            parse_concatenated_config_descriptors(&[]).collect::<Vec<&[u8]>>(),
-            Vec::<&[u8]>::new()
+            parse_concatenated_config_descriptors(&[])
+                .collect::<Vec<_>>()
+                .len(),
+            0
         );
     }
 
     #[test]
     fn test_short() {
         assert_eq!(
-            parse_concatenated_config_descriptors(&[0]).collect::<Vec<&[u8]>>(),
+            parse_concatenated_config_descriptors(&[0])
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             Vec::<&[u8]>::new()
         );
     }
@@ -792,7 +776,8 @@ mod test_concatenated {
     fn test_invalid_total_len() {
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 0, 0, 0, 0, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             Vec::<&[u8]>::new()
         );
     }
@@ -801,13 +786,15 @@ mod test_concatenated {
     fn test_one_config() {
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 9, 0, 0, 0, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             vec![&[9, 2, 9, 0, 0, 0, 0, 0, 0]]
         );
 
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             vec![&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0]]
         );
     }
@@ -818,7 +805,8 @@ mod test_concatenated {
             parse_concatenated_config_descriptors(&[
                 9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 9, 2, 9, 0, 0, 0, 0, 0, 0
             ])
-            .collect::<Vec<&[u8]>>(),
+            .map(|d| d.descriptors().as_bytes())
+            .collect::<Vec<_>>(),
             vec![
                 [9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0].as_slice(),
                 [9, 2, 9, 0, 0, 0, 0, 0, 0].as_slice()
@@ -848,7 +836,7 @@ fn test_linux_root_hub() {
     let dev = DeviceDescriptor::new(&[
         0x12, 0x01, 0x00, 0x02, 0x09, 0x00, 0x01, 0x40, 0x6b,
         0x1d, 0x02, 0x00, 0x10, 0x05, 0x03, 0x02, 0x01, 0x01
-    ]);
+    ]).unwrap();
     assert_eq!(dev.usb_version(), 0x0200);
     assert_eq!(dev.class(), 0x09);
     assert_eq!(dev.subclass(), 0x00);

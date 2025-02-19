@@ -25,7 +25,7 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath,
 };
-use crate::descriptors::{validate_device_descriptor, ConfigurationDescriptor, DeviceDescriptor};
+use crate::descriptors::{ConfigurationDescriptor, DeviceDescriptor};
 use crate::maybe_future::{blocking::Blocking, MaybeFuture};
 use crate::platform::linux_usbfs::events::Watch;
 use crate::transfer::{ControlType, Recipient};
@@ -91,7 +91,7 @@ impl LinuxDevice {
             buf
         };
 
-        let Some(_) = validate_device_descriptor(&descriptors) else {
+        let Some(_) = DeviceDescriptor::new(&descriptors) else {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "invalid device descriptor",
@@ -167,10 +167,12 @@ impl LinuxDevice {
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
-        DeviceDescriptor::new(&self.descriptors)
+        DeviceDescriptor::new(&self.descriptors).unwrap()
     }
 
-    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+    pub(crate) fn configuration_descriptors(
+        &self,
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         parse_concatenated_config_descriptors(&self.descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
     }
 
@@ -421,9 +423,7 @@ impl LinuxDevice {
         // Assume the current configuration is the first one
         // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
         let mut descriptors =
-            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..])
-                .map(ConfigurationDescriptor::new);
-
+            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..]);
         if let Some(config) = descriptors.next() {
             return Ok(config.configuration_value());
         }

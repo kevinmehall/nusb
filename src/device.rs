@@ -134,9 +134,7 @@ impl Device {
     ///
     /// This returns cached data and does not perform IO.
     pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor> {
-        self.backend
-            .configuration_descriptors()
-            .map(ConfigurationDescriptor::new)
+        self.backend.configuration_descriptors()
     }
 
     /// Set the device configuration.
@@ -604,7 +602,6 @@ impl Interface {
             .backend
             .device
             .configuration_descriptors()
-            .map(ConfigurationDescriptor::new)
             .find(|c| c.configuration_value() == active);
 
         configuration

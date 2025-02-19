@@ -15,8 +15,8 @@ use windows_sys::Win32::Devices::{
 
 use crate::{
     descriptors::{
-        decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
-        ConfigurationDescriptor, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
+        decode_string_descriptor, language_id::US_ENGLISH, ConfigurationDescriptor,
+        DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
     maybe_future::{blocking::Blocking, MaybeFuture},
     BusInfo, DeviceInfo, Error, InterfaceInfo, UsbControllerType,
@@ -206,8 +206,7 @@ fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Ve
             0,
         )
         .ok()?;
-    let len = validate_config_descriptor(&buf)?;
-    let desc = ConfigurationDescriptor::new(&buf[..len]);
+    let desc = ConfigurationDescriptor::new(&buf[..])?;
 
     if desc.configuration_value() != active_config {
         return None;

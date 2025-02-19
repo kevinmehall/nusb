@@ -24,7 +24,7 @@ use windows_sys::Win32::{
 
 use crate::{
     descriptors::{
-        validate_config_descriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
+        ConfigurationDescriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
     maybe_future::{blocking::Blocking, MaybeFuture, Ready},
@@ -68,22 +68,20 @@ impl WindowsDevice {
 
             // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
             let device_descriptor = unsafe {
-                DeviceDescriptor::new(&transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
-                    connection_info.device_desc,
-                ))
+                &transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(connection_info.device_desc)
             };
+            let device_descriptor = DeviceDescriptor::new(device_descriptor)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid device descriptor"))?;
 
             let num_configurations = connection_info.device_desc.bNumConfigurations;
             let config_descriptors = (0..num_configurations)
                 .flat_map(|i| {
-                    let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
-                    match res {
-                        Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
-                        Err(e) => {
-                            error!("Failed to read config descriptor {}: {}", i, e);
-                            None
-                        }
-                    }
+                    let d = hub_port
+                        .get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0)
+                        .inspect_err(|e| error!("Failed to read config descriptor {}: {}", i, e))
+                        .ok()?;
+
+                    ConfigurationDescriptor::new(&d).is_some().then_some(d)
                 })
                 .collect();
 
@@ -110,8 +108,12 @@ impl WindowsDevice {
         self.active_config
     }
 
-    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
-        self.config_descriptors.iter().map(|d| &d[..])
+    pub(crate) fn configuration_descriptors(
+        &self,
+    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+        self.config_descriptors
+            .iter()
+            .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
     pub(crate) fn set_configuration(
