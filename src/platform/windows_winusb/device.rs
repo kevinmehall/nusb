@@ -16,9 +16,9 @@ use std::{
 use log::{debug, error, warn};
 use windows_sys::Win32::{
     Devices::Usb::{
-        WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface, WinUsb_Initialize,
-        WinUsb_ReadPipe, WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting, WinUsb_WritePipe,
-        WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        self, WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface,
+        WinUsb_Initialize, WinUsb_ReadPipe, WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting,
+        WinUsb_SetPipePolicy, WinUsb_WritePipe, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, ERROR_IO_PENDING, ERROR_NOT_FOUND, FALSE, HANDLE, TRUE},
     System::IO::{CancelIoEx, OVERLAPPED},
@@ -497,6 +497,23 @@ impl WindowsInterface {
             return Err(ClaimEndpointError::Busy);
         }
         state.endpoints.set(address);
+
+        if Direction::from_address(address) == Direction::In {
+            unsafe {
+                let enable: u8 = 1;
+                let r = WinUsb_SetPipePolicy(
+                    self.winusb_handle,
+                    address,
+                    Usb::RAW_IO,
+                    size_of_val(&enable) as u32,
+                    &enable as *const _ as *const c_void,
+                );
+                if r != TRUE {
+                    let err = GetLastError();
+                    warn!("Failed to enable RAW_IO on endpoint {address:02X}: error {err:x}",);
+                }
+            }
+        }
 
         Ok(WindowsEndpoint {
             inner: Arc::new(EndpointInner {
