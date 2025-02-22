@@ -46,13 +46,13 @@ impl Device {
     pub(crate) fn open(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Device, std::io::Error>> {
-        platform::Device::from_device_info(d)
+        platform::Device::from_device_info(d).map(|d| d.map(Device::wrap))
     }
 
     /// Wraps a device that is already open.
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
-        platform::Device::from_fd(fd)
+        platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
     }
 
     /// Open an interface of the device and claim it for exclusive use.
@@ -60,7 +60,10 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend.clone().claim_interface(interface)
+        self.backend
+            .clone()
+            .claim_interface(interface)
+            .map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -72,7 +75,10 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend.clone().detach_and_claim_interface(interface)
+        self.backend
+            .clone()
+            .detach_and_claim_interface(interface)
+            .map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers for the specified interface.

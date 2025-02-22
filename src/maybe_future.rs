@@ -1,4 +1,8 @@
-use std::future::IntoFuture;
+use std::{
+    future::{Future, IntoFuture},
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// IO that may be performed synchronously or asynchronously.
 ///
@@ -8,6 +12,17 @@ pub trait MaybeFuture: IntoFuture {
     /// Block waiting for the action to complete
     #[cfg(not(target_arch = "wasm32"))]
     fn wait(self) -> Self::Output;
+
+    /// Apply a function to the output.
+    fn map<T: FnOnce(Self::Output) -> R + Unpin, R>(self, f: T) -> Map<Self, T>
+    where
+        Self: Sized,
+    {
+        Map {
+            wrapped: self,
+            func: f,
+        }
+    }
 }
 
 #[cfg(any(
@@ -71,5 +86,49 @@ impl<T> IntoFuture for Ready<T> {
 impl<T> MaybeFuture for Ready<T> {
     fn wait(self) -> Self::Output {
         self.0
+    }
+}
+
+pub struct Map<F, T> {
+    wrapped: F,
+    func: T,
+}
+
+impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> IntoFuture for Map<F, T> {
+    type Output = R;
+    type IntoFuture = MapFut<F::IntoFuture, T>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        MapFut {
+            wrapped: self.wrapped.into_future(),
+            func: Some(self.func),
+        }
+    }
+}
+
+impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> MaybeFuture for Map<F, T> {
+    fn wait(self) -> Self::Output {
+        (self.func)(self.wrapped.wait())
+    }
+}
+
+pub struct MapFut<F, T> {
+    wrapped: F,
+    func: Option<T>,
+}
+
+impl<F: Future, T: FnOnce(F::Output) -> R, R> Future for MapFut<F, T> {
+    type Output = R;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: structural pin projection: `self.wrapped` is always pinned.
+        let wrapped = unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.wrapped) };
+
+        Future::poll(wrapped, cx).map(|output| {
+            // SAFETY: `self.func` is never pinned.
+            let func = unsafe { &mut self.as_mut().get_unchecked_mut().func };
+
+            (func.take().expect("polled after completion"))(output)
+        })
     }
 }

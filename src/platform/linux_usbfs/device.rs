@@ -54,7 +54,7 @@ pub(crate) struct LinuxDevice {
 impl LinuxDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
         let busnum = d.busnum();
         let devnum = d.device_address();
         let sysfs_path = d.path.clone();
@@ -68,7 +68,9 @@ impl LinuxDevice {
         })
     }
 
-    pub(crate) fn from_fd(fd: OwnedFd) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+    pub(crate) fn from_fd(
+        fd: OwnedFd,
+    ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
         Blocking::new(move || {
             debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
             Self::create_inner(fd, None, None)
@@ -79,7 +81,7 @@ impl LinuxDevice {
         fd: OwnedFd,
         sysfs: Option<SysfsPath>,
         active_config: Option<u8>,
-    ) -> Result<crate::Device, Error> {
+    ) -> Result<Arc<LinuxDevice>, Error> {
         let descriptors = {
             let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
             // NOTE: Seek required on android
@@ -125,7 +127,7 @@ impl LinuxDevice {
             epoll::EventFlags::OUT,
         )?;
 
-        Ok(crate::Device::wrap(arc))
+        Ok(arc)
     }
 
     pub(crate) fn handle_usb_epoll(id: usize) {
@@ -284,7 +286,7 @@ impl LinuxDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<LinuxInterface>, Error>> {
         Blocking::new(move || {
             usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
                 warn!(
@@ -296,31 +298,31 @@ impl LinuxDevice {
                 "Claimed interface {interface_number} on device id {dev}",
                 dev = self.events_id
             );
-            Ok(crate::Interface::wrap(Arc::new(LinuxInterface {
+            Ok(Arc::new(LinuxInterface {
                 device: self,
                 interface_number,
                 reattach: false,
                 state: Mutex::new(Default::default()),
-            })))
+            }))
         })
     }
 
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<LinuxInterface>, Error>> {
         Blocking::new(move || {
             usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
             debug!(
                 "Detached and claimed interface {interface_number} on device id {dev}",
                 dev = self.events_id
             );
-            Ok(crate::Interface::wrap(Arc::new(LinuxInterface {
+            Ok(Arc::new(LinuxInterface {
                 device: self,
                 interface_number,
                 reattach: true,
                 state: Mutex::new(Default::default()),
-            })))
+            }))
         })
     }
 

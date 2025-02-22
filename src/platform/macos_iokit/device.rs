@@ -53,7 +53,7 @@ fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
 impl MacDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacDevice>, Error>> {
         let registry_id = d.registry_id;
         let speed = d.speed;
         Blocking::new(move || {
@@ -88,7 +88,7 @@ impl MacDevice {
                 res.unwrap_or(0)
             };
 
-            Ok(crate::Device::wrap(Arc::new(MacDevice {
+            Ok(Arc::new(MacDevice {
                 _event_registration,
                 device,
                 device_descriptor,
@@ -96,7 +96,7 @@ impl MacDevice {
                 active_config: AtomicU8::new(active_config),
                 is_open_exclusive: Mutex::new(opened),
                 claimed_interfaces: AtomicUsize::new(0),
-            })))
+            }))
         })
     }
 
@@ -236,7 +236,7 @@ impl MacDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         Blocking::new(move || {
             let intf_service = self
                 .device
@@ -254,21 +254,21 @@ impl MacDevice {
 
             self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
-            Ok(crate::Interface::wrap(Arc::new(MacInterface {
+            Ok(Arc::new(MacInterface {
                 device: self.clone(),
                 interface_number,
                 interface,
                 endpoints: Mutex::new(endpoints),
                 state: Mutex::new(InterfaceState::default()),
                 _event_registration,
-            })))
+            }))
         })
     }
 
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         self.claim_interface(interface)
     }
 }
