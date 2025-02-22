@@ -108,7 +108,7 @@ impl EndpointDirection for Out {
 }
 
 /// Type-level endpoint direction
-pub trait EndpointType: private::Sealed + Send + Sync {
+pub trait EndpointType: private::Sealed + Send + Sync + Unpin {
     /// Runtime direction value
     const TYPE: TransferType;
 }
