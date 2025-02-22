@@ -705,13 +705,22 @@ impl LinuxEndpoint {
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let status = transfer.status();
-            let data = transfer.take_buffer();
+            let completion = transfer.take_completion();
             self.idle_transfer = Some(transfer);
-            Poll::Ready(Completion { status, data })
+            Poll::Ready(completion)
         } else {
             Poll::Pending
         }
+    }
+
+    pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let completion = transfer.take_completion();
+                self.idle_transfer = Some(transfer);
+                completion
+            })
+        })
     }
 
     pub(crate) fn clear_halt(&self) -> impl MaybeFuture<Output = Result<(), Error>> {

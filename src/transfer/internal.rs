@@ -11,6 +11,7 @@ use std::{
     },
     task::{Context, Poll, Waker},
     thread::{self, Thread},
+    time::{Duration, Instant},
 };
 
 use crate::MaybeFuture;
@@ -42,9 +43,30 @@ impl Notify {
         *self.state.lock().unwrap() = NotifyState::Waker(cx.waker().clone());
     }
 
-    pub fn wait(&self) {
+    pub fn wait<T>(&self, mut check: impl FnMut() -> Option<T>) -> T {
         *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
-        thread::park();
+        loop {
+            if let Some(result) = check() {
+                return result;
+            }
+            thread::park();
+        }
+    }
+
+    pub fn wait_timeout<T>(
+        &self,
+        timeout: Duration,
+        mut check: impl FnMut() -> Option<T>,
+    ) -> Option<T> {
+        *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
+        let start = Instant::now();
+        loop {
+            if let Some(result) = check() {
+                return Some(result);
+            }
+            let remaining = timeout.checked_sub(start.elapsed())?;
+            thread::park_timeout(remaining);
+        }
     }
 
     pub fn notify(&self) {
@@ -235,11 +257,7 @@ where
     D: Send,
 {
     fn wait(mut self) -> Self::Output {
-        loop {
-            if let Some(transfer) = take_completed_from_option(&mut self.transfer) {
-                return transfer;
-            }
-            self.notify.wait();
-        }
+        self.notify
+            .wait(|| take_completed_from_option(&mut self.transfer))
     }
 }

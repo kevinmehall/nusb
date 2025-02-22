@@ -1,8 +1,11 @@
-use std::mem::ManuallyDrop;
+use std::mem::{self, ManuallyDrop};
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 
-use crate::transfer::TransferError;
+use crate::{
+    transfer::{Allocator, Buffer, Direction, TransferError},
+    Completion,
+};
 pub struct TransferData {
     pub(super) buf: *mut u8,
     pub(super) capacity: u32,
@@ -36,6 +39,32 @@ impl TransferData {
     #[inline]
     pub fn status(&self) -> Result<(), TransferError> {
         super::status_to_transfer_result(self.status)
+    }
+
+    /// # Safety
+    /// The transfer must have been completed to initialize the buffer. The direction must be correct.
+    pub unsafe fn take_completion(&mut self, direction: Direction) -> Completion {
+        let status = self.status();
+
+        let mut empty = ManuallyDrop::new(Vec::new());
+        let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut self.capacity, 0);
+        let (len, transfer_len) = match direction {
+            Direction::Out => (self.requested_len, self.actual_len),
+            Direction::In => (self.actual_len, self.requested_len),
+        };
+        self.requested_len = 0;
+        self.actual_len = 0;
+
+        let data = Buffer {
+            ptr,
+            len,
+            transfer_len,
+            capacity,
+            allocator: Allocator::Default,
+        };
+
+        Completion { status, data }
     }
 }
 

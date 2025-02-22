@@ -645,6 +645,18 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
         self.backend.poll_next_complete(cx)
     }
 
+    /// Wait for a pending transfer completion.
+    ///
+    /// Blocks for up to `timeout` waiting for a transfer to complete, or
+    /// returns `None` if the timeout is reached.
+    ///
+    /// ## Panics
+    ///  * if there are no transfers pending (that is, if [`Self::pending()`]
+    /// would return 0).
+    pub fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
+        self.backend.wait_next_complete(timeout)
+    }
+
     /// Clear the endpoint's halt / stall condition.
     ///
     /// Sends a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer to tell the

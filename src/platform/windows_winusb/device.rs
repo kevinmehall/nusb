@@ -686,6 +686,17 @@ impl WindowsEndpoint {
         }
     }
 
+    pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let status = transfer.status();
+                let data = transfer.take_buffer();
+                self.idle_transfer = Some(transfer);
+                Completion { status, data }
+            })
+        })
+    }
+
     pub(crate) fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         let inner = self.inner.clone();
         Blocking::new(move || {

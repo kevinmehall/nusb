@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     ffi::c_void,
     io::ErrorKind,
-    mem::{self, ManuallyDrop},
+    mem::ManuallyDrop,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -23,7 +23,7 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        Allocator, Buffer, ControlIn, ControlOut, Direction, TransferError,
+        Buffer, ControlIn, ControlOut, Direction, TransferError,
     },
     Completion, DeviceInfo, Error, MaybeFuture, Speed,
 };
@@ -543,31 +543,24 @@ impl MacEndpoint {
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let status = transfer.status();
-
-            let mut empty = ManuallyDrop::new(Vec::new());
-            let ptr = mem::replace(&mut transfer.buf, empty.as_mut_ptr());
-            let capacity = mem::replace(&mut transfer.capacity, 0);
-            let (len, transfer_len) = match Direction::from_address(self.inner.address) {
-                Direction::Out => (transfer.requested_len, transfer.actual_len),
-                Direction::In => (transfer.actual_len, transfer.requested_len),
-            };
-            transfer.requested_len = 0;
-            transfer.actual_len = 0;
+            let dir = Direction::from_address(self.inner.address);
+            let completion = unsafe { transfer.take_completion(dir) };
             self.idle_transfer = Some(transfer);
-
-            let data = Buffer {
-                ptr,
-                len,
-                transfer_len,
-                capacity,
-                allocator: Allocator::Default,
-            };
-
-            Poll::Ready(Completion { status, data })
+            Poll::Ready(completion)
         } else {
             Poll::Pending
         }
+    }
+
+    pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let dir = Direction::from_address(self.inner.address);
+                let completion = unsafe { transfer.take_completion(dir) };
+                self.idle_transfer = Some(transfer);
+                completion
+            })
+        })
     }
 
     pub(crate) fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {

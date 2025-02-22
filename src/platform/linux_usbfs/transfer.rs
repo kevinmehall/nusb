@@ -7,11 +7,11 @@ use std::{
 
 use rustix::io::Errno;
 
-use crate::descriptors::TransferType;
 use crate::transfer::{
     internal::Pending, Allocator, Buffer, ControlIn, ControlOut, Direction, TransferError,
     SETUP_PACKET_SIZE,
 };
+use crate::{descriptors::TransferType, Completion};
 
 use super::{
     errno_to_transfer_error,
@@ -124,6 +124,12 @@ impl TransferData {
             capacity,
             allocator,
         }
+    }
+
+    pub fn take_completion(&mut self) -> Completion {
+        let status = self.status();
+        let data = self.take_buffer();
+        Completion { status, data }
     }
 
     #[inline]
