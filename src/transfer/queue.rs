@@ -8,7 +8,7 @@ use std::{
 
 use crate::{platform, Error, MaybeFuture};
 
-use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRequest};
+use super::{Completion, PlatformSubmit, TransferHandle, TransferRequest, TransferType};
 
 /// Manages a stream of transfers on an endpoint.
 ///
@@ -113,7 +113,7 @@ use super::{Completion, EndpointType, PlatformSubmit, TransferHandle, TransferRe
 pub struct Queue<R: TransferRequest> {
     interface: Arc<platform::Interface>,
     endpoint: u8,
-    endpoint_type: EndpointType,
+    endpoint_type: TransferType,
 
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<TransferHandle<platform::TransferData>>,
@@ -132,7 +132,7 @@ where
     pub(crate) fn new(
         interface: Arc<platform::Interface>,
         endpoint: u8,
-        endpoint_type: EndpointType,
+        endpoint_type: TransferType,
     ) -> Queue<R> {
         Queue {
             interface,

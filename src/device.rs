@@ -5,13 +5,13 @@ use crate::{
     },
     platform,
     transfer::{
-        Control, ControlIn, ControlOut, EndpointType, Queue, RequestBuffer, TransferError,
-        TransferFuture,
+        Control, ControlIn, ControlOut, Queue, RequestBuffer, TransferError, TransferFuture,
+        TransferType,
     },
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 use log::error;
-use std::{io::ErrorKind, sync::Arc, time::Duration};
+use std::{io::ErrorKind, num::NonZeroU8, sync::Arc, time::Duration};
 
 /// An opened USB device.
 ///
@@ -46,13 +46,13 @@ impl Device {
     pub(crate) fn open(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Device, std::io::Error>> {
-        platform::Device::from_device_info(d)
+        platform::Device::from_device_info(d).map(|d| d.map(Device::wrap))
     }
 
     /// Wraps a device that is already open.
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
-        platform::Device::from_fd(fd)
+        platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
     }
 
     /// Open an interface of the device and claim it for exclusive use.
@@ -60,7 +60,10 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend.clone().claim_interface(interface)
+        self.backend
+            .clone()
+            .claim_interface(interface)
+            .map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -72,7 +75,10 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend.clone().detach_and_claim_interface(interface)
+        self.backend
+            .clone()
+            .detach_and_claim_interface(interface)
+            .map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers for the specified interface.
@@ -134,9 +140,7 @@ impl Device {
     ///
     /// This returns cached data and does not perform IO.
     pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor> {
-        self.backend
-            .configuration_descriptors()
-            .map(ConfigurationDescriptor::new)
+        self.backend.configuration_descriptors()
     }
 
     /// Set the device configuration.
@@ -237,17 +241,16 @@ impl Device {
     /// See notes on [`get_descriptor`][`Self::get_descriptor`].
     pub fn get_string_descriptor(
         &self,
-        desc_index: u8,
+        desc_index: NonZeroU8,
         language_id: u16,
         timeout: Duration,
     ) -> Result<String, Error> {
-        if desc_index == 0 {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "string descriptor index 0 is reserved for the language table",
-            ));
-        }
-        let data = self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index, language_id, timeout)?;
+        let data = self.get_descriptor(
+            DESCRIPTOR_TYPE_STRING,
+            desc_index.get(),
+            language_id,
+            timeout,
+        )?;
 
         decode_string_descriptor(&data)
             .map_err(|_| Error::new(ErrorKind::InvalidData, "string descriptor data was invalid"))
@@ -394,6 +397,11 @@ impl Interface {
         self.backend.clone().set_alt_setting(alt_setting)
     }
 
+    /// Get the current alternate setting of this interface.
+    pub fn get_alt_setting(&self) -> u8 {
+        self.backend.get_alt_setting()
+    }
+
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Platform-specific notes
@@ -465,7 +473,7 @@ impl Interface {
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
     pub fn control_in(&self, data: ControlIn) -> TransferFuture<ControlIn> {
-        let mut t = self.backend.make_transfer(0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, TransferType::Control);
         t.submit::<ControlIn>(data);
         TransferFuture::new(t)
     }
@@ -501,7 +509,7 @@ impl Interface {
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
     pub fn control_out(&self, data: ControlOut) -> TransferFuture<ControlOut> {
-        let mut t = self.backend.make_transfer(0, EndpointType::Control);
+        let mut t = self.backend.make_transfer(0, TransferType::Control);
         t.submit::<ControlOut>(data);
         TransferFuture::new(t)
     }
@@ -511,7 +519,7 @@ impl Interface {
     /// * The requested length must be a multiple of the endpoint's maximum packet size
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
-        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
+        let mut t = self.backend.make_transfer(endpoint, TransferType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -520,7 +528,7 @@ impl Interface {
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
-        let mut t = self.backend.make_transfer(endpoint, EndpointType::Bulk);
+        let mut t = self.backend.make_transfer(endpoint, TransferType::Bulk);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -529,14 +537,14 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn bulk_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Bulk)
     }
 
     /// Create a queue for managing multiple **OUT (host-to-device)** transfers on a **bulk** endpoint.
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn bulk_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Bulk)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Bulk)
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the specified **interrupt** endpoint.
@@ -546,7 +554,7 @@ impl Interface {
     pub fn interrupt_in(&self, endpoint: u8, buf: RequestBuffer) -> TransferFuture<RequestBuffer> {
         let mut t = self
             .backend
-            .make_transfer(endpoint, EndpointType::Interrupt);
+            .make_transfer(endpoint, TransferType::Interrupt);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -557,7 +565,7 @@ impl Interface {
     pub fn interrupt_out(&self, endpoint: u8, buf: Vec<u8>) -> TransferFuture<Vec<u8>> {
         let mut t = self
             .backend
-            .make_transfer(endpoint, EndpointType::Interrupt);
+            .make_transfer(endpoint, TransferType::Interrupt);
         t.submit(buf);
         TransferFuture::new(t)
     }
@@ -566,14 +574,14 @@ impl Interface {
     ///
     /// * An IN endpoint address must have the top (`0x80`) bit set.
     pub fn interrupt_in_queue(&self, endpoint: u8) -> Queue<RequestBuffer> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Interrupt)
     }
 
     /// Create a queue for managing multiple **OUT (device-to-host)** transfers on an **interrupt** endpoint.
     ///
     /// * An OUT endpoint address must have the top (`0x80`) bit clear.
     pub fn interrupt_out_queue(&self, endpoint: u8) -> Queue<Vec<u8>> {
-        Queue::new(self.backend.clone(), endpoint, EndpointType::Interrupt)
+        Queue::new(self.backend.clone(), endpoint, TransferType::Interrupt)
     }
 
     /// Clear a bulk or interrupt endpoint's halt / stall condition.
@@ -605,13 +613,18 @@ impl Interface {
             .backend
             .device
             .configuration_descriptors()
-            .map(ConfigurationDescriptor::new)
             .find(|c| c.configuration_value() == active);
 
         configuration
             .into_iter()
             .flat_map(|i| i.interface_alt_settings())
             .filter(|g| g.interface_number() == self.backend.interface_number)
+    }
+
+    /// Get the interface descriptor for the current alternate setting.
+    pub fn descriptor(&self) -> Option<InterfaceDescriptor> {
+        self.descriptors()
+            .find(|i| i.alternate_setting() == self.get_alt_setting())
     }
 }
 

@@ -12,9 +12,9 @@ use std::{
 use log::{debug, error};
 
 use crate::{
-    descriptors::DeviceDescriptor,
+    descriptors::{ConfigurationDescriptor, DeviceDescriptor},
     maybe_future::blocking::Blocking,
-    transfer::{Control, Direction, EndpointType, TransferError, TransferHandle},
+    transfer::{Control, Direction, TransferError, TransferHandle, TransferType},
     DeviceInfo, Error, MaybeFuture, Speed,
 };
 
@@ -53,7 +53,7 @@ fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
 impl MacDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacDevice>, Error>> {
         let registry_id = d.registry_id;
         let speed = d.speed;
         Blocking::new(move || {
@@ -88,7 +88,7 @@ impl MacDevice {
                 res.unwrap_or(0)
             };
 
-            Ok(crate::Device::wrap(Arc::new(MacDevice {
+            Ok(Arc::new(MacDevice {
                 _event_registration,
                 device,
                 device_descriptor,
@@ -96,7 +96,7 @@ impl MacDevice {
                 active_config: AtomicU8::new(active_config),
                 is_open_exclusive: Mutex::new(opened),
                 claimed_interfaces: AtomicUsize::new(0),
-            })))
+            }))
         })
     }
 
@@ -112,9 +112,13 @@ impl MacDevice {
         self.active_config.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
+    pub(crate) fn configuration_descriptors(
+        &self,
+    ) -> impl Iterator<Item = ConfigurationDescriptor> {
         let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
-        (0..num_configs).flat_map(|i| self.device.get_configuration_descriptor(i).ok())
+        (0..num_configs)
+            .flat_map(|i| self.device.get_configuration_descriptor(i).ok())
+            .flat_map(ConfigurationDescriptor::new)
     }
 
     fn require_open_exclusive(&self) -> Result<(), Error> {
@@ -232,7 +236,7 @@ impl MacDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         Blocking::new(move || {
             let intf_service = self
                 .device
@@ -250,20 +254,21 @@ impl MacDevice {
 
             self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
-            Ok(crate::Interface::wrap(Arc::new(MacInterface {
+            Ok(Arc::new(MacInterface {
                 device: self.clone(),
                 interface_number,
                 interface,
                 endpoints: Mutex::new(endpoints),
+                state: Mutex::new(InterfaceState::default()),
                 _event_registration,
-            })))
+            }))
         })
     }
 
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -284,18 +289,23 @@ pub(crate) struct MacInterface {
     _event_registration: EventRegistration,
     pub(crate) interface: IoKitInterface,
     pub(crate) device: Arc<MacDevice>,
-
     /// Map from address to a structure that contains the `pipe_ref` used by iokit
     pub(crate) endpoints: Mutex<BTreeMap<u8, EndpointInfo>>,
+    state: Mutex<InterfaceState>,
+}
+
+#[derive(Default)]
+struct InterfaceState {
+    alt_setting: u8,
 }
 
 impl MacInterface {
     pub(crate) fn make_transfer(
         self: &Arc<Self>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferHandle<super::TransferData> {
-        if ep_type == EndpointType::Control {
+        if ep_type == TransferType::Control {
             assert!(endpoint == 0);
             TransferHandle::new(super::TransferData::new_control(self.device.clone()))
         } else {
@@ -337,6 +347,7 @@ impl MacInterface {
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
+            let mut state = self.state.lock().unwrap();
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
                 self.interface_number
@@ -353,9 +364,14 @@ impl MacInterface {
 
             *endpoints = self.interface.endpoints()?;
             debug!("Found endpoints: {endpoints:?}");
+            state.alt_setting = alt_setting;
 
             Ok(())
         })
+    }
+
+    pub fn get_alt_setting(&self) -> u8 {
+        self.state.lock().unwrap().alt_setting
     }
 
     pub fn clear_halt(

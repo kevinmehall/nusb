@@ -7,13 +7,14 @@ use std::{
     fmt::{Debug, Display},
     io::ErrorKind,
     iter,
+    num::NonZeroU8,
     ops::Deref,
 };
 
 use log::warn;
 
 use crate::{
-    transfer::{Direction, EndpointType},
+    transfer::{Direction, TransferType},
     Error,
 };
 
@@ -85,9 +86,9 @@ impl<'a> Deref for Descriptor<'a> {
 
 /// An iterator over a sequence of USB descriptors.
 #[derive(Clone)]
-pub struct Descriptors<'a>(&'a [u8]);
+pub struct DescriptorIter<'a>(&'a [u8]);
 
-impl<'a> Descriptors<'a> {
+impl<'a> DescriptorIter<'a> {
     /// Get the concatenated bytes of the remaining descriptors.
     pub fn as_bytes(&self) -> &'a [u8] {
         self.0
@@ -151,7 +152,7 @@ impl<'a> Descriptors<'a> {
     }
 }
 
-impl<'a> Iterator for Descriptors<'a> {
+impl<'a> Iterator for DescriptorIter<'a> {
     type Item = Descriptor<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -181,37 +182,6 @@ macro_rules! descriptor_fields {
     }
 }
 
-/// Check whether the buffer contains a valid device descriptor.
-/// On success, it will return length of the descriptor, or returns `None`.
-#[allow(unused)]
-pub(crate) fn validate_device_descriptor(buf: &[u8]) -> Option<usize> {
-    if buf.len() < DESCRIPTOR_LEN_DEVICE as usize {
-        if buf.len() != 0 {
-            warn!(
-                "device descriptor buffer is {} bytes, need {}",
-                buf.len(),
-                DESCRIPTOR_LEN_DEVICE
-            );
-        }
-        return None;
-    }
-
-    if buf[0] < DESCRIPTOR_LEN_DEVICE {
-        warn!("invalid device descriptor bLength");
-        return None;
-    }
-
-    if buf[1] != DESCRIPTOR_TYPE_DEVICE {
-        warn!(
-            "device bDescriptorType is {}, not a device descriptor",
-            buf[1]
-        );
-        return None;
-    }
-
-    return Some(buf[0] as usize);
-}
-
 /// Information about a USB device.
 #[derive(Clone)]
 pub struct DeviceDescriptor([u8; DESCRIPTOR_LEN_DEVICE as usize]);
@@ -222,14 +192,31 @@ impl DeviceDescriptor {
     /// You normally obtain a `DeviceDescriptor` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
     ///
-    /// ### Panics
-    ///  * when the buffer is too short for a device descriptor
-    ///  * when the first descriptor is not a device descriptor
-    pub fn new(buf: &[u8]) -> Self {
-        assert!(buf.len() >= DESCRIPTOR_LEN_DEVICE as usize);
-        assert!(buf[0] as usize >= DESCRIPTOR_LEN_DEVICE as usize);
-        assert!(buf[1] == DESCRIPTOR_TYPE_DEVICE);
-        Self(buf[0..DESCRIPTOR_LEN_DEVICE as usize].try_into().unwrap())
+    /// This ignores any trailing data after the `bLength` specified in the descriptor.
+    pub fn new(buf: &[u8]) -> Option<Self> {
+        let Some(buf) = buf.get(0..DESCRIPTOR_LEN_DEVICE as usize) else {
+            if buf.len() != 0 {
+                warn!(
+                    "device descriptor buffer is {} bytes, need {}",
+                    buf.len(),
+                    DESCRIPTOR_LEN_DEVICE
+                );
+            }
+            return None;
+        };
+        let buf: [u8; DESCRIPTOR_LEN_DEVICE as usize] = buf.try_into().ok()?;
+        if buf[0] < DESCRIPTOR_LEN_DEVICE {
+            warn!("invalid device descriptor bLength");
+            None
+        } else if buf[1] != DESCRIPTOR_TYPE_DEVICE {
+            warn!(
+                "device bDescriptorType is {}, not a device descriptor",
+                buf[1]
+            );
+            None
+        } else {
+            Some(Self(buf))
+        }
     }
 
     /// Get the bytes of the descriptor.
@@ -321,18 +308,18 @@ descriptor_fields! {
 
 impl DeviceDescriptor {
     /// `iManufacturer` descriptor field: Index for manufacturer description string.
-    pub fn manufacturer_string_index(&self) -> Option<u8> {
-        Some(self.manufacturer_string_index_raw()).filter(|&i| i != 0)
+    pub fn manufacturer_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.manufacturer_string_index_raw())
     }
 
     /// `iProduct` descriptor field: Index for product description string.
-    pub fn product_string_index(&self) -> Option<u8> {
-        Some(self.product_string_index_raw()).filter(|&i| i != 0)
+    pub fn product_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.product_string_index_raw())
     }
 
     /// `iSerialNumber` descriptor field: Index for serial number string.
-    pub fn serial_number_string_index(&self) -> Option<u8> {
-        Some(self.serial_number_string_index_raw()).filter(|&i| i != 0)
+    pub fn serial_number_string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.serial_number_string_index_raw())
     }
 }
 impl Debug for DeviceDescriptor {
@@ -363,69 +350,67 @@ impl Debug for DeviceDescriptor {
     }
 }
 
-#[allow(unused)]
-pub(crate) fn validate_config_descriptor(buf: &[u8]) -> Option<usize> {
-    if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
-        if buf.len() != 0 {
-            warn!(
-                "config descriptor buffer is {} bytes, need {}",
-                buf.len(),
-                DESCRIPTOR_LEN_CONFIGURATION
-            );
-        }
-        return None;
-    }
-
-    if buf[0] < DESCRIPTOR_LEN_CONFIGURATION {
-        warn!("invalid config descriptor bLength");
-        return None;
-    }
-
-    if buf[1] != DESCRIPTOR_TYPE_CONFIGURATION {
-        warn!(
-            "config bDescriptorType is {}, not a configuration descriptor",
-            buf[0]
-        );
-        return None;
-    }
-
-    let total_len = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
-    if total_len < buf[0] as usize || total_len > buf.len() {
-        warn!(
-            "invalid config descriptor wTotalLen of {total_len} (buffer size is {bufsize})",
-            bufsize = buf.len()
-        );
-        return None;
-    }
-
-    Some(total_len)
-}
-
 /// Information about a USB configuration with access to all associated interfaces, endpoints, and other descriptors.
 #[derive(Clone)]
 pub struct ConfigurationDescriptor<'a>(&'a [u8]);
 
 impl<'a> ConfigurationDescriptor<'a> {
-    /// Create a `Configuration` from a buffer containing a series of descriptors.
+    /// Create a `ConfigurationDescriptor` from a buffer containing a series of descriptors.
     ///
-    /// You normally obtain a `Configuration` from a [`Device`][crate::Device], but this allows creating
+    /// You normally obtain a `ConfigurationDescriptor` from a [`Device`][crate::Device], but this allows creating
     /// one from your own descriptor bytes for tests.
     ///
-    /// ### Panics
-    ///  * when the buffer is too short for a configuration descriptor
-    ///  * when the bLength and wTotalLength fields are longer than the buffer
-    ///  * when the first descriptor is not a configuration descriptor
-    pub fn new(buf: &[u8]) -> ConfigurationDescriptor {
-        assert!(buf.len() >= DESCRIPTOR_LEN_CONFIGURATION as usize);
-        assert!(buf[0] as usize >= DESCRIPTOR_LEN_CONFIGURATION as usize);
-        assert!(buf[1] == DESCRIPTOR_TYPE_CONFIGURATION);
-        assert!(buf.len() == u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize);
-        ConfigurationDescriptor(buf)
+    /// This ignores any trailing data after the length specified in `wTotalLen`.
+    pub fn new(buf: &[u8]) -> Option<ConfigurationDescriptor> {
+        if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
+            if buf.len() != 0 {
+                warn!(
+                    "config descriptor buffer is {} bytes, need {}",
+                    buf.len(),
+                    DESCRIPTOR_LEN_CONFIGURATION
+                );
+            }
+            return None;
+        }
+
+        if buf[0] < DESCRIPTOR_LEN_CONFIGURATION {
+            warn!("invalid config descriptor bLength");
+            return None;
+        }
+
+        if buf[1] != DESCRIPTOR_TYPE_CONFIGURATION {
+            warn!(
+                "config bDescriptorType is {}, not a configuration descriptor",
+                buf[0]
+            );
+            return None;
+        }
+
+        let total_len = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
+        if total_len < buf[0] as usize || total_len > buf.len() {
+            warn!(
+                "invalid config descriptor wTotalLen of {total_len} (buffer size is {bufsize})",
+                bufsize = buf.len()
+            );
+            return None;
+        }
+
+        Some(ConfigurationDescriptor(&buf[..total_len]))
     }
 
-    /// Get the configuration descriptor followed by all trailing interface and other descriptors.
-    pub fn descriptors(&self) -> Descriptors<'a> {
-        Descriptors(self.0)
+    #[allow(unused)]
+    pub(crate) fn new_unchecked(d: &'a [u8]) -> Self {
+        Self(d)
+    }
+
+    /// The bytes of the configuration descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Iterate all trailing interface and other descriptors.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Iterate all interfaces and alternate settings settings of this configuration.
@@ -484,8 +469,8 @@ descriptor_fields! {
 impl<'a> ConfigurationDescriptor<'a> {
     /// Index of the string descriptor describing this configuration.
     #[doc(alias = "iConfiguration")]
-    pub fn string_index(&self) -> Option<u8> {
-        Some(self.string_index_raw()).filter(|&i| i != 0)
+    pub fn string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.string_index_raw())
     }
 }
 
@@ -556,10 +541,15 @@ impl<'a> InterfaceDescriptors<'a> {
 pub struct InterfaceDescriptor<'a>(&'a [u8]);
 
 impl<'a> InterfaceDescriptor<'a> {
-    /// Get the interface descriptor followed by all trailing endpoint and other
-    /// descriptors up to the next interface descriptor.
-    pub fn descriptors(&self) -> Descriptors<'a> {
-        Descriptors(self.0)
+    /// The bytes of the interface descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0
+    }
+
+    /// Iterate all trailing endpoint and other descriptors up to the next
+    /// interface descriptor.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Get the endpoints of this interface.
@@ -607,8 +597,8 @@ descriptor_fields! {
 impl<'a> InterfaceDescriptor<'a> {
     /// Index of the string descriptor describing this interface or alternate setting.
     #[doc(alias = "iInterface")]
-    pub fn string_index(&self) -> Option<u8> {
-        Some(self.string_index_raw()).filter(|&i| i != 0)
+    pub fn string_index(&self) -> Option<NonZeroU8> {
+        NonZeroU8::new(self.string_index_raw())
     }
 }
 
@@ -631,26 +621,28 @@ impl<'a> Debug for InterfaceDescriptor<'a> {
 pub struct EndpointDescriptor<'a>(&'a [u8]);
 
 impl<'a> EndpointDescriptor<'a> {
-    /// Get the endpoint descriptor followed by all trailing descriptors up to the next endpoint or interface descriptor.
-    pub fn descriptors(&self) -> impl Iterator<Item = Descriptor<'a>> {
-        Descriptors(self.0)
+    /// The bytes of the endpoint descriptor and all trailing descriptors.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Iterate all trailing descriptors up to the next endpoint or interface descriptor.
+    pub fn descriptors(&self) -> DescriptorIter<'a> {
+        DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
     /// Get the endpoint's direction.
     pub fn direction(&self) -> Direction {
-        match self.address() & 0x80 {
-            0 => Direction::Out,
-            _ => Direction::In,
-        }
+        Direction::from_address(self.address())
     }
 
     /// Get the endpoint's transfer type.
-    pub fn transfer_type(&self) -> EndpointType {
+    pub fn transfer_type(&self) -> TransferType {
         match self.attributes() & 0x03 {
-            0 => EndpointType::Control,
-            1 => EndpointType::Isochronous,
-            2 => EndpointType::Bulk,
-            3 => EndpointType::Interrupt,
+            0 => TransferType::Control,
+            1 => TransferType::Isochronous,
+            2 => TransferType::Bulk,
+            3 => TransferType::Interrupt,
             _ => unreachable!(),
         }
     }
@@ -734,12 +726,13 @@ impl From<ActiveConfigurationError> for Error {
 
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
 #[allow(unused)]
-pub(crate) fn parse_concatenated_config_descriptors(mut buf: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub(crate) fn parse_concatenated_config_descriptors(
+    mut buf: &[u8],
+) -> impl Iterator<Item = ConfigurationDescriptor> {
     iter::from_fn(move || {
-        let total_len = validate_config_descriptor(buf)?;
-        let descriptors = &buf[..total_len];
-        buf = &buf[total_len..];
-        Some(descriptors)
+        let desc = ConfigurationDescriptor::new(buf)?;
+        buf = &buf[desc.0.len()..];
+        Some(desc)
     })
 }
 
@@ -774,15 +767,19 @@ mod test_concatenated {
     #[test]
     fn test_empty() {
         assert_eq!(
-            parse_concatenated_config_descriptors(&[]).collect::<Vec<&[u8]>>(),
-            Vec::<&[u8]>::new()
+            parse_concatenated_config_descriptors(&[])
+                .collect::<Vec<_>>()
+                .len(),
+            0
         );
     }
 
     #[test]
     fn test_short() {
         assert_eq!(
-            parse_concatenated_config_descriptors(&[0]).collect::<Vec<&[u8]>>(),
+            parse_concatenated_config_descriptors(&[0])
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             Vec::<&[u8]>::new()
         );
     }
@@ -791,7 +788,8 @@ mod test_concatenated {
     fn test_invalid_total_len() {
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 0, 0, 0, 0, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.descriptors().as_bytes())
+                .collect::<Vec<_>>(),
             Vec::<&[u8]>::new()
         );
     }
@@ -800,13 +798,15 @@ mod test_concatenated {
     fn test_one_config() {
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 9, 0, 0, 0, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.as_bytes())
+                .collect::<Vec<_>>(),
             vec![&[9, 2, 9, 0, 0, 0, 0, 0, 0]]
         );
 
         assert_eq!(
             parse_concatenated_config_descriptors(&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0])
-                .collect::<Vec<&[u8]>>(),
+                .map(|d| d.as_bytes())
+                .collect::<Vec<_>>(),
             vec![&[9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0]]
         );
     }
@@ -817,7 +817,8 @@ mod test_concatenated {
             parse_concatenated_config_descriptors(&[
                 9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 9, 2, 9, 0, 0, 0, 0, 0, 0
             ])
-            .collect::<Vec<&[u8]>>(),
+            .map(|d| d.as_bytes())
+            .collect::<Vec<_>>(),
             vec![
                 [9, 2, 13, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0].as_slice(),
                 [9, 2, 9, 0, 0, 0, 0, 0, 0].as_slice()
@@ -847,7 +848,7 @@ fn test_linux_root_hub() {
     let dev = DeviceDescriptor::new(&[
         0x12, 0x01, 0x00, 0x02, 0x09, 0x00, 0x01, 0x40, 0x6b,
         0x1d, 0x02, 0x00, 0x10, 0x05, 0x03, 0x02, 0x01, 0x01
-    ]);
+    ]).unwrap();
     assert_eq!(dev.usb_version(), 0x0200);
     assert_eq!(dev.class(), 0x09);
     assert_eq!(dev.subclass(), 0x00);
@@ -856,9 +857,9 @@ fn test_linux_root_hub() {
     assert_eq!(dev.vendor_id(), 0x1d6b);
     assert_eq!(dev.product_id(), 0x0002);
     assert_eq!(dev.device_version(), 0x0510);
-    assert_eq!(dev.manufacturer_string_index(), Some(3));
-    assert_eq!(dev.product_string_index(), Some(2));
-    assert_eq!(dev.serial_number_string_index(), Some(1));
+    assert_eq!(dev.manufacturer_string_index(), NonZeroU8::new(3));
+    assert_eq!(dev.product_string_index(), NonZeroU8::new(2));
+    assert_eq!(dev.serial_number_string_index(), NonZeroU8::new(1));
     assert_eq!(dev.num_configurations(), 1);
 
     let c = ConfigurationDescriptor(&[
@@ -887,7 +888,7 @@ fn test_linux_root_hub() {
 
     let endpoint = alt.endpoints().next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Interrupt);
+    assert_eq!(endpoint.transfer_type(), TransferType::Interrupt);
     assert_eq!(endpoint.max_packet_size(), 4);
     assert_eq!(endpoint.interval(), 12);
 
@@ -1009,7 +1010,6 @@ fn test_dell_webcam() {
     assert_eq!(alt.protocol(), 0);
 
     let mut descriptors = alt.descriptors();
-    assert_eq!(descriptors.next().unwrap().descriptor_type(), DESCRIPTOR_TYPE_INTERFACE);
     for _ in 0..6 {
         assert_eq!(descriptors.next().unwrap().descriptor_type(), 0x24);
     }
@@ -1021,10 +1021,10 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x83);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Interrupt);
+    assert_eq!(endpoint.transfer_type(), TransferType::Interrupt);
     assert_eq!(endpoint.max_packet_size(), 16);
 
-    assert_eq!(endpoint.descriptors().nth(1).unwrap().descriptor_type(), 0x25);
+    assert_eq!(endpoint.descriptors().next().unwrap().descriptor_type(), 0x25);
     
     assert!(endpoints.next().is_none());
     assert!(alts.next().is_none());
@@ -1054,7 +1054,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 128);
 
     assert!(endpoints.next().is_none());
@@ -1070,7 +1070,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 256);
     assert_eq!(endpoint.packets_per_microframe(), 1);
 
@@ -1087,7 +1087,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 1);
 
@@ -1104,7 +1104,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 2);
 
@@ -1119,7 +1119,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 800);
     assert_eq!(endpoint.packets_per_microframe(), 3);
 
@@ -1134,7 +1134,7 @@ fn test_dell_webcam() {
 
     let endpoint = endpoints.next().unwrap();
     assert_eq!(endpoint.address(), 0x81);
-    assert_eq!(endpoint.transfer_type(), EndpointType::Isochronous);
+    assert_eq!(endpoint.transfer_type(), TransferType::Isochronous);
     assert_eq!(endpoint.max_packet_size(), 1024);
     assert_eq!(endpoint.packets_per_microframe(), 3);
 

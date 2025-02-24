@@ -8,8 +8,8 @@ use std::{
 use rustix::io::Errno;
 
 use crate::transfer::{
-    Completion, ControlIn, ControlOut, EndpointType, PlatformSubmit, PlatformTransfer,
-    RequestBuffer, ResponseBuffer, TransferError, SETUP_PACKET_SIZE,
+    Completion, ControlIn, ControlOut, PlatformSubmit, PlatformTransfer, RequestBuffer,
+    ResponseBuffer, TransferError, TransferType, SETUP_PACKET_SIZE,
 };
 
 use super::{
@@ -43,13 +43,13 @@ impl TransferData {
         device: Arc<super::Device>,
         interface: Option<Arc<super::Interface>>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferData {
         let ep_type = match ep_type {
-            EndpointType::Control => USBDEVFS_URB_TYPE_CONTROL,
-            EndpointType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
-            EndpointType::Bulk => USBDEVFS_URB_TYPE_BULK,
-            EndpointType::Isochronous => USBDEVFS_URB_TYPE_ISO,
+            TransferType::Control => USBDEVFS_URB_TYPE_CONTROL,
+            TransferType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
+            TransferType::Bulk => USBDEVFS_URB_TYPE_BULK,
+            TransferType::Isochronous => USBDEVFS_URB_TYPE_ISO,
         };
 
         TransferData {

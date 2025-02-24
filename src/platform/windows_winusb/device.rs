@@ -24,12 +24,12 @@ use windows_sys::Win32::{
 
 use crate::{
     descriptors::{
-        validate_config_descriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
+        ConfigurationDescriptor, DeviceDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
-    maybe_future::{blocking::Blocking, MaybeFuture, Ready},
-    transfer::{Control, Direction, EndpointType, Recipient, TransferError, TransferHandle},
-    DeviceInfo, Error, Speed,
+    maybe_future::{blocking::Blocking, Ready},
+    transfer::{Control, Direction, Recipient, TransferError, TransferHandle, TransferType},
+    DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
@@ -53,7 +53,7 @@ pub(crate) struct WindowsDevice {
 impl WindowsDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
-    ) -> impl MaybeFuture<Output = Result<crate::Device, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<WindowsDevice>, Error>> {
         let instance_id = d.instance_id.clone();
         let devinst = d.devinst;
         Blocking::new(move || {
@@ -68,33 +68,31 @@ impl WindowsDevice {
 
             // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
             let device_descriptor = unsafe {
-                DeviceDescriptor::new(&transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
-                    connection_info.device_desc,
-                ))
+                &transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(connection_info.device_desc)
             };
+            let device_descriptor = DeviceDescriptor::new(device_descriptor)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid device descriptor"))?;
 
             let num_configurations = connection_info.device_desc.bNumConfigurations;
             let config_descriptors = (0..num_configurations)
                 .flat_map(|i| {
-                    let res = hub_port.get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0);
-                    match res {
-                        Ok(v) => validate_config_descriptor(&v[..]).map(|_| v),
-                        Err(e) => {
-                            error!("Failed to read config descriptor {}: {}", i, e);
-                            None
-                        }
-                    }
+                    let d = hub_port
+                        .get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0)
+                        .inspect_err(|e| error!("Failed to read config descriptor {}: {}", i, e))
+                        .ok()?;
+
+                    ConfigurationDescriptor::new(&d).is_some().then_some(d)
                 })
                 .collect();
 
-            Ok(crate::Device::wrap(Arc::new(WindowsDevice {
+            Ok(Arc::new(WindowsDevice {
                 device_descriptor,
                 config_descriptors,
                 speed: connection_info.speed,
                 active_config: connection_info.active_config,
                 devinst: devinst,
                 handles: Mutex::new(BTreeMap::new()),
-            })))
+            }))
         })
     }
 
@@ -110,8 +108,12 @@ impl WindowsDevice {
         self.active_config
     }
 
-    pub(crate) fn configuration_descriptors(&self) -> impl Iterator<Item = &[u8]> {
-        self.config_descriptors.iter().map(|d| &d[..])
+    pub(crate) fn configuration_descriptors(
+        &self,
+    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+        self.config_descriptors
+            .iter()
+            .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
     pub(crate) fn set_configuration(
@@ -143,63 +145,55 @@ impl WindowsDevice {
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<WindowsInterface>, Error>> {
         Blocking::new(move || {
-            self.claim_interface_blocking(interface_number)
-                .map(crate::Interface::wrap)
+            let driver = get_driver_name(self.devinst);
+
+            let mut handles = self.handles.lock().unwrap();
+
+            if driver.eq_ignore_ascii_case("winusb") {
+                match handles.entry(0) {
+                    Entry::Occupied(mut e) => e.get_mut().claim_interface(&self, interface_number),
+                    Entry::Vacant(e) => {
+                        let path = get_winusb_device_path(self.devinst)?;
+                        let mut handle = WinusbFileHandle::new(&path, 0)?;
+                        let intf = handle.claim_interface(&self, interface_number)?;
+                        e.insert(handle);
+                        Ok(intf)
+                    }
+                }
+            } else if driver.eq_ignore_ascii_case("usbccgp") {
+                let (first_interface, child_dev) =
+                    find_usbccgp_child(self.devinst, interface_number)
+                        .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
+
+                if first_interface != interface_number {
+                    debug!("Guessing that interface {interface_number} is an associated interface of {first_interface}");
+                }
+
+                match handles.entry(first_interface) {
+                    Entry::Occupied(mut e) => e.get_mut().claim_interface(&self, interface_number),
+                    Entry::Vacant(e) => {
+                        let path = get_usbccgp_winusb_device_path(child_dev)?;
+                        let mut handle = WinusbFileHandle::new(&path, first_interface)?;
+                        let intf = handle.claim_interface(&self, interface_number)?;
+                        e.insert(handle);
+                        Ok(intf)
+                    }
+                }
+            } else {
+                Err(Error::new(
+                    ErrorKind::Unsupported,
+                    format!("Device driver is {driver:?}, not WinUSB or USBCCGP"),
+                ))
+            }
         })
-    }
-
-    fn claim_interface_blocking(
-        self: &Arc<Self>,
-        interface_number: u8,
-    ) -> Result<Arc<WindowsInterface>, Error> {
-        let driver = get_driver_name(self.devinst);
-
-        let mut handles = self.handles.lock().unwrap();
-
-        if driver.eq_ignore_ascii_case("winusb") {
-            match handles.entry(0) {
-                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
-                Entry::Vacant(e) => {
-                    let path = get_winusb_device_path(self.devinst)?;
-                    let mut handle = WinusbFileHandle::new(&path, 0)?;
-                    let intf = handle.claim_interface(self, interface_number)?;
-                    e.insert(handle);
-                    Ok(intf)
-                }
-            }
-        } else if driver.eq_ignore_ascii_case("usbccgp") {
-            let (first_interface, child_dev) =
-                find_usbccgp_child(self.devinst, interface_number)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
-
-            if first_interface != interface_number {
-                debug!("Guessing that interface {interface_number} is an associated interface of {first_interface}");
-            }
-
-            match handles.entry(first_interface) {
-                Entry::Occupied(mut e) => e.get_mut().claim_interface(self, interface_number),
-                Entry::Vacant(e) => {
-                    let path = get_usbccgp_winusb_device_path(child_dev)?;
-                    let mut handle = WinusbFileHandle::new(&path, first_interface)?;
-                    let intf = handle.claim_interface(self, interface_number)?;
-                    e.insert(handle);
-                    Ok(intf)
-                }
-            }
-        } else {
-            Err(Error::new(
-                ErrorKind::Unsupported,
-                format!("Device driver is {driver:?}, not WinUSB or USBCCGP"),
-            ))
-        }
     }
 
     pub(crate) fn detach_and_claim_interface(
         self: Arc<Self>,
         interface: u8,
-    ) -> impl MaybeFuture<Output = Result<crate::Interface, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Arc<WindowsInterface>, Error>> {
         self.claim_interface(interface)
     }
 }
@@ -319,6 +313,7 @@ impl WinusbFileHandle {
             interface_number,
             first_interface_number: self.first_interface,
             winusb_handle,
+            state: Mutex::new(InterfaceState::default()),
         }))
     }
 }
@@ -341,6 +336,12 @@ pub(crate) struct WindowsInterface {
     pub(crate) first_interface_number: u8,
     pub(crate) interface_number: u8,
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
+    state: Mutex<InterfaceState>,
+}
+
+#[derive(Default)]
+struct InterfaceState {
+    alt_setting: u8,
 }
 
 unsafe impl Send for WindowsInterface {}
@@ -386,7 +387,7 @@ impl WindowsInterface {
     pub(crate) fn make_transfer(
         self: &Arc<Self>,
         endpoint: u8,
-        ep_type: EndpointType,
+        ep_type: TransferType,
     ) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new(self.clone(), endpoint, ep_type))
     }
@@ -507,13 +508,23 @@ impl WindowsInterface {
         alt_setting: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || unsafe {
+            let mut state = self.state.lock().unwrap();
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
             if r == TRUE {
+                debug!(
+                    "Set interface {} alt setting to {alt_setting}",
+                    self.interface_number
+                );
+                state.alt_setting = alt_setting;
                 Ok(())
             } else {
                 Err(io::Error::last_os_error())
             }
         })
+    }
+
+    pub fn get_alt_setting(&self) -> u8 {
+        self.state.lock().unwrap().alt_setting
     }
 
     pub fn clear_halt(
