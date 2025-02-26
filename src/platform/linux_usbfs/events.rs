@@ -87,9 +87,9 @@ pub(super) fn unregister_fd(fd: BorrowedFd) {
 
 fn event_loop() {
     let epoll_fd = EPOLL_FD.get().unwrap();
-    let mut event_list = epoll::EventVec::with_capacity(4);
+    let mut event_list = Vec::with_capacity(4);
     loop {
-        retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, -1)).unwrap();
+        retry_on_intr(|| epoll::wait(epoll_fd, &mut event_list, None)).unwrap();
         for event in &event_list {
             match Tag::from_event_data(event.data) {
                 Tag::Device(id) => Device::handle_usb_epoll(id),
