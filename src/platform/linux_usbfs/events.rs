@@ -14,14 +14,14 @@
 use crate::Error;
 use once_cell::sync::OnceCell;
 use rustix::{
-    buffer::spare_capacity,
     event::epoll::{self, EventData, EventFlags},
     fd::{AsFd, BorrowedFd, OwnedFd},
-    io::retry_on_intr,
+    io::Errno,
 };
 use slab::Slab;
 use std::{
     io,
+    mem::MaybeUninit,
     sync::{Arc, Mutex},
     task::Waker,
     thread,
@@ -88,10 +88,14 @@ pub(super) fn unregister_fd(fd: BorrowedFd) {
 
 fn event_loop() {
     let epoll_fd = EPOLL_FD.get().unwrap();
-    let mut event_list = Vec::with_capacity(4);
+    let mut event_buf = [MaybeUninit::<epoll::Event>::uninit(); 4];
     loop {
-        retry_on_intr(|| epoll::wait(epoll_fd, spare_capacity(&mut event_list), None)).unwrap();
-        for event in &event_list {
+        let events = match epoll::wait(epoll_fd, &mut event_buf, None) {
+            Ok((events, _)) => events,
+            Err(Errno::INTR) => &mut [],
+            Err(e) => panic!("epoll::wait failed: {e}"),
+        };
+        for event in events {
             match Tag::from_event_data(event.data) {
                 Tag::Device(id) => Device::handle_usb_epoll(id),
                 Tag::Waker(id) => {
