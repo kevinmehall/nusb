@@ -63,7 +63,7 @@ pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Erro
                 for interface_group in configuration.interfaces() {
                     let alternate = interface_group.first_alt_setting();
                     let interface_string = if let Some(id) = alternate.string_index() {
-                        Some(extract_string(&device, id as u16).await)
+                        Some(extract_string(&device, id as u16).await?)
                     } else {
                         None
                     };

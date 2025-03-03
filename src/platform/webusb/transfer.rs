@@ -72,16 +72,16 @@ impl PlatformSubmit<Vec<u8>> for TransferData {
                 }
                 EndpointType::Bulk | EndpointType::Interrupt => {
                     let array = Uint8Array::from(data.as_slice());
-                    let array_obj = Object::try_from(&array).unwrap();
+                    let array_obj = Object::try_from(&array).expect("an object");
 
                     let result = JsFuture::from(
                         device
                             .device
                             .transfer_out_with_buffer_source(endpoint_number, array_obj)
-                            .unwrap(),
+                            .expect("transfers are possible"),
                     )
                     .await
-                    .unwrap();
+                    .expect("transfers don't fail");
 
                     let transfer_result: UsbOutTransferResult = JsCast::unchecked_from_js(result);
                     (
@@ -123,10 +123,15 @@ impl PlatformSubmit<RequestBuffer> for TransferData {
                     let result =
                         JsFuture::from(device.device.transfer_in(endpoint_number, len as u32))
                             .await
-                            .unwrap();
+                            .expect("transfers are possible");
 
                     let transfer_result: UsbInTransferResult = JsCast::unchecked_from_js(result);
-                    let received_data = Uint8Array::new(&transfer_result.data().unwrap().buffer());
+                    let received_data = Uint8Array::new(
+                        &transfer_result
+                            .data()
+                            .expect("a data buffer is present")
+                            .buffer(),
+                    );
                     data.resize(received_data.length() as usize, 0);
                     received_data.copy_to(&mut data[..received_data.length() as usize]);
                     transfer_result.status()
@@ -170,10 +175,15 @@ impl PlatformSubmit<ControlIn> for TransferData {
                     let result =
                         JsFuture::from(device.device.control_transfer_in(&setup, data.length))
                             .await
-                            .unwrap();
+                            .expect("sending data is possible");
 
                     let transfer_result: UsbInTransferResult = JsCast::unchecked_from_js(result);
-                    let received_data = Uint8Array::new(&transfer_result.data().unwrap().buffer());
+                    let received_data = Uint8Array::new(
+                        &transfer_result
+                            .data()
+                            .expect("a data buffer is present")
+                            .buffer(),
+                    );
                     let data = received_data.to_vec();
 
                     (transfer_result.status(), data)
@@ -217,15 +227,15 @@ impl PlatformSubmit<ControlOut<'_>> for TransferData {
                         data.value,
                     );
                     let array = Uint8Array::from(bytes_to_send.as_slice());
-                    let array_obj = Object::try_from(&array).unwrap();
+                    let array_obj = Object::try_from(&array).expect("an object");
                     let result = JsFuture::from(
                         device
                             .device
                             .control_transfer_out_with_buffer_source(&setup, array_obj)
-                            .unwrap(),
+                            .expect("transfers are possible"),
                     )
                     .await
-                    .unwrap();
+                    .expect("transfers don't fail");
 
                     let transfer_result: UsbOutTransferResult = JsCast::unchecked_from_js(result);
                     (

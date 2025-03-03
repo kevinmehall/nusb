@@ -12,7 +12,7 @@ use crate::{
     DeviceInfo,
 };
 
-use super::web_to_nusb_status;
+use super::{js_value_to_io_error, js_value_to_transfer_error, web_to_nusb_status};
 
 #[derive(Clone)]
 pub(crate) struct WebusbDevice {
@@ -23,13 +23,17 @@ pub(crate) struct WebusbDevice {
 impl WebusbDevice {
     pub(crate) async fn from_device_info(d: &DeviceInfo) -> Result<Arc<WebusbDevice>, Error> {
         let usb = super::usb()?;
-        let devices = JsFuture::from(usb.get_devices()).await.unwrap();
+        let devices = JsFuture::from(usb.get_devices())
+            .await
+            .map_err(js_value_to_io_error)?;
         let devices: Array = JsCast::unchecked_from_js(devices);
 
         for device in devices {
             let device: UsbDevice = JsCast::unchecked_from_js(device);
             if device.eq(&d.device) {
-                JsFuture::from(device.open()).await.unwrap();
+                JsFuture::from(device.open())
+                    .await
+                    .map_err(js_value_to_io_error)?;
 
                 let config_descriptors = extract_decriptors(&device).await?;
 
@@ -92,7 +96,7 @@ impl WebusbDevice {
     ) -> Result<Arc<WebusbInterface>, Error> {
         JsFuture::from(self.device.claim_interface(interface_number))
             .await
-            .unwrap();
+            .map_err(js_value_to_io_error)?;
 
         #[allow(clippy::arc_with_non_send_sync)]
         Ok(Arc::new(WebusbInterface {
@@ -158,12 +162,12 @@ pub async fn get_descriptor(
     );
     let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 255))
         .await
-        .unwrap();
+        .map_err(js_value_to_io_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res);
-    Ok(Uint8Array::new(&res.data().unwrap().buffer()).to_vec())
+    Ok(Uint8Array::new(&res.data().expect("a data buffer").buffer()).to_vec())
 }
 
-pub async fn extract_string(device: &UsbDevice, id: u16) -> String {
+pub async fn extract_string(device: &UsbDevice, id: u16) -> Result<String, Error> {
     let setup = UsbControlTransferParameters::new(
         0,
         web_sys::UsbRecipient::Device,
@@ -173,9 +177,9 @@ pub async fn extract_string(device: &UsbDevice, id: u16) -> String {
     );
     let res = JsFuture::from(device.control_transfer_in(&setup, 255))
         .await
-        .unwrap();
+        .map_err(js_value_to_io_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res);
-    let mut data = Uint8Array::new(&res.data().unwrap().buffer()).to_vec();
+    let mut data = Uint8Array::new(&res.data().expect("a data buffer").buffer()).to_vec();
 
     String::from_utf16(
         &data
@@ -185,7 +189,7 @@ pub async fn extract_string(device: &UsbDevice, id: u16) -> String {
             .map(|c| ((c[1] as u16) << 8) | c[0] as u16)
             .collect::<Vec<_>>(),
     )
-    .unwrap()
+    .map_err(|_| Error::other("invalid utf16"))
 }
 
 #[derive(Clone)]
@@ -257,13 +261,11 @@ impl WebusbInterface {
             control.control_type.into(),
             control.value,
         );
-        let res = wasm_bindgen_futures::JsFuture::from(
-            self.device.device.control_transfer_in(&setup, 255),
-        )
-        .await
-        .unwrap();
+        let res = JsFuture::from(self.device.device.control_transfer_in(&setup, 255))
+            .await
+            .map_err(js_value_to_transfer_error)?;
         let res: UsbInTransferResult = JsCast::unchecked_from_js(res);
-        let array = Uint8Array::new(&res.data().unwrap().buffer());
+        let array = Uint8Array::new(&res.data().expect("a data buffer").buffer());
         array.copy_to(data);
 
         web_to_nusb_status(res.status()).map(|_| array.length() as usize)
@@ -284,14 +286,14 @@ impl WebusbInterface {
             control.value,
         );
         let mut data = data.to_vec();
-        let res = wasm_bindgen_futures::JsFuture::from(
+        let res = JsFuture::from(
             self.device
                 .device
                 .control_transfer_out_with_u8_slice(&setup, &mut data)
-                .unwrap(),
+                .map_err(js_value_to_transfer_error)?,
         )
         .await
-        .unwrap();
+        .map_err(js_value_to_transfer_error)?;
         let res: UsbOutTransferResult = JsCast::unchecked_from_js(res);
 
         web_to_nusb_status(res.status()).map(|_| res.bytes_written() as usize)

@@ -77,3 +77,18 @@ pub(crate) fn usb() -> Result<Usb, Error> {
 
     Err(Error::other("WebUSB is not available on this platform"))
 }
+
+pub fn js_value_to_io_error(value: JsValue) -> std::io::Error {
+    let value: js_sys::Error = value
+        .dyn_into()
+        .unwrap_or_else(|_| js_sys::Error::new("error could not be constructed"));
+    std::io::Error::other(value.message().as_string().unwrap_or_default())
+}
+
+pub fn js_value_to_transfer_error(value: JsValue) -> TransferError {
+    let value: js_sys::Error = value
+        .dyn_into()
+        .unwrap_or_else(|_| js_sys::Error::new("error could not be constructed"));
+    tracing::info!("{:?}", value);
+    TransferError::Unknown
+}
