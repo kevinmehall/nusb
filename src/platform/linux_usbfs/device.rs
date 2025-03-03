@@ -39,7 +39,7 @@ use crate::transfer::{
     internal::{
         notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
     },
-    request_type, ControlIn, ControlOut, ControlType, Direction, Recipient,
+    request_type, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
 };
 use crate::{DeviceInfo, Error, Speed};
 
@@ -323,7 +323,7 @@ impl LinuxDevice {
         &self,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let t = TransferData::new_control_in(data);
         TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
             t.status()?;
@@ -335,7 +335,7 @@ impl LinuxDevice {
         &self,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let t = TransferData::new_control_out(data);
         TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
             t.status()?;
@@ -566,7 +566,7 @@ impl LinuxInterface {
         &self,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.device.control_in(data, timeout)
     }
 
@@ -574,7 +574,7 @@ impl LinuxInterface {
         &self,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.device.control_out(data, timeout)
     }
 

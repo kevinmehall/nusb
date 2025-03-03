@@ -36,7 +36,7 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        ControlIn, ControlOut, Direction, Recipient,
+        ControlIn, ControlOut, Direction, Recipient, TransferError,
     },
     util::write_copy_of_slice,
     DeviceInfo, Error, MaybeFuture, Speed,
@@ -406,7 +406,7 @@ impl WindowsInterface {
         self: &Arc<Self>,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
@@ -431,7 +431,7 @@ impl WindowsInterface {
         self: &Arc<Self>,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }

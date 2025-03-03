@@ -211,6 +211,7 @@ impl Device {
                 },
                 timeout,
             )
+            .map(|r| Ok(r?))
         }
     }
 
@@ -315,7 +316,7 @@ impl Device {
         &self,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.backend.clone().control_in(data, timeout)
     }
 
@@ -352,7 +353,7 @@ impl Device {
         &self,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.backend.clone().control_out(data, timeout)
     }
 }
@@ -423,7 +424,7 @@ impl Interface {
         &self,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.backend.clone().control_in(data, timeout)
     }
 
@@ -462,7 +463,7 @@ impl Interface {
         &self,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.backend.clone().control_out(data, timeout)
     }
 
