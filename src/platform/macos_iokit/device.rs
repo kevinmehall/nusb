@@ -22,7 +22,7 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        ControlIn, ControlOut, Direction,
+        ControlIn, ControlOut, Direction, TransferError,
     },
     util::write_copy_of_slice,
     DeviceInfo, Error, MaybeFuture, Speed,
@@ -225,7 +225,7 @@ impl MacDevice {
         self: &Arc<Self>,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
         let t = TransferData::new(0x80, data.length as usize);
 
@@ -251,7 +251,7 @@ impl MacDevice {
         self: &Arc<Self>,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
         let mut t = TransferData::new(0, data.data.len());
         write_copy_of_slice(t.buffer_mut(), &data.data);
@@ -376,7 +376,7 @@ impl MacInterface {
         self: &Arc<Self>,
         data: ControlIn,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.device.control_in(data, timeout)
     }
 
@@ -384,7 +384,7 @@ impl MacInterface {
         self: &Arc<Self>,
         data: ControlOut,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.device.control_out(data, timeout)
     }
 
