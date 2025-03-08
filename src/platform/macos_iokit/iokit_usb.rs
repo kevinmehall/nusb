@@ -3,7 +3,7 @@
 //! Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
 //! licensed under MIT OR Apache-2.0.
 
-use std::{collections::BTreeMap, io::ErrorKind, ptr, slice, time::Duration};
+use std::{io::ErrorKind, ptr, slice, time::Duration};
 
 use core_foundation::{base::TCFType, runloop::CFRunLoopSource};
 use core_foundation_sys::runloop::CFRunLoopSourceRef;
@@ -191,30 +191,6 @@ impl Drop for IoKitDevice {
 unsafe impl Send for IoKitDevice {}
 unsafe impl Sync for IoKitDevice {}
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct EndpointInfo {
-    pub(crate) pipe_ref: u8,
-    pub(crate) direction: u8,
-    pub(crate) number: u8,
-    pub(crate) transfer_type: u8,
-    pub(crate) max_packet_size: u16,
-    pub(crate) interval: u8,
-    pub(crate) max_burst: u8,
-    pub(crate) mult: u8,
-    pub(crate) bytes_per_interval: u16,
-}
-
-impl EndpointInfo {
-    pub(crate) fn address(&self) -> u8 {
-        if self.direction == 0 {
-            self.number
-        } else {
-            self.number | 0x80
-        }
-    }
-}
-
 /// Wrapper around an IOKit UsbInterface
 pub(crate) struct IoKitInterface {
     pub(crate) raw: *mut *mut iokit::UsbInterface,
@@ -287,11 +263,10 @@ impl IoKitInterface {
         }
     }
 
-    pub(crate) fn endpoints(&self) -> Result<BTreeMap<u8, EndpointInfo>, Error> {
+    pub(crate) fn find_pipe_ref(&self, endpoint_addr: u8) -> Option<u8> {
         unsafe {
-            let mut endpoints = BTreeMap::new();
             let mut count = 0;
-            check_iokit_return(call_iokit_function!(self.raw, GetNumEndpoints(&mut count)))?;
+            check_iokit_return(call_iokit_function!(self.raw, GetNumEndpoints(&mut count))).ok()?;
 
             // Pipe references are 1-indexed
             for pipe_ref in 1..=count {
@@ -300,40 +275,26 @@ impl IoKitInterface {
                 let mut transfer_type: u8 = 0;
                 let mut max_packet_size: u16 = 0;
                 let mut interval: u8 = 0;
-                let mut max_burst: u8 = 0;
-                let mut mult: u8 = 0;
-                let mut bytes_per_interval: u16 = 0;
 
-                check_iokit_return(call_iokit_function!(
+                let Ok(()) = check_iokit_return(call_iokit_function!(
                     self.raw,
-                    GetPipePropertiesV2(
+                    GetPipeProperties(
                         pipe_ref,
                         &mut direction,
                         &mut number,
                         &mut transfer_type,
                         &mut max_packet_size,
-                        &mut interval,
-                        &mut max_burst,
-                        &mut mult,
-                        &mut bytes_per_interval
+                        &mut interval
                     )
-                ))?;
-
-                let endpoint = EndpointInfo {
-                    pipe_ref,
-                    direction,
-                    number,
-                    transfer_type,
-                    max_packet_size,
-                    interval,
-                    max_burst,
-                    mult,
-                    bytes_per_interval,
+                )) else {
+                    continue;
                 };
 
-                endpoints.insert(endpoint.address(), endpoint);
+                if number | (((direction != 0) as u8) << 7) == endpoint_addr {
+                    return Some(pipe_ref);
+                }
             }
-            Ok(endpoints)
+            None
         }
     }
 }
