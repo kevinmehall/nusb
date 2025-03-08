@@ -531,9 +531,21 @@ pub enum ClaimEndpointError {
     /// The type or direction does not match the endpoint descriptor for this address
     InvalidType,
 
-    /// The endpoint is already open
+    /// The endpoint is already claimed
     Busy,
 }
+
+impl std::fmt::Display for ClaimEndpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClaimEndpointError::InvalidAddress => write!(f, "invalid endpoint address"),
+            ClaimEndpointError::InvalidType => write!(f, "incorrect endpoint type or direction"),
+            ClaimEndpointError::Busy => write!(f, "endpoint is already claimed"),
+        }
+    }
+}
+
+impl std::error::Error for ClaimEndpointError {}
 
 /// Exclusive access to an endpoint of a USB device.
 ///
