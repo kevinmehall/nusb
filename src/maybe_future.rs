@@ -8,13 +8,13 @@ use std::{
 ///
 /// A `MaybeFuture` can be run asynchronously with `.await`, or
 /// run synchronously (blocking the current thread) with `.wait()`.
-pub trait MaybeFuture: IntoFuture {
+pub trait MaybeFuture: IntoFuture<IntoFuture: Send> + Send {
     /// Block waiting for the action to complete
     #[cfg(not(target_arch = "wasm32"))]
     fn wait(self) -> Self::Output;
 
     /// Apply a function to the output.
-    fn map<T: FnOnce(Self::Output) -> R + Unpin, R>(self, f: T) -> Map<Self, T>
+    fn map<T: FnOnce(Self::Output) -> R + Unpin + Send, R>(self, f: T) -> Map<Self, T>
     where
         Self: Sized,
     {
@@ -83,7 +83,10 @@ impl<T> IntoFuture for Ready<T> {
     }
 }
 
-impl<T> MaybeFuture for Ready<T> {
+impl<T> MaybeFuture for Ready<T>
+where
+    T: Send,
+{
     fn wait(self) -> Self::Output {
         self.0
     }
@@ -94,7 +97,10 @@ pub struct Map<F, T> {
     func: T,
 }
 
-impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> IntoFuture for Map<F, T> {
+impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> IntoFuture for Map<F, T>
+where
+    T: Send,
+{
     type Output = R;
     type IntoFuture = MapFut<F::IntoFuture, T>;
 
@@ -106,7 +112,10 @@ impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> IntoFuture for Map<F, T> {
     }
 }
 
-impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> MaybeFuture for Map<F, T> {
+impl<F: MaybeFuture, T: FnOnce(F::Output) -> R, R> MaybeFuture for Map<F, T>
+where
+    T: Send,
+{
     fn wait(self) -> Self::Output {
         (self.func)(self.wrapped.wait())
     }
