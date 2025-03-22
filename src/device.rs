@@ -97,10 +97,10 @@ impl Device {
     /// Attach kernel drivers for the specified interface.
     ///
     /// ### Platform notes
-    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
+    /// This function can only attach kernel drivers on Linux and macOS. Calling on other platforms has
     /// no effect.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.attach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -156,6 +156,24 @@ impl Device {
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_configuration(configuration)
+    }
+
+    pub fn set_configuration_detached(
+        &self,
+        configuration: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend
+            .clone()
+            .set_configuration_detached(configuration)
+    }
+
+    pub fn is_kernel_driver_attached_to_interface(
+        &self,
+        interface_number: u8,
+    ) -> impl MaybeFuture<Output = Result<bool, Error>> {
+        self.backend
+            .clone()
+            .is_kernel_driver_attached_to_interface(interface_number)
     }
 
     /// Request a descriptor from the device.
@@ -265,6 +283,10 @@ impl Device {
     /// * Not supported on Windows
     pub fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().reset()
+    }
+
+    pub fn reset_captured(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend.clone().reset_detached()
     }
 
     /// Synchronously perform a single **IN (device-to-host)** transfer on the default **control** endpoint.

@@ -4,7 +4,7 @@
 //! licensed under MIT OR Apache-2.0.
 
 use core_foundation_sys::uuid::CFUUIDBytes;
-use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
+use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease, IOServiceAuthorize};
 use std::io::ErrorKind;
 
 use crate::Error;
@@ -106,15 +106,23 @@ impl Drop for PluginInterface {
 /// that we support macOS versions back to 10.7.3, which is currently every version that Rust
 /// supports. Use this instead of touching the iokit_c structure; this may be bumped to
 /// (compatible) newer versions of the struct as Rust's support changes.
-pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct500;
-pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct500;
+pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct650;
+pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct700;
+// pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct500;
+// pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct500;
 
 pub(crate) fn usb_device_type_id() -> CFUUIDBytes {
-    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBDeviceInterfaceID500()) }
+    // unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBDeviceInterfaceID500()) }
+    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBDeviceInterfaceID650()) }
 }
 
 pub(crate) fn usb_interface_type_id() -> CFUUIDBytes {
-    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID500()) }
+    // unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID500()) }
+    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID700()) }
+}
+
+pub(crate) fn ioservice_authorize(service: &IoService, options: u32) -> IOReturn {
+    unsafe { IOServiceAuthorize(service.get(), options) }
 }
 
 pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), Error> {
@@ -127,6 +135,9 @@ pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), Error> {
             "could not be opened for exclusive access",
         )),
         io_kit_sys::ret::kIOReturnNotFound => Err(Error::new(ErrorKind::NotFound, "not found")),
+        io_kit_sys::ret::kIOReturnNotPermitted => {
+            Err(Error::new(ErrorKind::PermissionDenied, "permission denied"))
+        }
         _ => Err(Error::from_raw_os_error(r)),
     }
 }
