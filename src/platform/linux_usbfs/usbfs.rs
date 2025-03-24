@@ -8,13 +8,13 @@ use std::ffi::{c_int, c_uchar, c_uint, c_void};
 
 use linux_raw_sys::ioctl::{
     USBDEVFS_CLAIMINTERFACE, USBDEVFS_CLEAR_HALT, USBDEVFS_CONNECT, USBDEVFS_CONTROL,
-    USBDEVFS_DISCARDURB, USBDEVFS_DISCONNECT, USBDEVFS_DISCONNECT_CLAIM, USBDEVFS_GET_SPEED,
-    USBDEVFS_IOCTL, USBDEVFS_REAPURBNDELAY, USBDEVFS_RELEASEINTERFACE, USBDEVFS_RESET,
-    USBDEVFS_SETCONFIGURATION, USBDEVFS_SETINTERFACE, USBDEVFS_SUBMITURB,
+    USBDEVFS_DISCARDURB, USBDEVFS_DISCONNECT, USBDEVFS_DISCONNECT_CLAIM, USBDEVFS_GETDRIVER,
+    USBDEVFS_GET_SPEED, USBDEVFS_IOCTL, USBDEVFS_REAPURBNDELAY, USBDEVFS_RELEASEINTERFACE,
+    USBDEVFS_RESET, USBDEVFS_SETCONFIGURATION, USBDEVFS_SETINTERFACE, USBDEVFS_SUBMITURB,
 };
 use rustix::{
     fd::AsFd,
-    io,
+    io::{self, Errno},
     ioctl::{self, Ioctl, IoctlOutput, Opcode},
 };
 
@@ -66,6 +66,35 @@ pub fn detach_and_claim_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DriverName([u8; Self::MAX_LEN + 1]);
+
+impl DriverName {
+    const MAX_LEN: usize = 255;
+
+    fn new() -> Self {
+        Self([0; Self::MAX_LEN + 1])
+    }
+
+    fn from_string(&mut self, driver: &str) {
+        let bytes = driver.as_bytes();
+        let len = cmp::min(bytes.len(), Self::MAX_LEN);
+
+        self.0[..len].copy_from_slice(&bytes[..len]);
+        self.0[len..].copy_from_slice(&[0u8; Self::MAX_LEN + 1][len..]);
+    }
+
+    fn as_str(&self) -> &str {
+        let len = self.driver_len();
+        std::str::from_utf8(self.0[..len].as_ref()).unwrap_or("")
+    }
+
+    fn driver_len(&self) -> usize {
+        self.0.iter().position(|&b| b == 0).unwrap_or(0)
+    }
+}
+
+#[repr(C)]
 struct UsbFsIoctl {
     interface: c_uint,
     ioctl_code: c_uint,
@@ -94,6 +123,43 @@ pub fn attach_kernel_driver<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<()> {
     unsafe {
         let ctl = ioctl::Setter::<{ USBDEVFS_IOCTL as _ }, UsbFsIoctl>::new(command);
         ioctl::ioctl(fd, ctl)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GetDriver {
+    interface: u32,
+    driver: DriverName,
+}
+
+impl GetDriver {
+    fn new() -> Self {
+        Self {
+            interface: 0,
+            driver: DriverName::new(),
+        }
+    }
+
+    fn driver(&self) -> &str {
+        self.driver.as_str()
+    }
+}
+
+pub fn is_kernel_driver_attached_to_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<bool> {
+    let mut getdrv = UsbfsGetDriver::new();
+    getdrv.interface = interface as u32;
+
+    unsafe {
+        let ctl = ioctl::Updater::<{ USBDEVFS_GETDRIVER as _ }, UsbfsGetDriver>::new(&mut getdrv);
+
+        match ioctl::ioctl(fd, ctl) {
+            Err(e) if e == Errno::ENODATA => {
+                return Ok(false);
+            }
+            Err(e) => return Err(e),
+            Ok(_) => Ok(getdrv.driver() != "usbfs"),
+        }
     }
 }
 
