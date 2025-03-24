@@ -1,7 +1,4 @@
-use std::{
-    mem::{self, ManuallyDrop, MaybeUninit},
-    slice,
-};
+use std::mem::{self, ManuallyDrop};
 
 use log::debug;
 use windows_sys::Win32::{
@@ -13,16 +10,16 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::transfer::{internal::notify_completion, Direction, TransferError};
+use crate::transfer::{internal::notify_completion, Buffer, Direction, TransferError};
 
 #[repr(C)]
 pub struct TransferData {
     // first member of repr(C) struct; can cast pointer between types
-    // overlapped.Internal contains the stauts
+    // overlapped.Internal contains the status
     // overlapped.InternalHigh contains the number of bytes transferred
     pub(crate) overlapped: OVERLAPPED,
     pub(crate) buf: *mut u8,
-    pub(crate) capacity: usize,
+    pub(crate) capacity: u32,
     pub(crate) request_len: u32,
     pub(crate) endpoint: u8,
 }
@@ -31,47 +28,16 @@ unsafe impl Send for TransferData {}
 unsafe impl Sync for TransferData {}
 
 impl TransferData {
-    pub(crate) fn new(endpoint: u8, capacity: usize) -> TransferData {
-        let request_len = match Direction::from_address(endpoint) {
-            Direction::Out => 0,
-            Direction::In => capacity.try_into().expect("transfer size must fit in u32"),
-        };
-
-        let mut v = ManuallyDrop::new(Vec::with_capacity(capacity));
+    pub(crate) fn new(endpoint: u8) -> TransferData {
+        let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
 
         TransferData {
             overlapped: unsafe { mem::zeroed() },
-            buf: v.as_mut_ptr(),
-            capacity: v.capacity(),
-            request_len,
+            buf: empty.as_mut_ptr(),
+            capacity: 0,
+            request_len: 0,
             endpoint,
         }
-    }
-
-    #[inline]
-    pub fn endpoint(&self) -> u8 {
-        self.endpoint
-    }
-
-    #[inline]
-    pub fn buffer(&self) -> &[MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts(self.buf.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn buffer_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts_mut(self.buf.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn request_len(&self) -> usize {
-        self.request_len as usize
-    }
-
-    #[inline]
-    pub unsafe fn set_request_len(&mut self, len: usize) {
-        assert!(len <= self.capacity);
-        self.request_len = len.try_into().expect("transfer size must fit in u32");
     }
 
     #[inline]
@@ -93,20 +59,42 @@ impl TransferData {
         }
     }
 
-    /// Safety: Must be an IN transfer and must have completed to initialize the buffer
-    pub unsafe fn take_vec(&mut self) -> Vec<u8> {
-        let mut n = ManuallyDrop::new(Vec::new());
-        let v = unsafe { Vec::from_raw_parts(self.buf, self.actual_len(), self.capacity) };
-        self.capacity = n.capacity();
-        self.buf = n.as_mut_ptr();
+    pub fn set_buffer(&mut self, buf: Buffer) {
+        debug_assert!(self.capacity == 0);
+        let buf = ManuallyDrop::new(buf);
+        self.capacity = buf.capacity;
+        self.buf = buf.ptr;
         self.overlapped.InternalHigh = 0;
-        v
+        self.request_len = match Direction::from_address(self.endpoint) {
+            Direction::Out => buf.len,
+            Direction::In => buf.transfer_len,
+        };
+    }
+
+    pub fn take_buffer(&mut self) -> Buffer {
+        let mut empty = ManuallyDrop::new(Vec::new());
+        let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut self.capacity, 0);
+        let (len, transfer_len) = match Direction::from_address(self.endpoint) {
+            Direction::Out => (self.request_len as u32, self.overlapped.InternalHigh as u32),
+            Direction::In => (self.overlapped.InternalHigh as u32, self.request_len as u32),
+        };
+        self.request_len = 0;
+        self.overlapped.InternalHigh = 0;
+
+        Buffer {
+            ptr,
+            len,
+            transfer_len,
+            capacity,
+            allocator: crate::transfer::Allocator::Default,
+        }
     }
 }
 
 impl Drop for TransferData {
     fn drop(&mut self) {
-        unsafe { drop(Vec::from_raw_parts(self.buf, 0, self.capacity)) }
+        drop(self.take_buffer())
     }
 }
 

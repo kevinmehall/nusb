@@ -106,10 +106,6 @@ impl<P> Idle<P> {
             ptr: unsafe { NonNull::new_unchecked(Box::into_raw(self.0)) },
         }
     }
-
-    pub(crate) fn notify_eq<T>(&self, other: &Arc<T>) -> bool {
-        Arc::as_ptr(&self.0.notify) as *const () == Arc::as_ptr(other) as *const ()
-    }
 }
 
 impl<P> Deref for Idle<P> {

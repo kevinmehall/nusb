@@ -5,22 +5,17 @@ use crate::{
     },
     platform,
     transfer::{
-        BulkOrInterrupt, ControlIn, ControlOut, Direction, EndpointDirection, EndpointType, In,
-        Out, TransferError,
+        Buffer, BulkOrInterrupt, ControlIn, ControlOut, Direction, EndpointDirection, EndpointType,
+        TransferError,
     },
-    util::write_copy_of_slice,
     DeviceInfo, Error, MaybeFuture, Speed,
 };
-use core::slice;
 use log::error;
 use std::{
-    fmt::Debug,
     future::{poll_fn, Future},
     io::ErrorKind,
     marker::PhantomData,
-    mem::MaybeUninit,
     num::NonZeroU8,
-    ops::{Deref, DerefMut},
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
@@ -556,77 +551,19 @@ pub struct Endpoint<EpType, Dir> {
     ep_dir: PhantomData<Dir>,
 }
 
+/// Methods for all endpoints.
 impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// Get the endpoint address.
     pub fn endpoint_address(&self) -> u8 {
         self.backend.endpoint_address()
     }
-}
 
-/// Methods for Bulk and Interrupt endpoints.
-impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// Get the maximum packet size for this endpoint.
     ///
     /// Transfers can consist of multiple packets, but are split into packets
-    /// of this size when transmitted.
+    /// of this size on the bus.
     pub fn max_packet_size(&self) -> usize {
         self.backend.max_packet_size
-    }
-
-    /// Create a transfer with a buffer of `len` bytes.
-    ///
-    /// `len` is rounded up to a multiple of `max_packet_size`.
-    ///
-    /// For an `IN` endpoint, the request length defaults to `len`. For an `OUT`
-    /// endpoint, `len` is the capacity which can be written to the `Request`
-    /// before submitting it.
-    pub fn allocate(&mut self, len: usize) -> Request<EpType, Dir> {
-        let len = len.div_ceil(self.max_packet_size()) * self.max_packet_size();
-        Request {
-            transfer: self.backend.make_transfer(len),
-            _phantom: PhantomData,
-        }
-    }
-
-    /// Begin a transfer on the endpoint.
-    ///
-    /// Submitted transfers are queued and completed in order. Once the transfer
-    /// completes, it will be returned from [`Self::next_complete`]. Any error
-    /// in submitting or performing the transfer is deferred until
-    /// [`next_complete`][`Self::next_complete`].
-    pub fn submit(&mut self, transfer: Request<EpType, Dir>) {
-        self.backend.submit(transfer.transfer)
-    }
-
-    /// Return a `Future` that waits for the next pending transfer to complete.
-    ///
-    /// This future is cancel-safe: it can be cancelled and re-created without
-    /// side effects, enabling its use in `select!{}` or similar.
-    ///
-    /// ## Panics
-    /// * if there are no transfers pending (that is, if [`Self::pending()`]
-    /// would return 0).
-    pub fn next_complete(
-        &mut self,
-    ) -> impl Future<Output = Completion<EpType, Dir>> + Send + Sync + '_ {
-        poll_fn(|cx| self.poll_next_complete(cx))
-    }
-
-    /// Poll for a pending transfer completion.
-    ///
-    /// Returns a completed transfer if one is available, or arranges for the
-    /// context's waker to be notified when a transfer completes.
-    ///
-    /// ## Panics
-    ///  * if there are no transfers pending (that is, if [`Self::pending()`]
-    /// would return 0).
-    pub fn poll_next_complete(&mut self, cx: &mut Context<'_>) -> Poll<Completion<EpType, Dir>> {
-        self.backend
-            .poll_next_complete(cx)
-            .map(|transfer| Completion {
-                transfer,
-                _phantom: PhantomData,
-            })
     }
 
     /// Get the number of transfers that have been submitted with `submit` that
@@ -642,6 +579,50 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// completed, partially-completed, or cancelled.
     pub fn cancel_all(&mut self) {
         self.backend.cancel_all()
+    }
+}
+
+/// Methods for Bulk and Interrupt endpoints.
+impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
+    /// Begin a transfer on the endpoint.
+    ///
+    /// Submitted transfers are queued and completed in order. Once the transfer
+    /// completes, it will be returned from [`Self::next_complete`]. Any error
+    /// in submitting or performing the transfer is deferred until
+    /// [`next_complete`][`Self::next_complete`].
+    ///
+    /// For an OUT transfer, the buffer's `len` field is the number of bytes
+    /// initialized, which will be sent to the device.
+    ///
+    /// For an IN transfer, the buffer's `transfer_len` field is the number of
+    /// bytes requested. It must be a multiple of the endpoint's [maximum packet
+    /// size][`Self::max_packet_size`].
+    pub fn submit(&mut self, buf: Buffer) {
+        self.backend.submit(buf)
+    }
+
+    /// Return a `Future` that waits for the next pending transfer to complete.
+    ///
+    /// This future is cancel-safe: it can be cancelled and re-created without
+    /// side effects, enabling its use in `select!{}` or similar.
+    ///
+    /// ## Panics
+    /// * if there are no transfers pending (that is, if [`Self::pending()`]
+    ///   would return 0).
+    pub fn next_complete(&mut self) -> impl Future<Output = Completion> + Send + Sync + '_ {
+        poll_fn(|cx| self.poll_next_complete(cx))
+    }
+
+    /// Poll for a pending transfer completion.
+    ///
+    /// Returns a completed transfer if one is available, or arranges for the
+    /// context's waker to be notified when a transfer completes.
+    ///
+    /// ## Panics
+    ///  * if there are no transfers pending (that is, if [`Self::pending()`]
+    /// would return 0).
+    pub fn poll_next_complete(&mut self, cx: &mut Context<'_>) -> Poll<Completion> {
+        self.backend.poll_next_complete(cx)
     }
 
     /// Clear the endpoint's halt / stall condition.
@@ -660,232 +641,32 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     }
 }
 
-/// A transfer that has not yet been submitted.
-///
-/// A request contains of a fixed-size buffer and other platform-specific
-/// resources used to perform the transfer.
-///
-/// Create a  `Request` with [`Endpoint::allocate`], or turn a [`Completion`]
-/// back into a `Request` with [`Completion::reuse`].
-pub struct Request<EpType: EndpointType, Dir: EndpointDirection> {
-    transfer: platform::Transfer,
-    _phantom: PhantomData<(EpType, Dir)>,
-}
-
-impl<EpType: BulkOrInterrupt> Request<EpType, In> {
-    /// Get the allocated buffer length.
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.transfer.buffer().len()
-    }
-
-    /// Get the number of bytes requested by this transfer.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.transfer.request_len()
-    }
-
-    /// Set the number of bytes requested by this transfer.
-    ///
-    /// ## Panics
-    /// * If `len` is greater than the buffer [capacity][`Self::capacity`].
-    #[inline]
-    pub fn set_len(&mut self, len: usize) {
-        assert!(len <= self.capacity());
-        unsafe {
-            self.transfer.set_request_len(len);
-        }
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Debug for Request<EpType, In> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Request")
-            .field(
-                "endpoint",
-                &format_args!("0x{:02X}", self.transfer.endpoint()),
-            )
-            .field("len", &self.len())
-            .finish()
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Request<EpType, Out> {
-    /// Get the number of initialized bytes which will be sent if the transfer is submitted.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.transfer.request_len()
-    }
-
-    /// Get the allocated capacity of the buffer.
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.transfer.buffer().len()
-    }
-
-    /// Get the number of bytes that can be written to the buffer.
-    ///
-    /// This is a convenience method for `capacity() - len()`.
-    #[inline]
-    pub fn remaining_capacity(&self) -> usize {
-        self.capacity() - self.len()
-    }
-
-    /// Immutable access to the full allocated buffer, which may be uninitialized.
-    #[inline]
-    pub fn buffer(&self) -> &[MaybeUninit<u8>] {
-        self.transfer.buffer()
-    }
-
-    /// Mutable access to the full allocated buffer, which may be uninitialized.
-    #[inline]
-    pub fn buffer_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        self.transfer.buffer_mut()
-    }
-
-    /// Set the transfer length, assuming that it has been manually initialized.
-    ///
-    /// ## Safety
-    /// * The buffer must be initialized up to `len`.
-    /// * `len` must be less than or equal to the buffer capacity.
-    #[inline]
-    pub unsafe fn set_len(&mut self, len: usize) {
-        self.transfer.set_request_len(len);
-    }
-
-    /// Clear the data by setting the length to zero.
-    #[inline]
-    pub fn clear(&mut self) {
-        unsafe {
-            self.set_len(0);
-        }
-    }
-
-    /// Append a slice of bytes to the transfer.
-    ///
-    /// ## Panics
-    /// * If the buffer capacity is exceeded (`len() + slice.len() > capacity()`).
-    #[inline]
-    pub fn extend_from_slice<'a>(&mut self, slice: &'a [u8]) {
-        unsafe {
-            let prev_len = self.len();
-            let dest = self
-                .buffer_mut()
-                .get_mut(prev_len..prev_len + slice.len())
-                .expect("capacity exceeded");
-            write_copy_of_slice(dest, slice);
-            self.set_len(prev_len + slice.len())
-        }
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Deref for Request<EpType, Out> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { slice::from_raw_parts(self.buffer().as_ptr().cast::<u8>(), self.len()) }
-    }
-}
-
-impl<EpType: BulkOrInterrupt> DerefMut for Request<EpType, Out> {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            slice::from_raw_parts_mut(self.buffer_mut().as_mut_ptr().cast::<u8>(), self.len())
-        }
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Debug for Request<EpType, Out> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Request")
-            .field(
-                "endpoint",
-                &format_args!("0x{:02X}", self.transfer.endpoint()),
-            )
-            .field("len", &self.len())
-            .field("data", &&self[..])
-            .finish()
-    }
-}
-
 /// A completed transfer returned from [`Endpoint::next_complete`].
 ///
 /// A transfer can partially complete even in the case of failure or
 /// cancellation, thus the [`actual_len`][`Self::actual_len`] may be nonzero
 /// even if the [`status`][`Self::status`] is an error.
-///
-/// An `IN` transfer's received data is accessed by accessing the Completion
-/// as a slice of bytes via `Deref`.
-pub struct Completion<EpType: EndpointType, D: EndpointDirection> {
-    transfer: platform::Transfer,
-    _phantom: PhantomData<(EpType, D)>,
+#[derive(Debug)]
+pub struct Completion {
+    /// The transfer buffer.
+    pub data: Buffer,
+
+    /// Status of the transfer.
+    pub status: Result<(), TransferError>,
 }
 
-impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Completion<EpType, Dir> {
-    /// Get the status of the transfer.
-    pub fn status(&self) -> Result<(), TransferError> {
-        self.transfer.status()
-    }
-
-    /// Get the number of bytes transferred.
-    pub fn actual_len(&self) -> usize {
-        self.transfer.actual_len()
-    }
-
-    /// Turn the transfer back into a `Request`, reusing the buffer.
-    ///
-    /// An `OUT` `Request`'s length is reset to zero so new data can be written to
-    /// the `Request`. An `IN` `Request`'s length is unchanged.
-    pub fn reuse(mut self) -> Request<EpType, Dir> {
-        if Dir::DIR == Direction::In {
-            unsafe {
-                self.transfer.set_request_len(0);
-            }
-        }
-        Request {
-            transfer: self.transfer,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> From<Completion<EpType, Dir>>
-    for Request<EpType, Dir>
-{
-    fn from(value: Completion<EpType, Dir>) -> Self {
-        value.reuse()
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Debug for Completion<EpType, Out> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Completion")
-            .field("status", &self.status())
-            .field("len", &self.actual_len())
-            .finish()
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Deref for Completion<EpType, In> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { slice::from_raw_parts(self.transfer.buffer().as_ptr().cast(), self.actual_len()) }
-    }
-}
-
-impl<EpType: BulkOrInterrupt> Debug for Completion<EpType, In> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Completion")
-            .field("status", &self.status())
-            .field("data", &&self[..])
-            .finish()
+impl Completion {
+    /// Ignore any partial completion, turning `self` into a `Result` containing
+    /// either the completed buffer for a successful transfer or a
+    /// `TransferError`.
+    pub fn into_result(self) -> Result<Buffer, TransferError> {
+        self.status.map(|()| self.data)
     }
 }
 
 #[test]
 fn assert_send_sync() {
-    use crate::transfer::{Bulk, Interrupt};
+    use crate::transfer::{Bulk, In, Interrupt, Out};
 
     fn require_send_sync<T: Send + Sync>() {}
     require_send_sync::<Interface>();
@@ -894,8 +675,4 @@ fn assert_send_sync() {
     require_send_sync::<Endpoint<Bulk, Out>>();
     require_send_sync::<Endpoint<Interrupt, In>>();
     require_send_sync::<Endpoint<Interrupt, Out>>();
-    require_send_sync::<Request<Bulk, In>>();
-    require_send_sync::<Request<Bulk, Out>>();
-    require_send_sync::<Completion<Bulk, In>>();
-    require_send_sync::<Completion<Bulk, Out>>();
 }

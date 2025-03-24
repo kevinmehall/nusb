@@ -22,7 +22,7 @@ env_logger = "0.10.0"
 futures-lite = "1.13.0"
 
 [target.'cfg(any(target_os="linux", target_os="android"))'.dependencies]
-rustix = { version = "1.0.1", features = ["fs", "event", "net", "time"] }
+rustix = { version = "1.0.1", features = ["fs", "event", "net", "time", "mm"] }
 linux-raw-sys = { version = "0.9.2", features = ["ioctl"] }
 
 [target.'cfg(target_os="windows")'.dependencies]

@@ -7,7 +7,6 @@ mod device;
 pub(crate) use device::WindowsDevice as Device;
 pub(crate) use device::WindowsEndpoint as Endpoint;
 pub(crate) use device::WindowsInterface as Interface;
-pub(crate) type Transfer = Idle<transfer::TransferData>;
 
 mod transfer;
 
@@ -19,5 +18,3 @@ pub(crate) use DevInst as DeviceId;
 mod hotplug;
 mod util;
 pub(crate) use hotplug::WindowsHotplugWatch as HotplugWatch;
-
-use crate::transfer::internal::Idle;

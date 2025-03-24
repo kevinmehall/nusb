@@ -2,6 +2,7 @@ use std::{
     collections::VecDeque,
     ffi::c_void,
     io::ErrorKind,
+    mem::{self, ManuallyDrop},
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -22,10 +23,9 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        ControlIn, ControlOut, Direction, TransferError,
+        Allocator, Buffer, ControlIn, ControlOut, Direction, TransferError,
     },
-    util::write_copy_of_slice,
-    DeviceInfo, Error, MaybeFuture, Speed,
+    Completion, DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
@@ -227,7 +227,10 @@ impl MacDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
-        let t = TransferData::new(0x80, data.length as usize);
+        let mut v = ManuallyDrop::new(Vec::with_capacity(data.length as usize));
+        let t = unsafe {
+            TransferData::from_raw(v.as_mut_ptr(), data.length as u32, v.capacity() as u32)
+        };
 
         let req = IOUSBDevRequestTO {
             bmRequestType: data.request_type(),
@@ -241,9 +244,10 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, req)).map(|mut t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(|t| {
             t.status()?;
-            Ok(unsafe { t.take_vec() })
+            let t = ManuallyDrop::new(t);
+            Ok(unsafe { Vec::from_raw_parts(t.buf, t.actual_len as usize, t.capacity as usize) })
         })
     }
 
@@ -253,8 +257,9 @@ impl MacDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
-        let mut t = TransferData::new(0, data.data.len());
-        write_copy_of_slice(t.buffer_mut(), &data.data);
+        let mut v = ManuallyDrop::new(data.data.to_vec());
+        let t =
+            unsafe { TransferData::from_raw(v.as_mut_ptr(), v.len() as u32, v.capacity() as u32) };
 
         let req = IOUSBDevRequestTO {
             bmRequestType: data.request_type(),
@@ -268,7 +273,7 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, req)).map(|t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(|t| {
             t.status()?;
             Ok(())
         })
@@ -276,11 +281,11 @@ impl MacDevice {
 
     fn submit_control(
         &self,
+        dir: Direction,
         mut t: Idle<TransferData>,
         mut req: IOUSBDevRequestTO,
     ) -> Pending<TransferData> {
         t.actual_len = 0;
-        let dir = Direction::from_address(t.endpoint_addr);
         assert!(req.pData == t.buf.cast());
 
         let t = t.pre_submit();
@@ -416,6 +421,7 @@ impl MacInterface {
             }),
             max_packet_size,
             pending: VecDeque::new(),
+            idle_transfer: None,
         })
     }
 }
@@ -437,6 +443,8 @@ pub(crate) struct MacEndpoint {
 
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<Pending<TransferData>>,
+
+    idle_transfer: Option<Idle<TransferData>>,
 }
 
 struct EndpointInner {
@@ -468,27 +476,28 @@ impl MacEndpoint {
         );
     }
 
-    pub(crate) fn make_transfer(&mut self, len: usize) -> Idle<TransferData> {
-        Idle::new(
-            self.inner.clone(),
-            TransferData::new(self.inner.address, len),
-        )
-    }
+    pub(crate) fn submit(&mut self, buffer: Buffer) {
+        let mut transfer = self
+            .idle_transfer
+            .take()
+            .unwrap_or_else(|| Idle::new(self.inner.clone(), super::TransferData::new()));
 
-    pub(crate) fn submit(&mut self, mut t: Idle<TransferData>) {
-        assert!(
-            t.notify_eq(&self.inner),
-            "transfer can only be submitted on the same endpoint"
-        );
-        let endpoint = t.endpoint_addr;
+        let buffer = ManuallyDrop::new(buffer);
+        let endpoint = self.inner.address;
         let dir = Direction::from_address(endpoint);
         let pipe_ref = self.inner.pipe_ref;
-        let len = t.request_len;
-        let buf = t.buf;
-        t.actual_len = 0;
 
-        let t = t.pre_submit();
-        let ptr = t.as_ptr();
+        transfer.buf = buffer.ptr;
+        transfer.capacity = buffer.capacity;
+        transfer.actual_len = 0;
+        let req_len = match dir {
+            Direction::Out => buffer.len,
+            Direction::In => buffer.transfer_len,
+        };
+        transfer.requested_len = req_len;
+
+        let transfer = transfer.pre_submit();
+        let ptr = transfer.as_ptr();
 
         let res = unsafe {
             match dir {
@@ -496,8 +505,8 @@ impl MacEndpoint {
                     self.inner.interface.interface.raw,
                     WritePipeAsync(
                         pipe_ref,
-                        buf as *mut c_void,
-                        u32::try_from(len).expect("request too large"),
+                        buffer.ptr as *mut c_void,
+                        buffer.len,
                         transfer_callback,
                         ptr as *mut c_void
                     )
@@ -506,8 +515,8 @@ impl MacEndpoint {
                     self.inner.interface.interface.raw,
                     ReadPipeAsync(
                         pipe_ref,
-                        buf as *mut c_void,
-                        u32::try_from(len).expect("request too large"),
+                        buffer.ptr as *mut c_void,
+                        buffer.transfer_len,
                         transfer_callback,
                         ptr as *mut c_void
                     )
@@ -516,9 +525,11 @@ impl MacEndpoint {
         };
 
         if res == kIOReturnSuccess {
-            debug!("Submitted {dir:?} transfer {ptr:?} on endpoint {endpoint:02X}, {len} bytes");
+            debug!(
+                "Submitted {dir:?} transfer {ptr:?} of len {req_len} on endpoint {endpoint:02X}"
+            );
         } else {
-            error!("Failed to submit transfer {ptr:?} on endpoint {endpoint:02X}: {res:x}");
+            error!("Failed to submit transfer {ptr:?} of len {req_len} on endpoint {endpoint:02X}: {res:x}");
             unsafe {
                 // Complete the transfer in the place of the callback
                 (*ptr).status = res;
@@ -526,13 +537,34 @@ impl MacEndpoint {
             }
         }
 
-        self.pending.push_back(t);
+        self.pending.push_back(transfer);
     }
 
-    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Idle<TransferData>> {
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
-        if let Some(transfer) = take_completed_from_queue(&mut self.pending) {
-            Poll::Ready(transfer)
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let status = transfer.status();
+
+            let mut empty = ManuallyDrop::new(Vec::new());
+            let ptr = mem::replace(&mut transfer.buf, empty.as_mut_ptr());
+            let capacity = mem::replace(&mut transfer.capacity, 0);
+            let (len, transfer_len) = match Direction::from_address(self.inner.address) {
+                Direction::Out => (transfer.requested_len, transfer.actual_len),
+                Direction::In => (transfer.actual_len, transfer.requested_len),
+            };
+            transfer.requested_len = 0;
+            transfer.actual_len = 0;
+            self.idle_transfer = Some(transfer);
+
+            let data = Buffer {
+                ptr,
+                len,
+                transfer_len,
+                capacity,
+                allocator: Allocator::Default,
+            };
+
+            Poll::Ready(Completion { status, data })
         } else {
             Poll::Pending
         }
@@ -573,7 +605,7 @@ impl Drop for EndpointInner {
 }
 
 extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut c_void) {
-    let len = len as usize;
+    let len = len as u32;
     let transfer: *mut TransferData = refcon.cast();
     debug!("Completion for transfer {transfer:?}, status={result:x}, len={len}");
 

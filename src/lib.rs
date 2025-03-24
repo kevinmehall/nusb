@@ -139,11 +139,10 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-mod util;
 pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
-pub use device::{ClaimEndpointError, Completion, Device, Endpoint, Interface, Request};
+pub use device::{ClaimEndpointError, Completion, Device, Endpoint, Interface};
 
 pub mod transfer;
 

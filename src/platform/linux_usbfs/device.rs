@@ -28,11 +28,6 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath, TransferData,
 };
-use crate::bitset::EndpointBitSet;
-use crate::descriptors::{
-    parse_concatenated_config_descriptors, ConfigurationDescriptor, DeviceDescriptor,
-    EndpointDescriptor, TransferType, DESCRIPTOR_LEN_DEVICE,
-};
 use crate::device::ClaimEndpointError;
 use crate::maybe_future::{blocking::Blocking, MaybeFuture};
 use crate::transfer::{
@@ -40,6 +35,14 @@ use crate::transfer::{
         notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
     },
     request_type, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
+};
+use crate::{bitset::EndpointBitSet, Completion};
+use crate::{
+    descriptors::{
+        parse_concatenated_config_descriptors, ConfigurationDescriptor, DeviceDescriptor,
+        EndpointDescriptor, TransferType, DESCRIPTOR_LEN_DEVICE,
+    },
+    transfer::Buffer,
 };
 use crate::{DeviceInfo, Error, Speed};
 
@@ -629,6 +632,7 @@ impl LinuxInterface {
             }),
             max_packet_size,
             pending: VecDeque::new(),
+            idle_transfer: None,
         })
     }
 }
@@ -658,6 +662,8 @@ pub(crate) struct LinuxEndpoint {
 
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<Pending<super::TransferData>>,
+
+    idle_transfer: Option<Idle<TransferData>>,
 }
 
 struct EndpointInner {
@@ -684,26 +690,25 @@ impl LinuxEndpoint {
         }
     }
 
-    pub(crate) fn make_transfer(&mut self, len: usize) -> Idle<TransferData> {
-        Idle::new(
-            self.inner.clone(),
-            super::TransferData::new(self.inner.address, self.inner.ep_type, len),
-        )
-    }
-
-    pub(crate) fn submit(&mut self, transfer: Idle<TransferData>) {
-        assert!(
-            transfer.notify_eq(&self.inner),
-            "transfer can only be submitted on the same endpoint"
-        );
+    pub(crate) fn submit(&mut self, data: Buffer) {
+        let mut transfer = self.idle_transfer.take().unwrap_or_else(|| {
+            Idle::new(
+                self.inner.clone(),
+                super::TransferData::new(self.inner.address, self.inner.ep_type),
+            )
+        });
+        transfer.set_buffer(data);
         self.pending
             .push_back(self.inner.interface.device.submit(transfer));
     }
 
-    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Idle<TransferData>> {
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
-        if let Some(transfer) = take_completed_from_queue(&mut self.pending) {
-            Poll::Ready(transfer)
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let status = transfer.status();
+            let data = transfer.take_buffer();
+            self.idle_transfer = Some(transfer);
+            Poll::Ready(Completion { status, data })
         } else {
             Poll::Pending
         }

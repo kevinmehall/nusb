@@ -10,6 +10,10 @@ mod control;
 pub(crate) use control::{request_type, SETUP_PACKET_SIZE};
 pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
 
+mod buffer;
+pub(crate) use buffer::Allocator;
+pub use buffer::Buffer;
+
 pub(crate) mod internal;
 
 use crate::descriptors::TransferType;
@@ -114,4 +118,4 @@ impl EndpointType for Interrupt {
 }
 impl BulkOrInterrupt for Interrupt {}
 
-pub use crate::device::{Completion, Request};
+pub use crate::device::Completion;

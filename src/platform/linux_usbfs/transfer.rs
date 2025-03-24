@@ -1,5 +1,5 @@
 use std::{
-    mem::{ManuallyDrop, MaybeUninit},
+    mem::{self, ManuallyDrop},
     ptr::{addr_of_mut, null_mut},
     slice,
     time::Instant,
@@ -7,10 +7,11 @@ use std::{
 
 use rustix::io::Errno;
 
+use crate::descriptors::TransferType;
 use crate::transfer::{
-    internal::Pending, ControlIn, ControlOut, Direction, TransferError, SETUP_PACKET_SIZE,
+    internal::Pending, Allocator, Buffer, ControlIn, ControlOut, Direction, TransferError,
+    SETUP_PACKET_SIZE,
 };
-use crate::{descriptors::TransferType, util::write_copy_of_slice};
 
 use super::{
     errno_to_transfer_error,
@@ -28,7 +29,8 @@ use super::{
 /// `iso_packet_desc` array.
 pub struct TransferData {
     urb: *mut Urb,
-    capacity: usize,
+    capacity: u32,
+    allocator: Allocator,
     pub(crate) deadline: Option<Instant>,
 }
 
@@ -36,7 +38,7 @@ unsafe impl Send for TransferData {}
 unsafe impl Sync for TransferData {}
 
 impl TransferData {
-    pub(super) fn new(endpoint: u8, ep_type: TransferType, capacity: usize) -> TransferData {
+    pub(super) fn new(endpoint: u8, ep_type: TransferType) -> TransferData {
         let ep_type = match ep_type {
             TransferType::Control => USBDEVFS_URB_TYPE_CONTROL,
             TransferType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
@@ -44,12 +46,7 @@ impl TransferData {
             TransferType::Isochronous => USBDEVFS_URB_TYPE_ISO,
         };
 
-        let request_len: i32 = match Direction::from_address(endpoint) {
-            Direction::Out => 0,
-            Direction::In => capacity.try_into().unwrap(),
-        };
-
-        let mut v = ManuallyDrop::new(Vec::with_capacity(capacity));
+        let mut empty = ManuallyDrop::new(Vec::new());
 
         TransferData {
             urb: Box::into_raw(Box::new(Urb {
@@ -57,8 +54,8 @@ impl TransferData {
                 endpoint,
                 status: 0,
                 flags: 0,
-                buffer: v.as_mut_ptr(),
-                buffer_length: request_len,
+                buffer: empty.as_mut_ptr(),
+                buffer_length: 0,
                 actual_length: 0,
                 start_frame: 0,
                 number_of_packets_or_stream_id: 0,
@@ -66,46 +63,67 @@ impl TransferData {
                 signr: 0,
                 usercontext: null_mut(),
             })),
-            capacity: v.capacity(),
+            capacity: 0,
+            allocator: Allocator::Default,
             deadline: None,
         }
     }
 
     pub(super) fn new_control_out(data: ControlOut) -> TransferData {
-        let len = SETUP_PACKET_SIZE + data.data.len();
-        let mut t = TransferData::new(0x00, TransferType::Control, len);
-
-        write_copy_of_slice(
-            &mut t.buffer_mut()[..SETUP_PACKET_SIZE],
-            &data.setup_packet(),
-        );
-        write_copy_of_slice(
-            &mut t.buffer_mut()[SETUP_PACKET_SIZE..SETUP_PACKET_SIZE + data.data.len()],
-            &data.data,
-        );
-        unsafe {
-            t.set_request_len(len);
-        }
-
+        let mut t = TransferData::new(0x00, TransferType::Control);
+        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
+        buffer.extend_from_slice(&data.setup_packet());
+        buffer.extend_from_slice(&data.data);
+        t.set_buffer(buffer);
         t
     }
 
     pub(super) fn new_control_in(data: ControlIn) -> TransferData {
-        let len = SETUP_PACKET_SIZE + data.length as usize;
-        let mut t = TransferData::new(0x80, TransferType::Control, len);
-        write_copy_of_slice(
-            &mut t.buffer_mut()[..SETUP_PACKET_SIZE],
-            &data.setup_packet(),
-        );
-        unsafe {
-            t.set_request_len(len);
-        }
+        let mut t = TransferData::new(0x80, TransferType::Control);
+        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.length as usize).unwrap());
+        buffer.extend_from_slice(&data.setup_packet());
+        t.set_buffer(buffer);
         t
     }
 
-    #[inline]
-    pub fn endpoint(&self) -> u8 {
-        unsafe { (*self.urb).endpoint }
+    pub fn set_buffer(&mut self, buf: Buffer) {
+        debug_assert!(self.capacity == 0);
+        let buf = ManuallyDrop::new(buf);
+        self.capacity = buf.capacity;
+        self.urb_mut().buffer = buf.ptr;
+        self.urb_mut().actual_length = 0;
+        self.urb_mut().buffer_length = match Direction::from_address(self.urb().endpoint) {
+            Direction::Out => buf.len as i32,
+            Direction::In => buf.transfer_len as i32,
+        };
+        self.allocator = buf.allocator;
+    }
+
+    pub fn take_buffer(&mut self) -> Buffer {
+        let mut empty = ManuallyDrop::new(Vec::new());
+        let ptr = mem::replace(&mut self.urb_mut().buffer, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut self.capacity, 0);
+        let (len, transfer_len) = match Direction::from_address(self.urb().endpoint) {
+            Direction::Out => (
+                self.urb().buffer_length as u32,
+                self.urb().actual_length as u32,
+            ),
+            Direction::In => (
+                self.urb().actual_length as u32,
+                self.urb().buffer_length as u32,
+            ),
+        };
+        self.urb_mut().buffer_length = 0;
+        self.urb_mut().actual_length = 0;
+        let allocator = mem::replace(&mut self.allocator, Allocator::Default);
+
+        Buffer {
+            ptr,
+            len,
+            transfer_len,
+            capacity,
+            allocator,
+        }
     }
 
     #[inline]
@@ -121,32 +139,6 @@ impl TransferData {
     #[inline]
     pub(super) fn urb_ptr(&self) -> *mut Urb {
         self.urb
-    }
-
-    #[inline]
-    pub fn buffer(&self) -> &[MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts(self.urb().buffer.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn buffer_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts_mut(self.urb().buffer.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn request_len(&self) -> usize {
-        self.urb().buffer_length as usize
-    }
-
-    #[inline]
-    pub unsafe fn set_request_len(&mut self, len: usize) {
-        assert!(len <= self.capacity);
-        self.urb_mut().buffer_length = len.try_into().unwrap();
-    }
-
-    #[inline]
-    pub fn actual_len(&self) -> usize {
-        self.urb().actual_length as usize
     }
 
     #[inline]
@@ -185,7 +177,7 @@ impl Pending<TransferData> {
 impl Drop for TransferData {
     fn drop(&mut self) {
         unsafe {
-            drop(Vec::from_raw_parts((*self.urb).buffer, 0, self.capacity));
+            drop(self.take_buffer());
             drop(Box::from_raw(self.urb));
         }
     }

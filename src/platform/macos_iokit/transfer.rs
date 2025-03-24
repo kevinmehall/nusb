@@ -1,92 +1,41 @@
-use std::{
-    mem::{ManuallyDrop, MaybeUninit},
-    slice,
-};
+use std::mem::ManuallyDrop;
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 
-use crate::transfer::{Direction, TransferError};
-
-use super::status_to_transfer_result;
-
+use crate::transfer::TransferError;
 pub struct TransferData {
-    pub(super) endpoint_addr: u8,
     pub(super) buf: *mut u8,
-    pub(super) capacity: usize,
-    pub(super) request_len: usize,
-    pub(super) actual_len: usize,
+    pub(super) capacity: u32,
+    pub(super) requested_len: u32,
+    pub(super) actual_len: u32,
     pub(super) status: IOReturn,
 }
 
 impl Drop for TransferData {
     fn drop(&mut self) {
-        unsafe { drop(Vec::from_raw_parts(self.buf, 0, self.capacity)) }
+        unsafe { drop(Vec::from_raw_parts(self.buf, 0, self.capacity as usize)) }
     }
 }
 
 impl TransferData {
-    pub(super) fn new(endpoint_addr: u8, capacity: usize) -> TransferData {
-        let request_len = match Direction::from_address(endpoint_addr) {
-            Direction::Out => 0,
-            Direction::In => capacity,
-        };
+    pub(super) fn new() -> TransferData {
+        let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
+        unsafe { Self::from_raw(empty.as_mut_ptr(), 0, 0) }
+    }
 
-        let mut v = ManuallyDrop::new(Vec::with_capacity(capacity));
-
+    pub(super) unsafe fn from_raw(buf: *mut u8, requested_len: u32, capacity: u32) -> TransferData {
         TransferData {
-            endpoint_addr,
-            buf: v.as_mut_ptr(),
-            capacity: v.capacity(),
+            buf,
+            capacity,
+            requested_len,
             actual_len: 0,
-            request_len,
             status: kIOReturnSuccess,
         }
     }
 
     #[inline]
-    pub fn endpoint(&self) -> u8 {
-        self.endpoint_addr
-    }
-
-    #[inline]
-    pub fn buffer(&self) -> &[MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts(self.buf.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn buffer_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        unsafe { slice::from_raw_parts_mut(self.buf.cast(), self.capacity) }
-    }
-
-    #[inline]
-    pub fn request_len(&self) -> usize {
-        self.request_len as usize
-    }
-
-    #[inline]
-    pub unsafe fn set_request_len(&mut self, len: usize) {
-        assert!(len <= self.capacity);
-        self.request_len = len;
-    }
-
-    #[inline]
-    pub fn actual_len(&self) -> usize {
-        self.actual_len as usize
-    }
-
-    #[inline]
     pub fn status(&self) -> Result<(), TransferError> {
-        status_to_transfer_result(self.status)
-    }
-
-    /// Safety: Must be an IN transfer and must have completed to initialize the buffer
-    pub unsafe fn take_vec(&mut self) -> Vec<u8> {
-        let mut n = ManuallyDrop::new(Vec::new());
-        let v = unsafe { Vec::from_raw_parts(self.buf, self.actual_len as usize, self.capacity) };
-        self.capacity = n.capacity();
-        self.buf = n.as_mut_ptr();
-        self.actual_len = 0;
-        v
+        super::status_to_transfer_result(self.status)
     }
 }
 

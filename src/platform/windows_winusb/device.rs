@@ -36,10 +36,9 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        ControlIn, ControlOut, Direction, Recipient, TransferError,
+        Buffer, ControlIn, ControlOut, Direction, Recipient, TransferError,
     },
-    util::write_copy_of_slice,
-    DeviceInfo, Error, MaybeFuture, Speed,
+    Completion, DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
@@ -411,7 +410,8 @@ impl WindowsInterface {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
-        let t = TransferData::new(0x80, data.length as usize);
+        let mut t = TransferData::new(0x80);
+        t.set_buffer(Buffer::new(data.length as usize));
 
         let pkt = WINUSB_SETUP_PACKET {
             RequestType: data.request_type(),
@@ -423,7 +423,7 @@ impl WindowsInterface {
 
         TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(|mut t| {
             t.status()?;
-            Ok(unsafe { t.take_vec() })
+            Ok(t.take_buffer().into_vec())
         })
     }
 
@@ -436,8 +436,8 @@ impl WindowsInterface {
             warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
         }
 
-        let mut t = TransferData::new(0, data.data.len());
-        write_copy_of_slice(t.buffer_mut(), &data.data);
+        let mut t = TransferData::new(0x00);
+        t.set_buffer(Buffer::from(data.data.to_vec()));
 
         let pkt = WINUSB_SETUP_PACKET {
             RequestType: data.request_type(),
@@ -523,6 +523,7 @@ impl WindowsInterface {
             }),
             max_packet_size,
             pending: VecDeque::new(),
+            idle_transfer: None,
         })
     }
 
@@ -637,6 +638,8 @@ pub(crate) struct WindowsEndpoint {
 
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<Pending<TransferData>>,
+
+    idle_transfer: Option<Idle<TransferData>>,
 }
 
 struct EndpointInner {
@@ -662,28 +665,22 @@ impl WindowsEndpoint {
         }
     }
 
-    pub(crate) fn make_transfer(&mut self, len: usize) -> Idle<TransferData> {
-        let t = Idle::new(
-            self.inner.clone(),
-            TransferData::new(self.inner.address, len),
-        );
-
-        t
+    pub(crate) fn submit(&mut self, buffer: Buffer) {
+        let mut t = self.idle_transfer.take().unwrap_or_else(|| {
+            Idle::new(self.inner.clone(), TransferData::new(self.inner.address))
+        });
+        t.set_buffer(buffer);
+        let t = self.inner.interface.submit(t);
+        self.pending.push_back(t);
     }
 
-    pub(crate) fn submit(&mut self, transfer: Idle<TransferData>) {
-        assert!(
-            transfer.notify_eq(&self.inner),
-            "transfer can only be submitted on the same endpoint"
-        );
-        let transfer = self.inner.interface.submit(transfer);
-        self.pending.push_back(transfer);
-    }
-
-    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Idle<TransferData>> {
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
-        if let Some(transfer) = take_completed_from_queue(&mut self.pending) {
-            Poll::Ready(transfer)
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let status = transfer.status();
+            let data = transfer.take_buffer();
+            self.idle_transfer = Some(transfer);
+            Poll::Ready(Completion { status, data })
         } else {
             Poll::Pending
         }
