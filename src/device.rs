@@ -114,7 +114,7 @@ impl Device {
     /// ### Platform-specific details
     ///
     /// * Only supported on Linux and macOS
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn is_kernel_driver_attached_to_interface(
         &self,
         interface_number: u8,
