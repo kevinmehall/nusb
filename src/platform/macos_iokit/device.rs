@@ -10,7 +10,7 @@ use std::{
 };
 
 use io_kit_sys::{
-    kIOServiceInteractionAllowed, keys::kIOServicePlane, IOObjectRelease, IOObjectRetain,
+    kIOServiceInteractionAllowed, keys::kIOServicePlane, IOObjectRelease,
     IORegistryEntryGetChildEntry,
 };
 use log::{debug, error};
@@ -164,7 +164,7 @@ impl MacDevice {
         })
     }
 
-    pub(crate) fn set_configuration_detached(
+    pub(crate) fn set_configuration_captured(
         self: Arc<Self>,
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
@@ -218,7 +218,7 @@ impl MacDevice {
         })
     }
 
-    pub(crate) fn reset_detached(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+    pub(crate) fn reset_captured(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
 
@@ -543,10 +543,7 @@ impl Drop for MacInterface {
 
 pub(crate) mod security {
     use core_foundation::{
-        base::{
-            kCFAllocatorDefault, CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeID, CFTypeRef,
-            TCFType,
-        },
+        base::{kCFAllocatorDefault, CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef, TCFType},
         boolean::CFBoolean,
         error::CFErrorRef,
         number::CFBooleanGetValue,
