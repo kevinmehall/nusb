@@ -78,7 +78,7 @@ impl DriverName {
 
     fn from_string(&mut self, driver: &str) {
         let bytes = driver.as_bytes();
-        let len = cmp::min(bytes.len(), Self::MAX_LEN);
+        let len = std::cmp::min(bytes.len(), Self::MAX_LEN);
 
         self.0[..len].copy_from_slice(&bytes[..len]);
         self.0[len..].copy_from_slice(&[0u8; Self::MAX_LEN + 1][len..]);
@@ -151,7 +151,7 @@ pub fn is_kernel_driver_attached_to_interface<Fd: AsFd>(fd: Fd, interface: u8) -
     getdrv.interface = interface as u32;
 
     unsafe {
-        let ctl = ioctl::Updater::<{ USBDEVFS_GETDRIVER as _ }, UsbfsGetDriver>::new(&mut getdrv);
+        let ctl = ioctl::Updater::<{ USBDEVFS_GETDRIVER as _ }, GetDriver>::new(&mut getdrv);
 
         match ioctl::ioctl(fd, ctl) {
             Err(e) if e == Errno::NODATA => {
