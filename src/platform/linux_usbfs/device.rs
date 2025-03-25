@@ -346,7 +346,7 @@ impl LinuxDevice {
     pub(crate) fn is_kernel_driver_attached_to_interface(
         self: &Arc<Self>,
         interface_number: u8,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         usbfs::is_kernel_driver_attached_to_interface(&self.fd, interface_number)
             .map_err(|e| e.into())
     }

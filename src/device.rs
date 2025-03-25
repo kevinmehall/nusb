@@ -118,7 +118,7 @@ impl Device {
     pub fn is_kernel_driver_attached_to_interface(
         &self,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<bool, Error>> {
+    ) -> Result<bool, Error> {
         #[cfg(not(target_os = "windows"))]
         self.backend
             .clone()

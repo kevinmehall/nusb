@@ -277,31 +277,29 @@ impl MacDevice {
     pub(crate) fn is_kernel_driver_attached_to_interface(
         self: Arc<Self>,
         interface_number: u8,
-    ) -> impl MaybeFuture<Output = Result<bool, Error>> {
-        Blocking::new(move || {
-            let intf_service = self
-                .device
-                .create_interface_iterator()?
-                .nth(interface_number as usize)
-                .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
+    ) -> Result<bool, Error> {
+        let intf_service = self
+            .device
+            .create_interface_iterator()?
+            .nth(interface_number as usize)
+            .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
-            let mut child = 0;
+        let mut child = 0;
 
-            unsafe {
-                IORegistryEntryGetChildEntry(
-                    intf_service.get(),
-                    kIOServicePlane as *mut i8,
-                    &mut child,
-                );
+        unsafe {
+            IORegistryEntryGetChildEntry(
+                intf_service.get(),
+                kIOServicePlane as *mut i8,
+                &mut child,
+            );
 
-                if child != 0 {
-                    IOObjectRelease(child);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
+            if child != 0 {
+                IOObjectRelease(child);
+                Ok(true)
+            } else {
+                Ok(false)
             }
-        })
+        }
     }
 
     fn with_capture_authorization<F, R>(&self, f: F) -> Result<R, Error>
