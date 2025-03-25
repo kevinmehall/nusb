@@ -171,38 +171,16 @@ impl MacDevice {
         Blocking::new(move || {
             self.require_open_exclusive()?;
 
-            let device;
-            let device_raw;
-            if security::have_capture_entitlement() {
-                // Request authorization
-                check_iokit_return(ioservice_authorize(
-                    &self.service,
-                    kIOServiceInteractionAllowed,
+            self.with_capture_authorization(|device| unsafe {
+                check_iokit_return(call_iokit_function!(
+                    device.raw,
+                    SetConfigurationV2(configuration, false, true)
                 ))?;
 
-                // Need to re-open the device for authorization to take effect
-                device = IoKitDevice::new(&self.service)?;
-                device_raw = device.raw;
-            } else {
-                if unsafe { libc::geteuid() != 0 } {
-                    return Err(Error::new(
-                        ErrorKind::PermissionDenied,
-                        "Operation not permitted (requires root or com.apple.vm.device-access entitlement)",
-                    ));
-                }
-
-                device_raw = self.device.raw;
-            }
-
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    device_raw,
-                    SetConfigurationV2(configuration, false, true)
-                ))?
-            }
-            log::debug!("Set configuration {configuration}");
-            self.active_config.store(configuration, Ordering::SeqCst);
-            Ok(())
+                log::debug!("Set configuration {configuration}");
+                self.active_config.store(configuration, Ordering::SeqCst);
+                Ok(())
+            })
         })
     }
 
@@ -222,35 +200,12 @@ impl MacDevice {
         Blocking::new(move || {
             self.require_open_exclusive()?;
 
-            let device;
-            let device_raw;
-            if security::have_capture_entitlement() {
-                // Request authorization
-                check_iokit_return(ioservice_authorize(
-                    &self.service,
-                    kIOServiceInteractionAllowed,
-                ))?;
-
-                // Need to re-open the device for authorization to take effect
-                device = IoKitDevice::new(&self.service)?;
-                device_raw = device.raw;
-            } else {
-                if unsafe { libc::geteuid() != 0 } {
-                    return Err(Error::new(
-                        ErrorKind::PermissionDenied,
-                        "Operation not permitted (requires root or com.apple.vm.device-access entitlement)",
-                    ));
-                }
-
-                device_raw = self.device.raw;
-            }
-
-            unsafe {
+            self.with_capture_authorization(|device| unsafe {
                 check_iokit_return(call_iokit_function!(
-                    device_raw,
+                    device.raw,
                     USBDeviceReEnumerate(kUSBReEnumerateCaptureDeviceMask)
                 ))
-            }
+            })
         })
     }
 
@@ -349,19 +304,45 @@ impl MacDevice {
         })
     }
 
+    fn with_capture_authorization<F, R>(&self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&IoKitDevice) -> Result<R, Error>,
+    {
+        if security::have_capture_entitlement() {
+            // Request authorization
+            check_iokit_return(ioservice_authorize(
+                &self.service,
+                kIOServiceInteractionAllowed,
+            ))?;
+
+            // Need to re-open the device for authorization to take effect
+            let device = IoKitDevice::new(&self.service)?;
+            f(&device)
+        } else {
+            if unsafe { libc::geteuid() != 0 } {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Operation not permitted (requires root or com.apple.vm.device-access entitlement)",
+                ));
+            }
+            f(&self.device)
+        }
+    }
+
     pub(crate) fn attach_kernel_driver(
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<(), Error> {
-        let intf_service = self
-            .device
-            .create_interface_iterator()?
-            .nth(interface_number as usize)
-            .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
+        self.with_capture_authorization(|device| unsafe {
+            let intf_service = device
+                .create_interface_iterator()?
+                .nth(interface_number as usize)
+                .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
-        let interface = IoKitInterface::new(intf_service)?;
+            let interface = IoKitInterface::new(intf_service)?;
 
-        unsafe { check_iokit_return(call_iokit_function!(interface.raw, RegisterDriver())) }
+            check_iokit_return(call_iokit_function!(interface.raw, RegisterDriver()))
+        })
     }
 
     pub(crate) fn claim_interface(
