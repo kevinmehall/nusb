@@ -147,14 +147,14 @@ impl GetDriver {
 }
 
 pub fn is_kernel_driver_attached_to_interface<Fd: AsFd>(fd: Fd, interface: u8) -> io::Result<bool> {
-    let mut getdrv = UsbfsGetDriver::new();
+    let mut getdrv = GetDriver::new();
     getdrv.interface = interface as u32;
 
     unsafe {
         let ctl = ioctl::Updater::<{ USBDEVFS_GETDRIVER as _ }, UsbfsGetDriver>::new(&mut getdrv);
 
         match ioctl::ioctl(fd, ctl) {
-            Err(e) if e == Errno::ENODATA => {
+            Err(e) if e == Errno::NODATA => {
                 return Ok(false);
             }
             Err(e) => return Err(e),
