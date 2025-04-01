@@ -303,10 +303,7 @@ impl std::fmt::Debug for DeviceInfo {
                 "device_version",
                 &format_args!("0x{:04X}", self.device_version),
             )
-            .field(
-                "usb_version",
-                   &format_args!("0x{:04X}", self.usb_version),
-            )
+            .field("usb_version", &format_args!("0x{:04X}", self.usb_version))
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
