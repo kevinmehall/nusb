@@ -1,10 +1,10 @@
+use log::debug;
+use log::warn;
 use std::fs;
 use std::io;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
-use log::debug;
-use log::warn;
 
 use crate::enumeration::InterfaceInfo;
 use crate::maybe_future::{MaybeFuture, Ready};
