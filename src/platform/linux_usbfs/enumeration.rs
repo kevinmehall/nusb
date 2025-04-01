@@ -75,12 +75,12 @@ impl SysfsPath {
 
     fn read_version_attr(&self, attr: &str) -> Result<u16, SysfsError> {
         // in sysfs bcdUSB is parsed to `x.yz`, so we have to parse it back. It should be coded in bcd, so we can treat parts as hex.
-        self.parse_attr(attr, |s| s
-            .to_owned()
-            .split('.')
-            .map(|x|u16::from_hex_str(x))
-            .fold(Ok::<u16, ParseIntError>(0),
-                  |a,b| Ok((a? << 8) + b?)))
+        self.parse_attr(attr, |s| {
+            s.to_owned()
+                .split('.')
+                .map(|x| u16::from_hex_str(x))
+                .fold(Ok::<u16, ParseIntError>(0), |a, b| Ok((a? << 8) + b?))
+        })
     }
 
     pub(crate) fn readlink_attr_filename(&self, attr: &str) -> Result<String, SysfsError> {
