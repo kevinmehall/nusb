@@ -34,7 +34,16 @@ core-foundation-sys = "0.8.4"
 io-kit-sys = "0.4.0"
 
 [target.'cfg(any(target_os="linux", target_os="android", target_os="windows", target_os="macos"))'.dependencies]
-blocking ="1.6.1"
+blocking = { version = "1.6.1", optional = true }
+tokio = { version = "1", optional = true, features = ["rt"] }
+
+[features]
+# Use the `blocking` crate for making blocking IO async
+smol = ["dep:blocking"]
+
+# Use `tokio`'s IO threadpool for making blocking IO async
+tokio = ["dep:tokio"]
+
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
