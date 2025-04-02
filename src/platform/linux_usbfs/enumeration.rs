@@ -73,16 +73,6 @@ impl SysfsPath {
         self.parse_attr(attr, |s| T::from_hex_str(s.strip_prefix("0x").unwrap_or(s)))
     }
 
-    fn read_version_attr(&self, attr: &str) -> Result<u16, SysfsError> {
-        // in sysfs bcdUSB is parsed to `x.yz`, so we have to parse it back. It should be coded in bcd, so we can treat parts as hex.
-        self.parse_attr(attr, |s| {
-            s.to_owned()
-                .split('.')
-                .map(|x| u16::from_hex_str(x))
-                .fold(Ok::<u16, ParseIntError>(0), |a, b| Ok((a? << 8) + b?))
-        })
-    }
-
     pub(crate) fn readlink_attr_filename(&self, attr: &str) -> Result<String, SysfsError> {
         self.readlink_attr(attr).map(|p| {
             p.file_name()
@@ -223,7 +213,12 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
         vendor_id: path.read_attr_hex("idVendor")?,
         product_id: path.read_attr_hex("idProduct")?,
         device_version: path.read_attr_hex("bcdDevice")?,
-        usb_version: path.read_version_attr("version")?,
+        usb_version: path.parse_attr("version", |s| {
+            // in sysfs, `bcdUSB`` is formatted as `%2x.%02x, so we have to parse it back.
+            s.split('.')
+                .map(|x| u16::from_hex_str(x))
+                .fold(Ok::<u16, ParseIntError>(0), |a, b| Ok((a? << 8) | b?))
+        })?,
         class: path.read_attr_hex("bDeviceClass")?,
         subclass: path.read_attr_hex("bDeviceSubClass")?,
         protocol: path.read_attr_hex("bDeviceProtocol")?,
