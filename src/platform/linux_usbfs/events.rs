@@ -35,16 +35,19 @@ static EPOLL_FD: OnceCell<OwnedFd> = OnceCell::new();
 
 pub(crate) enum Tag {
     Device(usize),
+    DeviceTimer(usize),
     Waker(usize),
 }
 
 impl Tag {
     const DEVICE: u64 = 1;
+    const DEVICE_TIMER: u64 = 2;
     const WAKER: u64 = 3;
 
     fn as_event_data(&self) -> EventData {
         let (tag, id) = match *self {
             Tag::Device(id) => (Self::DEVICE, id),
+            Tag::DeviceTimer(id) => (Self::DEVICE_TIMER, id),
             Tag::Waker(id) => (Self::WAKER, id),
         };
         EventData::new_u64((id as u64) << 3 | tag)
@@ -53,8 +56,9 @@ impl Tag {
     fn from_event_data(data: EventData) -> Self {
         let id = (data.u64() >> 3) as usize;
         let tag = data.u64() & 0b111;
-        match (tag, id as usize) {
+        match (tag, id) {
             (Self::DEVICE, id) => Tag::Device(id),
+            (Self::DEVICE_TIMER, id) => Tag::DeviceTimer(id),
             (Self::WAKER, id) => Tag::Waker(id),
             _ => panic!("Invalid event data"),
         }
@@ -98,6 +102,7 @@ fn event_loop() {
         for event in events {
             match Tag::from_event_data(event.data) {
                 Tag::Device(id) => Device::handle_usb_epoll(id),
+                Tag::DeviceTimer(id) => Device::handle_timer_epoll(id),
                 Tag::Waker(id) => {
                     if let Some(waker) = WAKERS.lock().unwrap().get(id) {
                         waker.wake();

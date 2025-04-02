@@ -33,6 +33,7 @@ fn inspect_device(dev: DeviceInfo) {
 
     let languages: Vec<u16> = dev
         .get_string_descriptor_supported_languages(timeout)
+        .wait()
         .map(|i| i.collect())
         .unwrap_or_default();
     println!("  Languages: {languages:02x?}");
@@ -40,17 +41,23 @@ fn inspect_device(dev: DeviceInfo) {
     let language = languages.first().copied().unwrap_or(US_ENGLISH);
 
     if let Some(i_manufacturer) = dev_descriptor.manufacturer_string_index() {
-        let s = dev.get_string_descriptor(i_manufacturer, language, timeout);
+        let s = dev
+            .get_string_descriptor(i_manufacturer, language, timeout)
+            .wait();
         println!("  Manufacturer({i_manufacturer}): {s:?}");
     }
 
     if let Some(i_product) = dev_descriptor.product_string_index() {
-        let s = dev.get_string_descriptor(i_product, language, timeout);
+        let s = dev
+            .get_string_descriptor(i_product, language, timeout)
+            .wait();
         println!("  Product({i_product}): {s:?}");
     }
 
     if let Some(i_serial) = dev_descriptor.serial_number_string_index() {
-        let s = dev.get_string_descriptor(i_serial, language, timeout);
+        let s = dev
+            .get_string_descriptor(i_serial, language, timeout)
+            .wait();
         println!("  Serial({i_serial}): {s:?}");
     }
 
