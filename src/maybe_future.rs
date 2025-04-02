@@ -41,7 +41,11 @@ impl<T> NonWasmSend for T {}
 ))]
 pub mod blocking {
     use super::MaybeFuture;
-    use std::future::IntoFuture;
+    use std::{
+        future::{Future, IntoFuture},
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
     /// Wrapper that invokes a FnOnce on a background thread when
     /// called asynchronously, or directly when called synchronously.
@@ -62,10 +66,10 @@ pub mod blocking {
     {
         type Output = R;
 
-        type IntoFuture = blocking::Task<R, ()>;
+        type IntoFuture = BlockingTask<R>;
 
         fn into_future(self) -> Self::IntoFuture {
-            blocking::unblock(self.f)
+            BlockingTask::spawn(self.f)
         }
     }
 
@@ -76,6 +80,61 @@ pub mod blocking {
     {
         fn wait(self) -> R {
             (self.f)()
+        }
+    }
+
+    #[cfg(feature = "smol")]
+    pub struct BlockingTask<R>(blocking::Task<R, ()>);
+
+    // If both features are enabled, use `smol` because it does not
+    // require the runtime to be explicitly started
+    #[cfg(all(feature = "tokio", not(feature = "smol")))]
+    pub struct BlockingTask<R>(tokio::task::JoinHandle<R>);
+
+    #[cfg(not(any(feature = "smol", feature = "tokio")))]
+    pub struct BlockingTask<R>(Option<R>);
+
+    impl<R: Send + 'static> BlockingTask<R> {
+        #[cfg(feature = "smol")]
+        fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
+            Self(blocking::unblock(f))
+        }
+
+        #[cfg(all(feature = "tokio", not(feature = "smol")))]
+        fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
+            Self(tokio::task::spawn_blocking(f))
+        }
+
+        #[cfg(not(any(feature = "smol", feature = "tokio")))]
+        fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
+            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+            if ONCE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                log::warn!("Awaiting blocking syscall without an async runtime: enable the `smol` or `tokio` feature of `nusb` to avoid blocking the thread.")
+            }
+
+            Self(Some(f()))
+        }
+    }
+
+    impl<R> Unpin for BlockingTask<R> {}
+
+    impl<R> Future for BlockingTask<R> {
+        type Output = R;
+
+        #[cfg(feature = "smol")]
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(&mut self.0).poll(cx)
+        }
+
+        #[cfg(all(feature = "tokio", not(feature = "smol")))]
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(&mut self.0).poll(cx).map(|r| r.unwrap())
+        }
+
+        #[cfg(not(any(feature = "smol", feature = "tokio")))]
+        fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(self.0.take().expect("polled after completion"))
         }
     }
 }
