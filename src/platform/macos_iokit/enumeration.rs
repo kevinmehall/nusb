@@ -219,7 +219,7 @@ fn get_string_property(device: &IoService, property: &'static str) -> Option<Str
     get_property::<CFString>(device, property).map(|s| s.to_string())
 }
 
-fn get_integer_property(device: &IoService, property: &'static str) -> Option<i64> {
+pub fn get_integer_property(device: &IoService, property: &'static str) -> Option<i64> {
     let n = get_property::<CFNumber>(device, property)?;
     n.to_i64().or_else(|| {
         debug!("failed to convert {property} value {n:?} to i64");
