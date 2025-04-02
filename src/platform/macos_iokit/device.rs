@@ -243,7 +243,13 @@ impl MacDevice {
                 .create_interface_iterator()?
                 .find(|io_service| {
                     let current_number = get_integer_property(io_service, "bInterfaceNumber");
-                    current_number == Some(interface_number as i64)
+                    let found = current_number == Some(interface_number as i64);
+                    debug!(
+                        "Looking for interface [n={interface_number}] to claim, examining interface [n={}]{}",
+                        current_number.map(|n| n.to_string()).unwrap_or_else(|| "unknown".to_string()),
+                        found.then(|| " (found)").unwrap_or("")
+                    );
+                    found
                 })
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
