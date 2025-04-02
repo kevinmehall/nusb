@@ -142,6 +142,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         vendor_id: info.device_desc.idVendor,
         product_id: info.device_desc.idProduct,
         device_version: info.device_desc.bcdDevice,
+        usb_version: info.device_desc.bcdUSB,
         class: info.device_desc.bDeviceClass,
         subclass: info.device_desc.bDeviceSubClass,
         protocol: info.device_desc.bDeviceProtocol,

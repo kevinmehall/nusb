@@ -124,6 +124,7 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
         vendor_id: get_integer_property(&device, "idVendor")? as u16,
         product_id: get_integer_property(&device, "idProduct")? as u16,
         device_version: get_integer_property(&device, "bcdDevice")? as u16,
+        usb_version: get_integer_property(&device, "bcdUSB")? as u16,
         class: get_integer_property(&device, "bDeviceClass")? as u8,
         subclass: get_integer_property(&device, "bDeviceSubClass")? as u8,
         protocol: get_integer_property(&device, "bDeviceProtocol")? as u8,

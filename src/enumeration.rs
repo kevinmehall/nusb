@@ -60,6 +60,7 @@ pub struct DeviceInfo {
     pub(crate) product_id: u16,
     pub(crate) device_version: u16,
 
+    pub(crate) usb_version: u16,
     pub(crate) class: u8,
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
@@ -200,6 +201,12 @@ impl DeviceInfo {
         self.device_version
     }
 
+    /// Encoded version of the USB specification, from the `bcdUSB` device descriptor field.
+    #[doc(alias = "bcdUSB")]
+    pub fn usb_version(&self) -> u16 {
+        self.usb_version
+    }
+
     /// Code identifying the standard device class, from the `bDeviceClass` device descriptor field.
     ///
     /// `0x00`: specified at the interface level.\
@@ -296,6 +303,7 @@ impl std::fmt::Debug for DeviceInfo {
                 "device_version",
                 &format_args!("0x{:04X}", self.device_version),
             )
+            .field("usb_version", &format_args!("0x{:04X}", self.usb_version))
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
