@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    enumeration::{device_descriptor_from_fields, service_by_registry_id},
+    enumeration::{device_descriptor_from_fields, get_integer_property, service_by_registry_id},
     events::{add_event_source, EventRegistration},
     iokit::{call_iokit_function, check_iokit_return},
     iokit_c::IOUSBDevRequestTO,
@@ -241,7 +241,10 @@ impl MacDevice {
             let intf_service = self
                 .device
                 .create_interface_iterator()?
-                .find(|io_service| super::enumeration::get_integer_property(io_service, "bInterfaceNumber").map(|v| v as u8) == Some(interface_number))
+                .find(|io_service| {
+                    let current_number = get_integer_property(io_service, "bInterfaceNumber");
+                    current_number == Some(interface_number as i64)
+                })
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
             let mut interface = IoKitInterface::new(intf_service)?;
