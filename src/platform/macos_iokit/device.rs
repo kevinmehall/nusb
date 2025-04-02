@@ -241,7 +241,7 @@ impl MacDevice {
             let intf_service = self
                 .device
                 .create_interface_iterator()?
-                .nth(interface_number as usize)
+                .find(|io_service| super::enumeration::get_integer_property(io_service, "bInterfaceNumber").map(|v| v as u8) == Some(interface_number))
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
             let mut interface = IoKitInterface::new(intf_service)?;
