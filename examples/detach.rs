@@ -1,7 +1,17 @@
 //! Detach the kernel driver for an FTDI device and then reattach it.
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    println!("This example is only supported on Linux.");
+}
+
+#[cfg(target_os = "linux")]
 use std::{thread::sleep, time::Duration};
 
+#[cfg(target_os = "linux")]
 use nusb::MaybeFuture;
+
+#[cfg(target_os = "linux")]
 fn main() {
     env_logger::init();
     let di = nusb::list_devices()
