@@ -9,11 +9,16 @@ use std::{
     time::Duration,
 };
 
+use io_kit_sys::{
+    kIOServiceInteractionAllowed, keys::kIOServicePlane, IOObjectRelease,
+    IORegistryEntryGetChildEntry,
+};
 use log::{debug, error};
 
 use crate::{
     descriptors::{ConfigurationDescriptor, DeviceDescriptor},
     maybe_future::blocking::Blocking,
+    platform::macos_iokit::iokit_c::kUSBReEnumerateCaptureDeviceMask,
     transfer::{Control, Direction, TransferError, TransferHandle, TransferType},
     DeviceInfo, Error, MaybeFuture, Speed,
 };
@@ -21,7 +26,7 @@ use crate::{
 use super::{
     enumeration::{device_descriptor_from_fields, get_integer_property, service_by_registry_id},
     events::{add_event_source, EventRegistration},
-    iokit::{call_iokit_function, check_iokit_return},
+    iokit::{call_iokit_function, check_iokit_return, ioservice_authorize, IoService},
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{EndpointInfo, IoKitDevice, IoKitInterface},
     status_to_transfer_result,
@@ -29,7 +34,9 @@ use super::{
 
 pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
+    service: IoService,
     pub(super) device: IoKitDevice,
+
     device_descriptor: DeviceDescriptor,
     speed: Option<Speed>,
     active_config: AtomicU8,
@@ -90,6 +97,7 @@ impl MacDevice {
 
             Ok(Arc::new(MacDevice {
                 _event_registration,
+                service,
                 device,
                 device_descriptor,
                 speed,
@@ -156,6 +164,26 @@ impl MacDevice {
         })
     }
 
+    pub(crate) fn set_configuration_captured(
+        self: Arc<Self>,
+        configuration: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            self.require_open_exclusive()?;
+
+            self.with_capture_authorization(|device| unsafe {
+                check_iokit_return(call_iokit_function!(
+                    device.raw,
+                    SetConfigurationV2(configuration, false, true)
+                ))?;
+
+                log::debug!("Set configuration {configuration}");
+                self.active_config.store(configuration, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+    }
+
     pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
@@ -165,6 +193,19 @@ impl MacDevice {
                     USBDeviceReEnumerate(0)
                 ))
             }
+        })
+    }
+
+    pub(crate) fn reset_captured(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            self.require_open_exclusive()?;
+
+            self.with_capture_authorization(|device| unsafe {
+                check_iokit_return(call_iokit_function!(
+                    device.raw,
+                    USBDeviceReEnumerate(kUSBReEnumerateCaptureDeviceMask)
+                ))
+            })
         })
     }
 
@@ -231,6 +272,75 @@ impl MacDevice {
 
     pub(crate) fn make_control_transfer(self: &Arc<Self>) -> TransferHandle<super::TransferData> {
         TransferHandle::new(super::TransferData::new_control(self.clone()))
+    }
+
+    pub(crate) fn is_kernel_driver_attached_to_interface(
+        self: Arc<Self>,
+        interface_number: u8,
+    ) -> Result<bool, Error> {
+        let intf_service = self
+            .device
+            .create_interface_iterator()?
+            .nth(interface_number as usize)
+            .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
+
+        let mut child = 0;
+
+        unsafe {
+            IORegistryEntryGetChildEntry(
+                intf_service.get(),
+                kIOServicePlane as *mut i8,
+                &mut child,
+            );
+
+            if child != 0 {
+                IOObjectRelease(child);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    fn with_capture_authorization<F, R>(&self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&IoKitDevice) -> Result<R, Error>,
+    {
+        if security::have_capture_entitlement() {
+            // Request authorization
+            check_iokit_return(ioservice_authorize(
+                &self.service,
+                kIOServiceInteractionAllowed,
+            ))?;
+
+            // Need to re-open the device for authorization to take effect
+            let device = IoKitDevice::new(&self.service)?;
+            f(&device)
+        } else {
+            if unsafe { libc::geteuid() != 0 } {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Operation not permitted (requires root or com.apple.vm.device-access entitlement)",
+                ));
+            }
+            f(&self.device)
+        }
+    }
+
+    pub(crate) fn attach_kernel_driver(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<(), Error> {
+        self.with_capture_authorization(|device| unsafe {
+            let intf_service = device
+                .create_interface_iterator()?
+                .nth(interface_number as usize)
+                .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
+
+            let interface = IoKitInterface::new(intf_service)?;
+
+            check_iokit_return(call_iokit_function!(interface.raw, RegisterDriver()))
+        })
     }
 
     pub(crate) fn claim_interface(
@@ -416,5 +526,63 @@ impl Drop for MacInterface {
         self.device
             .claimed_interfaces
             .fetch_sub(1, Ordering::Release);
+    }
+}
+
+pub(crate) mod security {
+    use core_foundation::{
+        base::{kCFAllocatorDefault, CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef, TCFType},
+        boolean::CFBoolean,
+        error::CFErrorRef,
+        number::CFBooleanGetValue,
+        string::{CFString, CFStringRef},
+    };
+
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone)]
+    pub struct __SecTask {
+        _unused: [u8; 0],
+    }
+    pub type SecTaskRef = *mut __SecTask;
+
+    #[link(name = "Security", kind = "framework")]
+    extern "C" {
+        pub fn SecTaskCreateFromSelf(allocator: CFAllocatorRef) -> SecTaskRef;
+        pub fn SecTaskCopyValueForEntitlement(
+            task: SecTaskRef,
+            entitlement: CFStringRef,
+            error: *mut CFErrorRef,
+        ) -> CFTypeRef;
+    }
+
+    pub(crate) fn have_capture_entitlement() -> bool {
+        have_entitlement("com.apple.vm.device-access")
+    }
+
+    pub fn have_entitlement(entitlement: &'static str) -> bool {
+        unsafe {
+            let task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+            if task.is_null() {
+                return false;
+            }
+
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                CFString::from_static_string(entitlement).as_concrete_TypeRef(),
+                std::ptr::null_mut(),
+            );
+
+            CFRelease(task.cast());
+
+            let entitled = !value.is_null()
+                && CFGetTypeID(value.cast()) == CFBoolean::type_id()
+                && CFBooleanGetValue(value.cast());
+
+            if !value.is_null() {
+                CFRelease(value.cast());
+            }
+
+            entitled
+        }
     }
 }

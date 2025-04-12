@@ -342,6 +342,15 @@ impl LinuxDevice {
         usbfs::attach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn is_kernel_driver_attached_to_interface(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<bool, Error> {
+        usbfs::is_kernel_driver_attached_to_interface(&self.fd, interface_number)
+            .map_err(|e| e.into())
+    }
+
     pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
         let ep = unsafe { (*urb).endpoint };
         if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
