@@ -2,13 +2,11 @@
 //! A new library for cross-platform low-level access to USB devices.
 //!
 //! `nusb` is comparable to the C library [libusb] and its Rust bindings [rusb],
-//! but written in pure Rust. It's built on and exposes async APIs by default,
-//! but can be made blocking using [`futures_lite::future::block_on`][block_on]
-//! or similar.
+//! but written in pure Rust. It supports usage from both async and
+//! blocking contexts, and transfers are natively async.
 //!
 //! [libusb]: https://libusb.info
 //! [rusb]: https://docs.rs/rusb/
-//! [block_on]: https://docs.rs/futures-lite/latest/futures_lite/future/fn.block_on.html
 //!
 //! Use `nusb` to write user-space drivers in Rust for non-standard USB devices
 //! or those without kernel support. For devices implementing a standard USB
@@ -111,8 +109,29 @@
 //!
 //! `nusb` uses IOKit on macOS.
 //!
-//! Users have access to USB devices by default, with no permission configuration needed.
-//! Devices with a kernel driver are not accessible.
+//! Users have access to USB devices by default, with no permission
+//! configuration needed. Devices with a kernel driver are not accessible.
+//!
+//! ## Async support
+//!
+//! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
+//! `.await`ed (via `IntoFuture`) or `.wait()`ed (blocking the current thread).
+//! This allows for async usage in an async context, or blocking usage in a
+//! non-async context.
+//!
+//! Operations such as [`Device::open`], [`Device::set_configuration`],
+//! [`Device::reset`], [`Device::claim_interface`],
+//! [`Interface::set_alt_setting`], and [`Interface::clear_halt`] require
+//! blocking system calls. To use these in an asynchronous context, `nusb`
+//! relies on an async runtime to run these operations on an IO thread to avoid
+//! blocking in async code. Enable the cargo feature `tokio` or `smol` to use
+//! the corresponding runtime for blocking IO. If neither feature is enabled,
+//! `.await` on these methods will log a warning and block the calling thread.
+//! `.wait()` always runs the blocking operation directly without the overhead
+//! of handing off to an IO thread.
+//!
+//! These features do not affect and are not required for transfers, which are
+//! implemented on top of natively-async OS APIs.
 
 use std::io;
 

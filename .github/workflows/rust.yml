@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: ['stable', '1.76']
+        rust: ['stable', '1.79']
 
     runs-on: ${{ matrix.os }}
 
@@ -35,7 +35,11 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Run tests
-      run: cargo test --verbose
+      run: |
+        cargo test --verbose
+        cargo test --verbose --features tokio
+        cargo test --verbose --features smol
+        cargo test --verbose --features smol,tokio
 
   build_android:
     runs-on: ubuntu-latest
