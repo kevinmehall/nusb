@@ -3,48 +3,16 @@
 //! Use the methods on an [`Interface`][`super::Interface`] to make individual
 //! transfers or obtain a [`Queue`] to manage multiple transfers.
 
-use std::{
-    fmt::Display,
-    future::Future,
-    io,
-    marker::PhantomData,
-    task::{Context, Poll},
-};
-
-use crate::platform;
-
-mod queue;
-pub use queue::Queue;
-
-mod buffer;
-pub use buffer::{RequestBuffer, ResponseBuffer};
+use std::{fmt::Display, io};
 
 mod control;
 #[allow(unused)]
-pub(crate) use control::SETUP_PACKET_SIZE;
-pub use control::{Control, ControlIn, ControlOut, ControlType, Direction, Recipient};
+pub(crate) use control::{request_type, SETUP_PACKET_SIZE};
+pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
 
-mod internal;
-pub(crate) use internal::{
-    notify_completion, PlatformSubmit, PlatformTransfer, TransferHandle, TransferRequest,
-};
+pub(crate) mod internal;
 
-/// Endpoint type.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum TransferType {
-    /// Control endpoint.
-    Control = 0,
-
-    /// Isochronous endpoint.
-    Isochronous = 1,
-
-    /// Bulk endpoint.
-    Bulk = 2,
-
-    /// Interrupt endpoint.
-    Interrupt = 3,
-}
+use crate::descriptors::TransferType;
 
 /// Transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -97,82 +65,53 @@ impl From<TransferError> for io::Error {
     }
 }
 
-/// Status and data returned on transfer completion.
-///
-/// A transfer can return partial data even in the case of failure or
-/// cancellation, thus this is a struct containing both `data` and `status`
-/// rather than a `Result`. Use [`into_result`][`Completion::into_result`] to
-/// ignore a partial transfer and get a `Result`.
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct Completion<T> {
-    /// Returned data or buffer to re-use.
-    pub data: T,
-
-    /// Indicates successful completion or error.
-    pub status: Result<(), TransferError>,
+mod private {
+    pub trait Sealed {}
 }
 
-impl<T> Completion<T> {
-    /// Ignore any partial completion, turning `self` into a `Result` containing
-    /// either the completed buffer for a successful transfer or a
-    /// `TransferError`.
-    pub fn into_result(self) -> Result<T, TransferError> {
-        self.status.map(|()| self.data)
-    }
+/// Type-level endpoint direction
+pub trait EndpointDirection: private::Sealed + Send + Sync {
+    /// Runtime direction value
+    const DIR: Direction;
 }
 
-impl TryFrom<Completion<Vec<u8>>> for Vec<u8> {
-    type Error = TransferError;
-
-    fn try_from(c: Completion<Vec<u8>>) -> Result<Self, Self::Error> {
-        c.into_result()
-    }
+/// Type-level endpoint direction: device-to-host
+pub enum In {}
+impl private::Sealed for In {}
+impl EndpointDirection for In {
+    const DIR: Direction = Direction::In;
 }
 
-impl TryFrom<Completion<ResponseBuffer>> for ResponseBuffer {
-    type Error = TransferError;
-
-    fn try_from(c: Completion<ResponseBuffer>) -> Result<Self, Self::Error> {
-        c.into_result()
-    }
+/// Type-level endpoint direction: host-to-device
+pub enum Out {}
+impl private::Sealed for Out {}
+impl EndpointDirection for Out {
+    const DIR: Direction = Direction::Out;
 }
 
-/// [`Future`] used to await the completion of a transfer.
-///
-/// Use the methods on [`Interface`][super::Interface] to
-/// submit an individual transfer and obtain a `TransferFuture`.
-///
-/// The transfer is cancelled on drop. The buffer and
-/// any partially-completed data are destroyed. This means
-/// that `TransferFuture` is not [cancel-safe] and cannot be used
-/// in `select!{}`, When racing a `TransferFuture` with a timeout
-/// you cannot tell whether data may have been partially transferred on timeout.
-/// Use the [`Queue`] interface if these matter for your application.
-///
-/// [cancel-safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-pub struct TransferFuture<D: TransferRequest> {
-    transfer: TransferHandle<platform::TransferData>,
-    ty: PhantomData<D::Response>,
+/// Type-level endpoint direction
+pub trait EndpointType: private::Sealed + Send + Sync {
+    /// Runtime direction value
+    const TYPE: TransferType;
 }
 
-impl<D: TransferRequest> TransferFuture<D> {
-    pub(crate) fn new(transfer: TransferHandle<platform::TransferData>) -> TransferFuture<D> {
-        TransferFuture {
-            transfer,
-            ty: PhantomData,
-        }
-    }
-}
+/// EndpointType for Bulk and interrupt endpoints.
+pub trait BulkOrInterrupt: EndpointType {}
 
-impl<D: TransferRequest> Future for TransferFuture<D>
-where
-    platform::TransferData: PlatformSubmit<D>,
-    D::Response: Unpin,
-{
-    type Output = Completion<D::Response>;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.as_mut().transfer.poll_completion::<D>(cx)
-    }
+/// Type-level endpoint type: Bulk
+pub enum Bulk {}
+impl private::Sealed for Bulk {}
+impl EndpointType for Bulk {
+    const TYPE: TransferType = TransferType::Bulk;
 }
+impl BulkOrInterrupt for Bulk {}
+
+/// Type-level endpoint type: Interrupt
+pub enum Interrupt {}
+impl private::Sealed for Interrupt {}
+impl EndpointType for Interrupt {
+    const TYPE: TransferType = TransferType::Interrupt;
+}
+impl BulkOrInterrupt for Interrupt {}
+
+pub use crate::device::{Completion, Request};
