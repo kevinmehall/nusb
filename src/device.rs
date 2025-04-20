@@ -584,6 +584,26 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
 
 /// Methods for Bulk and Interrupt endpoints.
 impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
+    /// Allocate a buffer for use on this endpoint, zero-copy if possible.
+    ///
+    /// A zero-copy buffer allows the kernel to DMA directly to/from this
+    /// buffer for improved performance. However, because it is not allocated
+    /// with the system allocator, it cannot be converted to a `Vec` without
+    /// copying.
+    ///
+    /// This is currently only supported on Linux, falling back to [`Buffer::new`]
+    /// on other platforms, or if the memory allocation fails.
+    pub fn allocate(&self, len: usize) -> Buffer {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            if let Ok(b) = self.backend.allocate(len) {
+                return b;
+            }
+        }
+
+        Buffer::new(len)
+    }
+
     /// Begin a transfer on the endpoint.
     ///
     /// Submitted transfers are queued and completed in order. Once the transfer

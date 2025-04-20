@@ -1,6 +1,6 @@
 use futures_lite::future::block_on;
 use nusb::{
-    transfer::{Buffer, Bulk, In, Out},
+    transfer::{Bulk, In, Out},
     MaybeFuture,
 };
 
@@ -23,12 +23,14 @@ fn main() {
 
     loop {
         while ep_in.pending() < 8 {
-            ep_in.submit(Buffer::new(256));
+            let buffer = ep_in.allocate(4096);
+            ep_in.submit(buffer);
         }
         let result = block_on(ep_in.next_complete());
         println!("{result:?}");
         if result.status.is_err() {
             break;
         }
+        ep_in.submit(result.data);
     }
 }

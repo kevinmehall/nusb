@@ -51,24 +51,53 @@ pub struct Buffer {
 impl Buffer {
     /// Allocate a new bufffer with the default allocator.
     ///
-    /// This buffer will not support zero-copy transfers, but can be cheaply
-    /// converted to a `Vec<u8>`.
+    /// This buffer will not support [zero-copy
+    /// transfers][`crate::Endpoint::allocate`], but can be cheaply converted to
+    /// a `Vec<u8>`.
     ///
     /// The passed size will be used as the `transfer_len`, and the `capacity`
-    /// be at least that large.
+    /// will be at least that large.
     ///
     /// ### Panics
     /// * If the requested length is greater than `u32::MAX`.
     #[inline]
     pub fn new(transfer_len: usize) -> Self {
+        let len_u32 = transfer_len.try_into().expect("length overflow");
         let mut vec = ManuallyDrop::new(Vec::with_capacity(transfer_len));
         Buffer {
             ptr: vec.as_mut_ptr(),
             len: 0,
-            transfer_len: transfer_len.try_into().expect("capacity overflow"),
+            transfer_len: len_u32,
             capacity: vec.capacity().try_into().expect("capacity overflow"),
             allocator: Allocator::Default,
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) fn mmap(
+        fd: &std::os::unix::prelude::OwnedFd,
+        len: usize,
+    ) -> Result<Buffer, rustix::io::Errno> {
+        let len_u32 = len.try_into().expect("length overflow");
+
+        let ptr = unsafe {
+            rustix::mm::mmap(
+                std::ptr::null_mut(),
+                len,
+                rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
+                rustix::mm::MapFlags::SHARED,
+                fd,
+                0,
+            )
+        }?;
+
+        Ok(Buffer {
+            ptr: ptr as *mut u8,
+            len: 0,
+            transfer_len: len_u32,
+            capacity: len_u32,
+            allocator: Allocator::Mmap,
+        })
     }
 
     /// Get the number of initialized bytes in the buffer.

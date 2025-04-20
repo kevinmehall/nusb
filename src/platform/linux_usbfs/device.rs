@@ -722,6 +722,15 @@ impl LinuxEndpoint {
             Ok(usbfs::clear_halt(&inner.interface.device.fd, endpoint)?)
         })
     }
+
+    pub(crate) fn allocate(&self, len: usize) -> Result<Buffer, Errno> {
+        Buffer::mmap(&self.inner.interface.device.fd, len).inspect_err(|e| {
+            warn!(
+                "Failed to allocate zero-copy buffer of length {len} for endpoint {}: {e}",
+                self.inner.address
+            );
+        })
+    }
 }
 
 impl Drop for LinuxEndpoint {
