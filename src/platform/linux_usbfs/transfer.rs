@@ -130,8 +130,8 @@ impl TransferData {
 
     pub fn take_completion(&mut self) -> Completion {
         let status = self.status();
-        let data = self.take_buffer();
-        Completion { status, data }
+        let buffer = self.take_buffer();
+        Completion { status, buffer }
     }
 
     #[inline]

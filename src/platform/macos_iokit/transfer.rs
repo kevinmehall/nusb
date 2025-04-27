@@ -54,7 +54,7 @@ impl TransferData {
         self.requested_len = 0;
         self.actual_len = 0;
 
-        let data = Buffer {
+        let buffer = Buffer {
             ptr,
             len,
             transfer_len,
@@ -62,7 +62,7 @@ impl TransferData {
             allocator: Allocator::Default,
         };
 
-        Completion { status, data }
+        Completion { status, buffer }
     }
 }
 

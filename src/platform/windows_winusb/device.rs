@@ -678,9 +678,9 @@ impl WindowsEndpoint {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
             let status = transfer.status();
-            let data = transfer.take_buffer();
+            let buffer = transfer.take_buffer();
             self.idle_transfer = Some(transfer);
-            Poll::Ready(Completion { status, data })
+            Poll::Ready(Completion { status, buffer })
         } else {
             Poll::Pending
         }
@@ -690,9 +690,9 @@ impl WindowsEndpoint {
         self.inner.notify.wait_timeout(timeout, || {
             take_completed_from_queue(&mut self.pending).map(|mut transfer| {
                 let status = transfer.status();
-                let data = transfer.take_buffer();
+                let buffer = transfer.take_buffer();
                 self.idle_transfer = Some(transfer);
-                Completion { status, data }
+                Completion { status, buffer }
             })
         })
     }

@@ -126,7 +126,7 @@ impl BulkOrInterrupt for Interrupt {}
 #[derive(Debug)]
 pub struct Completion {
     /// The transfer buffer.
-    pub data: Buffer,
+    pub buffer: Buffer,
 
     /// Status of the transfer.
     pub status: Result<(), TransferError>,
@@ -137,6 +137,6 @@ impl Completion {
     /// either the completed buffer for a successful transfer or a
     /// `TransferError`.
     pub fn into_result(self) -> Result<Buffer, TransferError> {
-        self.status.map(|()| self.data)
+        self.status.map(|()| self.buffer)
     }
 }

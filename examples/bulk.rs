@@ -38,6 +38,6 @@ fn main() {
         if result.status.is_err() {
             break;
         }
-        ep_in.submit(result.data);
+        ep_in.submit(result.buffer);
     }
 }
