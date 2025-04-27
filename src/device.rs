@@ -5,8 +5,8 @@ use crate::{
     },
     platform,
     transfer::{
-        Buffer, BulkOrInterrupt, ControlIn, ControlOut, Direction, EndpointDirection, EndpointType,
-        TransferError,
+        Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
+        EndpointType, TransferError,
     },
     DeviceInfo, Error, MaybeFuture, Speed,
 };
@@ -670,29 +670,6 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clear_halt()
-    }
-}
-
-/// A completed transfer returned from [`Endpoint::next_complete`].
-///
-/// A transfer can partially complete even in the case of failure or
-/// cancellation, thus the [`actual_len`][`Self::actual_len`] may be nonzero
-/// even if the [`status`][`Self::status`] is an error.
-#[derive(Debug)]
-pub struct Completion {
-    /// The transfer buffer.
-    pub data: Buffer,
-
-    /// Status of the transfer.
-    pub status: Result<(), TransferError>,
-}
-
-impl Completion {
-    /// Ignore any partial completion, turning `self` into a `Result` containing
-    /// either the completed buffer for a successful transfer or a
-    /// `TransferError`.
-    pub fn into_result(self) -> Result<Buffer, TransferError> {
-        self.status.map(|()| self.data)
     }
 }
 

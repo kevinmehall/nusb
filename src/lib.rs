@@ -142,7 +142,7 @@ mod enumeration;
 pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
-pub use device::{ClaimEndpointError, Completion, Device, Endpoint, Interface};
+pub use device::{ClaimEndpointError, Device, Endpoint, Interface};
 
 pub mod transfer;
 

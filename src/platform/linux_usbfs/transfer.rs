@@ -7,11 +7,13 @@ use std::{
 
 use rustix::io::Errno;
 
-use crate::transfer::{
-    internal::Pending, Allocator, Buffer, ControlIn, ControlOut, Direction, TransferError,
-    SETUP_PACKET_SIZE,
+use crate::{
+    descriptors::TransferType,
+    transfer::{
+        internal::Pending, Allocator, Buffer, Completion, ControlIn, ControlOut, Direction,
+        TransferError, SETUP_PACKET_SIZE,
+    },
 };
-use crate::{descriptors::TransferType, Completion};
 
 use super::{
     errno_to_transfer_error,

@@ -118,4 +118,25 @@ impl EndpointType for Interrupt {
 }
 impl BulkOrInterrupt for Interrupt {}
 
-pub use crate::device::Completion;
+/// A completed transfer returned from [`Endpoint::next_complete`].
+///
+/// A transfer can partially complete even in the case of failure or
+/// cancellation, thus the [`actual_len`][`Self::actual_len`] may be nonzero
+/// even if the [`status`][`Self::status`] is an error.
+#[derive(Debug)]
+pub struct Completion {
+    /// The transfer buffer.
+    pub data: Buffer,
+
+    /// Status of the transfer.
+    pub status: Result<(), TransferError>,
+}
+
+impl Completion {
+    /// Ignore any partial completion, turning `self` into a `Result` containing
+    /// either the completed buffer for a successful transfer or a
+    /// `TransferError`.
+    pub fn into_result(self) -> Result<Buffer, TransferError> {
+        self.status.map(|()| self.data)
+    }
+}

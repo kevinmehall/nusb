@@ -28,23 +28,23 @@ use super::{
     usbfs::{self, Urb},
     SysfsPath, TransferData,
 };
-use crate::device::ClaimEndpointError;
-use crate::maybe_future::{blocking::Blocking, MaybeFuture};
-use crate::transfer::{
-    internal::{
-        notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
-    },
-    request_type, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
-};
-use crate::{bitset::EndpointBitSet, Completion};
 use crate::{
+    bitset::EndpointBitSet,
     descriptors::{
         parse_concatenated_config_descriptors, ConfigurationDescriptor, DeviceDescriptor,
         EndpointDescriptor, TransferType, DESCRIPTOR_LEN_DEVICE,
     },
-    transfer::Buffer,
+    device::ClaimEndpointError,
+    maybe_future::{blocking::Blocking, MaybeFuture},
+    transfer::{
+        internal::{
+            notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
+        },
+        request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient,
+        TransferError,
+    },
+    DeviceInfo, Error, Speed,
 };
-use crate::{DeviceInfo, Error, Speed};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct TimeoutEntry {

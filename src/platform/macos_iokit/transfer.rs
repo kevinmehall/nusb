@@ -2,10 +2,8 @@ use std::mem::{self, ManuallyDrop};
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 
-use crate::{
-    transfer::{Allocator, Buffer, Direction, TransferError},
-    Completion,
-};
+use crate::transfer::{Allocator, Buffer, Completion, Direction, TransferError};
+
 pub struct TransferData {
     pub(super) buf: *mut u8,
     pub(super) capacity: u32,

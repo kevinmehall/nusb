@@ -36,9 +36,9 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        Buffer, ControlIn, ControlOut, Direction, Recipient, TransferError,
+        Buffer, Completion, ControlIn, ControlOut, Direction, Recipient, TransferError,
     },
-    Completion, DeviceInfo, Error, MaybeFuture, Speed,
+    DeviceInfo, Error, MaybeFuture, Speed,
 };
 
 use super::{
