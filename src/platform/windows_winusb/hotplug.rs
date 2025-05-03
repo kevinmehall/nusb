@@ -5,10 +5,9 @@ use std::{
     mem::size_of,
     ptr::{self, addr_of},
     sync::Mutex,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
-use atomic_waker::AtomicWaker;
 use log::{debug, error};
 use windows_sys::Win32::{
     Devices::{
@@ -40,7 +39,7 @@ pub(crate) struct WindowsHotplugWatch {
 }
 
 struct HotplugInner {
-    waker: AtomicWaker,
+    waker: Mutex<Option<Waker>>,
     events: Mutex<VecDeque<(Action, DevInst)>>,
 }
 
@@ -54,7 +53,7 @@ impl WindowsHotplugWatch {
     pub fn new() -> Result<WindowsHotplugWatch, Error> {
         let inner = Box::into_raw(Box::new(HotplugInner {
             events: Mutex::new(VecDeque::new()),
-            waker: AtomicWaker::new(),
+            waker: Mutex::new(None),
         }));
 
         let mut registration = ptr::null_mut();
@@ -98,7 +97,11 @@ impl WindowsHotplugWatch {
     }
 
     pub fn poll_next(&mut self, cx: &mut Context) -> Poll<HotplugEvent> {
-        self.inner().waker.register(cx.waker());
+        self.inner()
+            .waker
+            .lock()
+            .unwrap()
+            .replace(cx.waker().clone());
         let event = self.inner().events.lock().unwrap().pop_front();
         match event {
             Some((Action::Connect, devinst)) => {
@@ -162,6 +165,6 @@ unsafe extern "system" fn hotplug_callback(
 
     debug!("Hotplug callback: action={action:?}, instance={device_instance}");
     inner.events.lock().unwrap().push_back((action, devinst));
-    inner.waker.wake();
+    inner.waker.lock().unwrap().take().map(|w| w.wake());
     return ERROR_SUCCESS;
 }

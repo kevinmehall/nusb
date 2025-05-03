@@ -19,15 +19,7 @@ use rustix::{
     io::Errno,
 };
 use slab::Slab;
-use std::{
-    io,
-    mem::MaybeUninit,
-    sync::{Arc, Mutex},
-    task::Waker,
-    thread,
-};
-
-use atomic_waker::AtomicWaker;
+use std::{io, mem::MaybeUninit, sync::Mutex, task::Waker, thread};
 
 use super::Device;
 
@@ -104,8 +96,10 @@ fn event_loop() {
                 Tag::Device(id) => Device::handle_usb_epoll(id),
                 Tag::DeviceTimer(id) => Device::handle_timer_epoll(id),
                 Tag::Waker(id) => {
-                    if let Some(waker) = WAKERS.lock().unwrap().get(id) {
-                        waker.wake();
+                    if let Some(waker) = WAKERS.lock().unwrap().get_mut(id) {
+                        if let Some(w) = waker.take() {
+                            w.wake();
+                        }
                     }
                 }
             }
@@ -113,24 +107,27 @@ fn event_loop() {
     }
 }
 
-static WAKERS: Mutex<Slab<Arc<AtomicWaker>>> = Mutex::new(Slab::new());
+static WAKERS: Mutex<Slab<Option<Waker>>> = Mutex::new(Slab::new());
 
 pub(crate) struct Async<T: AsFd> {
     pub(crate) inner: T,
-    waker: Arc<AtomicWaker>,
     id: usize,
 }
 
 impl<T: AsFd> Async<T> {
     pub fn new(inner: T) -> Result<Self, io::Error> {
-        let waker = Arc::new(AtomicWaker::new());
-        let id = WAKERS.lock().unwrap().insert(waker.clone());
+        let id = WAKERS.lock().unwrap().insert(None);
         register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::empty())?;
-        Ok(Async { inner, id, waker })
+        Ok(Async { inner, id })
     }
 
     pub fn register(&self, waker: &Waker) -> Result<(), io::Error> {
-        self.waker.register(waker);
+        WAKERS
+            .lock()
+            .unwrap()
+            .get_mut(self.id)
+            .unwrap()
+            .replace(waker.clone());
         let epoll_fd = EPOLL_FD.get().unwrap();
         epoll::modify(
             epoll_fd,
