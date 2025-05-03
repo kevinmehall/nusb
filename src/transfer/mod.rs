@@ -1,7 +1,7 @@
 //! Transfer-related types.
 //!
-//! Use the methods on an [`Interface`][`super::Interface`] to make individual
-//! transfers or obtain a [`Queue`] to manage multiple transfers.
+//! Use the methods on an [`Interface`][`super::Interface`] and
+//! [`Endpoint`][`super::Endpoint`] to perform transfers.
 
 use std::{fmt::Display, io};
 
@@ -21,14 +21,14 @@ use crate::descriptors::TransferType;
 /// Transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TransferError {
-    /// Transfer was cancelled.
+    /// Transfer was cancelled or timed out.
     Cancelled,
 
     /// Endpoint in a STALL condition.
     ///
     /// This is used by the device to signal that an error occurred. For bulk
     /// and interrupt endpoints, the stall condition can be cleared with
-    /// [`Interface::clear_halt`][crate::Interface::clear_halt]. For control
+    /// [`Interface::clear_halt`][crate::Endpoint::clear_halt]. For control
     /// requests, the stall is automatically cleared when another request is
     /// submitted.
     Stall,
@@ -52,7 +52,7 @@ impl Display for TransferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TransferError::Cancelled => write!(f, "transfer was cancelled"),
-            TransferError::Stall => write!(f, "endpoint STALL condition"),
+            TransferError::Stall => write!(f, "endpoint stalled"),
             TransferError::Disconnected => write!(f, "device disconnected"),
             TransferError::Fault => write!(f, "hardware fault or protocol violation"),
             TransferError::Unknown(e) => {
@@ -125,7 +125,7 @@ impl EndpointType for Interrupt {
 }
 impl BulkOrInterrupt for Interrupt {}
 
-/// A completed transfer returned from [`Endpoint::next_complete`].
+/// A completed transfer returned from [`Endpoint::next_complete`][`crate::Endpoint::next_complete`].
 ///
 /// A transfer can partially complete even in the case of failure or
 /// cancellation, thus the [`actual_len`][`Self::actual_len`] may be nonzero

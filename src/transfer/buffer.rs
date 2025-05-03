@@ -181,7 +181,7 @@ impl Buffer {
     /// Convert the buffer into a `Vec<u8>`.
     ///
     /// This is zero-cost if the buffer was allocated with the default allocator
-    /// (if [`is_zero_copy()`] returns false), otherwise it will copy the data
+    /// (if [`is_zero_copy()`][Self::is_zero_copy] returns false), otherwise it will copy the data
     /// into a new `Vec<u8>`.
     pub fn into_vec(self) -> Vec<u8> {
         match self.allocator {

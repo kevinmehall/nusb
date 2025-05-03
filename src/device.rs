@@ -154,7 +154,7 @@ impl Device {
     /// Set the device configuration.
     ///
     /// The argument is the desired configuration's `bConfigurationValue`
-    /// descriptor field from [`Configuration::configuration_value`] or `0` to
+    /// descriptor field from [`ConfigurationDescriptor::configuration_value`] or `0` to
     /// unconfigure the device.
     ///
     /// ### Platform-specific notes
@@ -270,7 +270,7 @@ impl Device {
     /// Reset the device, forcing it to re-enumerate.
     ///
     /// This `Device` will no longer be usable, and you should drop it and call
-    /// [`super::list_devices`] to find and re-open it again.
+    /// [`list_devices`][`super::list_devices`] to find and re-open it again.
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
@@ -278,7 +278,7 @@ impl Device {
         self.backend.clone().reset()
     }
 
-    /// Asynchronously submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
     ///
     /// ### Example
     ///
@@ -359,7 +359,7 @@ impl Device {
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
 /// use in multiple places in your program. The interface is released when all clones, and all
-/// associated [`TransferFuture`]s and [`Queue`]s are dropped.
+/// associated [`Endpoint`]s are dropped.
 #[derive(Clone)]
 pub struct Interface {
     backend: Arc<platform::Interface>,
@@ -415,6 +415,8 @@ impl Interface {
     ///   overriding any value passed. A warning is logged if the passed `index`
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
+    /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
+    ///   argument is ignored.
     pub fn control_in(
         &self,
         data: ControlIn,
@@ -423,7 +425,8 @@ impl Interface {
         self.backend.clone().control_in(data, timeout)
     }
 
-    /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
+    /// Submit a single **OUT (host-to-device)** transfer on the default
+    /// **control** endpoint.
     ///
     /// ### Example
     ///
@@ -454,6 +457,8 @@ impl Interface {
     ///   overriding any value passed. A warning is logged if the passed `index`
     ///   least significant byte differs from the interface number, and this may
     ///   become an error in the future.
+    /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
+    ///   argument is ignored.
     pub fn control_out(
         &self,
         data: ControlOut,
@@ -545,6 +550,22 @@ impl std::error::Error for ClaimEndpointError {}
 /// Exclusive access to an endpoint of a USB device.
 ///
 /// Obtain an `Endpoint` with the [`Interface::endpoint`] method.
+///
+/// An `Endpoint` manages a queue of pending transfers. Submitting a transfer is
+/// a non-blocking operation that adds the operation to the queue. Completed
+/// transfers can be popped from the queue synchronously or asynchronously.
+///
+/// This separation of submission and completion makes the API cancel-safe,
+/// and makes it easy to submit multiple transfers at once, regardless of
+/// whether you are using asynchronous or blocking waits.
+///
+/// To maximize throughput and minimize latency when streaming data, the host
+/// controller needs to attempt a transfer in every possible frame. That
+/// requires always having a transfer request pending with the kernel by
+/// submitting multiple transfer requests and re-submitting them as they
+/// complete.
+///
+/// When the `Endpoint` is dropped, any pending transfers are cancelled.
 pub struct Endpoint<EpType, Dir> {
     backend: platform::Endpoint,
     ep_type: PhantomData<EpType>,
@@ -588,7 +609,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// A zero-copy buffer allows the kernel to DMA directly to/from this
     /// buffer for improved performance. However, because it is not allocated
-    /// with the system allocator, it cannot be converted to a `Vec` without
+    /// with the system allocator, it cannot be converted to a [`Vec`] without
     /// copying.
     ///
     /// This is currently only supported on Linux, falling back to [`Buffer::new`]
@@ -607,14 +628,14 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// Begin a transfer on the endpoint.
     ///
     /// Submitted transfers are queued and completed in order. Once the transfer
-    /// completes, it will be returned from [`Self::next_complete`]. Any error
-    /// in submitting or performing the transfer is deferred until
-    /// [`next_complete`][`Self::next_complete`].
+    /// completes, it will be returned from
+    /// [`next_complete()`][`Self::next_complete`]. Any error in submitting or
+    /// performing the transfer is deferred until `next_complete`.
     ///
-    /// For an OUT transfer, the buffer's `len` field is the number of bytes
+    /// For an OUT transfer, the buffer's `len` is the number of bytes
     /// initialized, which will be sent to the device.
     ///
-    /// For an IN transfer, the buffer's `transfer_len` field is the number of
+    /// For an IN transfer, the buffer's `requested_len` is the number of
     /// bytes requested. It must be a multiple of the endpoint's [maximum packet
     /// size][`Self::max_packet_size`].
     pub fn submit(&mut self, buf: Buffer) {
@@ -649,6 +670,9 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// Blocks for up to `timeout` waiting for a transfer to complete, or
     /// returns `None` if the timeout is reached.
+    ///
+    /// Note that the transfer is not cancelled after the timeout, and can still
+    /// be returned from a subsequent call.
     ///
     /// ## Panics
     ///  * if there are no transfers pending (that is, if [`Self::pending()`]

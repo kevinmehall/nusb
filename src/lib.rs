@@ -34,10 +34,11 @@
 //! device. To open an interface, call [`Device::claim_interface`]. Only one
 //! program (or kernel driver) may claim an interface at a time.
 //!
-//! Use the resulting [`Interface`] to transfer data on the device's control,
-//! bulk or interrupt endpoints. Transfers are async by default, and can be
-//! awaited as individual [`Future`][`transfer::TransferFuture`]s, or use a
-//! [`Queue`][`transfer::Queue`] to manage streams of data.
+//! Use the resulting [`Interface`] to perform control transfers or open
+//! an [`Endpoint`] to perform bulk or interrupt transfers. Submitting a
+//! transfer is a non-blocking operation that adds the transfer to an
+//! internal queue for the endpoint. Completed transfers can be popped
+//! from the queue synchronously or asynchronously.
 //!
 //! *For more details on how USB works, [USB in a
 //! Nutshell](https://beyondlogic.org/usbnutshell/usb1.shtml) is a good
@@ -119,9 +120,9 @@
 //! This allows for async usage in an async context, or blocking usage in a
 //! non-async context.
 //!
-//! Operations such as [`Device::open`], [`Device::set_configuration`],
+//! Operations such as [`DeviceInfo::open`], [`Device::set_configuration`],
 //! [`Device::reset`], [`Device::claim_interface`],
-//! [`Interface::set_alt_setting`], and [`Interface::clear_halt`] require
+//! [`Interface::set_alt_setting`], and [`Endpoint::clear_halt`] require
 //! blocking system calls. To use these in an asynchronous context, `nusb`
 //! relies on an async runtime to run these operations on an IO thread to avoid
 //! blocking in async code. Enable the cargo feature `tokio` or `smol` to use
