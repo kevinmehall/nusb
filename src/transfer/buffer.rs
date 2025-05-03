@@ -16,21 +16,17 @@ pub(crate) enum Allocator {
 /// The fixed-capacity buffer can be backed either by the system allocator or a
 /// platform-specific way of allocating memory for zero-copy transfers.
 ///
-/// It has two length fields, and their meaning depends on the transfer
-/// direction:
+/// * For OUT transfers, fill the buffer with data prior to submitting it.
+///   The `len` is the number of initialized bytes which will be sent when
+///   submitted. `requested_len` is not used.
 ///
-/// * For OUT transfers, you fill the buffer with the data prior to submitting
-///   it. The `len` field is how many bytes are submitted, and when the buffer
-///   is returned on completion, the `transfer_len` field is set to the number
-///   of bytes that were actually sent. The `len` field is unmodified; call
-///   [`clear()`][Self::clear] when re-using the buffer.
-///
-/// * For IN transfers, the `transfer_length` field specifies the number of
-///   bytes requested from the device. It must be a multiple of the endpoint's
-///   maximum packet size. When the transfer is completed, the `len` is set to
-///   the number of bytes actually received. The `transfer_len` field is
-///   unmodified, so the same buffer can be submitted again to perform another
-///   transfer of the same length.
+/// * For IN transfers, the `requested_len` specifies the number of bytes
+///   requested from the device. It must be a multiple of the endpoint's maximum
+///   packet size. The `len` and contents are ignored when the transfer is
+///   submitted. When the transfer is completed, the `len` is set to the number
+///   of bytes actually received. The `requested_len` is unmodified, so the same
+///   buffer can be submitted again to perform another transfer of the same
+///   length.
 pub struct Buffer {
     /// Data pointer
     pub(crate) ptr: *mut u8,
@@ -38,8 +34,8 @@ pub struct Buffer {
     /// Initialized bytes
     pub(crate) len: u32,
 
-    /// Requested length for IN transfer or actual length for OUT transfer
-    pub(crate) transfer_len: u32,
+    /// Requested length for IN transfer
+    pub(crate) requested_len: u32,
 
     /// Allocated memory at `ptr`
     pub(crate) capacity: u32,
@@ -55,19 +51,19 @@ impl Buffer {
     /// transfers][`crate::Endpoint::allocate`], but can be cheaply converted to
     /// a `Vec<u8>`.
     ///
-    /// The passed size will be used as the `transfer_len`, and the `capacity`
+    /// The passed size will be used as the `requested_len`, and the `capacity`
     /// will be at least that large.
     ///
     /// ### Panics
     /// * If the requested length is greater than `u32::MAX`.
     #[inline]
-    pub fn new(transfer_len: usize) -> Self {
-        let len_u32 = transfer_len.try_into().expect("length overflow");
-        let mut vec = ManuallyDrop::new(Vec::with_capacity(transfer_len));
+    pub fn new(requested_len: usize) -> Self {
+        let len_u32 = requested_len.try_into().expect("length overflow");
+        let mut vec = ManuallyDrop::new(Vec::with_capacity(requested_len));
         Buffer {
             ptr: vec.as_mut_ptr(),
             len: 0,
-            transfer_len: len_u32,
+            requested_len: len_u32,
             capacity: vec.capacity().try_into().expect("capacity overflow"),
             allocator: Allocator::Default,
         }
@@ -94,7 +90,7 @@ impl Buffer {
         Ok(Buffer {
             ptr: ptr as *mut u8,
             len: 0,
-            transfer_len: len_u32,
+            requested_len: len_u32,
             capacity: len_u32,
             allocator: Allocator::Mmap,
         })
@@ -111,8 +107,18 @@ impl Buffer {
 
     /// Requested length for IN transfer or actual length for OUT transfer.
     #[inline]
-    pub fn transfer_len(&self) -> usize {
-        self.transfer_len as usize
+    pub fn requested_len(&self) -> usize {
+        self.requested_len as usize
+    }
+
+    /// Set the requested length for an IN transfer.
+    ///
+    /// ### Panics
+    /// * If the requested length is greater than the capacity.
+    #[inline]
+    pub fn set_requested_len(&mut self, len: usize) {
+        assert!(len <= self.capacity as usize, "length exceeds capacity");
+        self.requested_len = len.try_into().expect("requested_len overflow");
     }
 
     /// Number of allocated bytes.
@@ -129,19 +135,9 @@ impl Buffer {
         self.capacity() - self.len()
     }
 
-    /// Set the requested length for an IN transfer.
-    ///
-    /// ### Panics
-    /// * If the requested length is greater than the capacity.
-    #[inline]
-    pub fn set_transfer_len(&mut self, len: usize) {
-        assert!(len <= self.capacity as usize, "length exceeds capacity");
-        self.transfer_len = len.try_into().expect("transfer_len overflow");
-    }
-
     /// Clear the buffer.
     ///
-    /// This sets `len` to 0, but does not change the `capacity` or `transfer_len`.
+    /// This sets `len` to 0, but does not change the `capacity` or `requested_len`.
     /// This is useful for reusing the buffer for a new transfer.
     #[inline]
     pub fn clear(&mut self) {
@@ -204,14 +200,14 @@ unsafe impl Sync for Buffer {}
 
 /// A `Vec<u8>` can be converted to a `Buffer` cheaply.
 ///
-/// The Vec's `len` will be used for both the `len` and `transfer_len`.
+/// The Vec's `len` will be used for both the `len` and `requested_len`.
 impl From<Vec<u8>> for Buffer {
     fn from(vec: Vec<u8>) -> Self {
         let mut vec = ManuallyDrop::new(vec);
         Buffer {
             ptr: vec.as_mut_ptr(),
             len: vec.len().try_into().expect("len overflow"),
-            transfer_len: vec.len().try_into().expect("len overflow"),
+            requested_len: vec.len().try_into().expect("len overflow"),
             capacity: vec.capacity().try_into().expect("capacity overflow"),
             allocator: Allocator::Default,
         }
@@ -220,14 +216,14 @@ impl From<Vec<u8>> for Buffer {
 
 /// A `Vec<MaybeUninit<u8>>` can be converted to a `Buffer` cheaply.
 ///
-/// The Vec's `len` will be used for the `transfer_len`, and the `len` will be 0.
+/// The Vec's `len` will be used for the `requested_len`, and the `len` will be 0.
 impl From<Vec<MaybeUninit<u8>>> for Buffer {
     fn from(vec: Vec<MaybeUninit<u8>>) -> Self {
         let mut vec = ManuallyDrop::new(vec);
         Buffer {
             ptr: vec.as_mut_ptr().cast(),
             len: 0,
-            transfer_len: vec.len().try_into().expect("len overflow"),
+            requested_len: vec.len().try_into().expect("len overflow"),
             capacity: vec.capacity().try_into().expect("capacity overflow"),
             allocator: Allocator::Default,
         }
@@ -252,7 +248,7 @@ impl Debug for Buffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Buffer")
             .field("len", &self.len)
-            .field("transfer_len", &self.transfer_len)
+            .field("requested_len", &self.requested_len)
             .field("data", &format_args!("{:02x?}", &self[..]))
             .finish()
     }

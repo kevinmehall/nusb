@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::transfer::{internal::notify_completion, Buffer, Direction, TransferError};
+use crate::transfer::{internal::notify_completion, Buffer, Completion, Direction, TransferError};
 
 #[repr(C)]
 pub struct TransferData {
@@ -67,7 +67,7 @@ impl TransferData {
         self.overlapped.InternalHigh = 0;
         self.request_len = match Direction::from_address(self.endpoint) {
             Direction::Out => buf.len,
-            Direction::In => buf.transfer_len,
+            Direction::In => buf.requested_len,
         };
     }
 
@@ -75,19 +75,30 @@ impl TransferData {
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
         let capacity = mem::replace(&mut self.capacity, 0);
-        let (len, transfer_len) = match Direction::from_address(self.endpoint) {
-            Direction::Out => (self.request_len as u32, self.overlapped.InternalHigh as u32),
-            Direction::In => (self.overlapped.InternalHigh as u32, self.request_len as u32),
+        let len = match Direction::from_address(self.endpoint) {
+            Direction::Out => self.request_len as u32,
+            Direction::In => self.overlapped.InternalHigh as u32,
         };
-        self.request_len = 0;
+        let requested_len = mem::replace(&mut self.request_len, 0);
         self.overlapped.InternalHigh = 0;
 
         Buffer {
             ptr,
             len,
-            transfer_len,
+            requested_len,
             capacity,
             allocator: crate::transfer::Allocator::Default,
+        }
+    }
+
+    pub fn take_completion(&mut self) -> Completion {
+        let status = self.status();
+        let actual_len = self.overlapped.InternalHigh as usize;
+        let buffer = self.take_buffer();
+        Completion {
+            status,
+            actual_len,
+            buffer,
         }
     }
 }

@@ -677,10 +677,9 @@ impl WindowsEndpoint {
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let status = transfer.status();
-            let buffer = transfer.take_buffer();
+            let completion = transfer.take_completion();
             self.idle_transfer = Some(transfer);
-            Poll::Ready(Completion { status, buffer })
+            Poll::Ready(completion)
         } else {
             Poll::Pending
         }
@@ -689,10 +688,9 @@ impl WindowsEndpoint {
     pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.inner.notify.wait_timeout(timeout, || {
             take_completed_from_queue(&mut self.pending).map(|mut transfer| {
-                let status = transfer.status();
-                let buffer = transfer.take_buffer();
+                let completion = transfer.take_completion();
                 self.idle_transfer = Some(transfer);
-                Completion { status, buffer }
+                completion
             })
         })
     }

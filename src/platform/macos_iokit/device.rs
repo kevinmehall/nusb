@@ -492,7 +492,7 @@ impl MacEndpoint {
         transfer.actual_len = 0;
         let req_len = match dir {
             Direction::Out => buffer.len,
-            Direction::In => buffer.transfer_len,
+            Direction::In => buffer.requested_len,
         };
         transfer.requested_len = req_len;
 
@@ -516,7 +516,7 @@ impl MacEndpoint {
                     ReadPipeAsync(
                         pipe_ref,
                         buffer.ptr as *mut c_void,
-                        buffer.transfer_len,
+                        buffer.requested_len,
                         transfer_callback,
                         ptr as *mut c_void
                     )

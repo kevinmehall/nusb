@@ -135,6 +135,9 @@ pub struct Completion {
     /// The transfer buffer.
     pub buffer: Buffer,
 
+    /// The number of bytes transferred.
+    pub actual_len: usize,
+
     /// Status of the transfer.
     pub status: Result<(), TransferError>,
 }

@@ -96,42 +96,38 @@ impl TransferData {
         self.urb_mut().actual_length = 0;
         self.urb_mut().buffer_length = match Direction::from_address(self.urb().endpoint) {
             Direction::Out => buf.len as i32,
-            Direction::In => buf.transfer_len as i32,
+            Direction::In => buf.requested_len as i32,
         };
         self.allocator = buf.allocator;
     }
 
-    pub fn take_buffer(&mut self) -> Buffer {
-        let mut empty = ManuallyDrop::new(Vec::new());
-        let ptr = mem::replace(&mut self.urb_mut().buffer, empty.as_mut_ptr());
-        let capacity = mem::replace(&mut self.capacity, 0);
-        let (len, transfer_len) = match Direction::from_address(self.urb().endpoint) {
-            Direction::Out => (
-                self.urb().buffer_length as u32,
-                self.urb().actual_length as u32,
-            ),
-            Direction::In => (
-                self.urb().actual_length as u32,
-                self.urb().buffer_length as u32,
-            ),
-        };
-        self.urb_mut().buffer_length = 0;
-        self.urb_mut().actual_length = 0;
-        let allocator = mem::replace(&mut self.allocator, Allocator::Default);
-
-        Buffer {
-            ptr,
-            len,
-            transfer_len,
-            capacity,
-            allocator,
-        }
-    }
-
     pub fn take_completion(&mut self) -> Completion {
         let status = self.status();
-        let buffer = self.take_buffer();
-        Completion { status, buffer }
+        let requested_len = (&mut *self).urb().buffer_length as u32;
+        let actual_len = self.urb().actual_length as usize;
+        let len = match Direction::from_address((&mut *self).urb().endpoint) {
+            Direction::Out => (&mut *self).urb().buffer_length as u32,
+            Direction::In => (&mut *self).urb().actual_length as u32,
+        };
+
+        let mut empty = ManuallyDrop::new(Vec::new());
+        let ptr = mem::replace(&mut (&mut *self).urb_mut().buffer, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut (&mut *self).capacity, 0);
+        (&mut *self).urb_mut().buffer_length = 0;
+        (&mut *self).urb_mut().actual_length = 0;
+        let allocator = mem::replace(&mut (&mut *self).allocator, Allocator::Default);
+
+        Completion {
+            status,
+            actual_len,
+            buffer: Buffer {
+                ptr,
+                len,
+                requested_len,
+                capacity,
+                allocator,
+            },
+        }
     }
 
     #[inline]
@@ -185,7 +181,7 @@ impl Pending<TransferData> {
 impl Drop for TransferData {
     fn drop(&mut self) {
         unsafe {
-            drop(self.take_buffer());
+            drop(self.take_completion());
             drop(Box::from_raw(self.urb));
         }
     }

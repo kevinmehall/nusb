@@ -47,22 +47,26 @@ impl TransferData {
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
         let capacity = mem::replace(&mut self.capacity, 0);
-        let (len, transfer_len) = match direction {
-            Direction::Out => (self.requested_len, self.actual_len),
-            Direction::In => (self.actual_len, self.requested_len),
+        let len = match direction {
+            Direction::Out => self.requested_len,
+            Direction::In => self.actual_len,
         };
-        self.requested_len = 0;
-        self.actual_len = 0;
+        let requested_len = mem::replace(&mut self.requested_len, 0);
+        let actual_len = mem::replace(&mut self.actual_len, 0) as usize;
 
         let buffer = Buffer {
             ptr,
             len,
-            transfer_len,
+            requested_len,
             capacity,
             allocator: Allocator::Default,
         };
 
-        Completion { status, buffer }
+        Completion {
+            status,
+            actual_len,
+            buffer,
+        }
     }
 }
 
