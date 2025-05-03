@@ -3,14 +3,16 @@ use std::mem::{self, ManuallyDrop};
 use log::debug;
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE, ERROR_NO_SUCH_DEVICE,
-        ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT, ERROR_SUCCESS,
-        ERROR_TIMEOUT, WIN32_ERROR,
+        GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
+        ERROR_NO_SUCH_DEVICE, ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT,
+        ERROR_SUCCESS, ERROR_TIMEOUT,
     },
-    System::IO::OVERLAPPED,
+    System::IO::{GetOverlappedResult, OVERLAPPED},
 };
 
 use crate::transfer::{internal::notify_completion, Buffer, Completion, Direction, TransferError};
+
+use super::Interface;
 
 #[repr(C)]
 pub struct TransferData {
@@ -45,20 +47,6 @@ impl TransferData {
         self.overlapped.InternalHigh
     }
 
-    pub fn status(&self) -> Result<(), TransferError> {
-        match self.overlapped.Internal as WIN32_ERROR {
-            ERROR_SUCCESS => Ok(()),
-            ERROR_GEN_FAILURE => Err(TransferError::Stall),
-            ERROR_REQUEST_ABORTED | ERROR_TIMEOUT | ERROR_SEM_TIMEOUT | ERROR_OPERATION_ABORTED => {
-                Err(TransferError::Cancelled)
-            }
-            ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
-                Err(TransferError::Disconnected)
-            }
-            e => Err(TransferError::Unknown(e as i32)),
-        }
-    }
-
     pub fn set_buffer(&mut self, buf: Buffer) {
         debug_assert!(self.capacity == 0);
         let buf = ManuallyDrop::new(buf);
@@ -71,41 +59,52 @@ impl TransferData {
         };
     }
 
-    pub fn take_buffer(&mut self) -> Buffer {
+    pub fn take_completion(&mut self, intf: &Interface) -> Completion {
+        let mut actual_len: u32 = 0;
+
+        unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
+
+        let status = match unsafe { GetLastError() } {
+            ERROR_SUCCESS => Ok(()),
+            ERROR_GEN_FAILURE => Err(TransferError::Stall),
+            ERROR_REQUEST_ABORTED | ERROR_TIMEOUT | ERROR_SEM_TIMEOUT | ERROR_OPERATION_ABORTED => {
+                Err(TransferError::Cancelled)
+            }
+            ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
+                Err(TransferError::Disconnected)
+            }
+            e => Err(TransferError::Unknown(e as i32)),
+        };
+
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
         let capacity = mem::replace(&mut self.capacity, 0);
         let len = match Direction::from_address(self.endpoint) {
             Direction::Out => self.request_len as u32,
-            Direction::In => self.overlapped.InternalHigh as u32,
+            Direction::In => actual_len,
         };
         let requested_len = mem::replace(&mut self.request_len, 0);
         self.overlapped.InternalHigh = 0;
 
-        Buffer {
-            ptr,
-            len,
-            requested_len,
-            capacity,
-            allocator: crate::transfer::Allocator::Default,
-        }
-    }
-
-    pub fn take_completion(&mut self) -> Completion {
-        let status = self.status();
-        let actual_len = self.overlapped.InternalHigh as usize;
-        let buffer = self.take_buffer();
         Completion {
             status,
-            actual_len,
-            buffer,
+            actual_len: actual_len as usize,
+            buffer: Buffer {
+                ptr,
+                len,
+                requested_len,
+                capacity,
+                allocator: crate::transfer::Allocator::Default,
+            },
         }
     }
 }
 
 impl Drop for TransferData {
     fn drop(&mut self) {
-        drop(self.take_buffer())
+        unsafe {
+            drop(Vec::from_raw_parts(self.buf, 0, self.capacity as usize));
+        }
     }
 }
 

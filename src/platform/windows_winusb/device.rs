@@ -421,9 +421,12 @@ impl WindowsInterface {
             Length: data.length,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(|mut t| {
-            t.status()?;
-            Ok(t.take_buffer().into_vec())
+        let intf = self.clone();
+
+        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+            let c = t.take_completion(&intf);
+            c.status?;
+            Ok(c.buffer.into_vec())
         })
     }
 
@@ -447,9 +450,11 @@ impl WindowsInterface {
             Length: data.data.len().try_into().expect("transfer too large"),
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(|t| {
-            t.status()?;
-            Ok(())
+        let intf = self.clone();
+
+        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+            let c = t.take_completion(&intf);
+            c.status
         })
     }
 
@@ -677,7 +682,7 @@ impl WindowsEndpoint {
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let completion = transfer.take_completion();
+            let completion = transfer.take_completion(&self.inner.interface);
             self.idle_transfer = Some(transfer);
             Poll::Ready(completion)
         } else {
@@ -688,7 +693,7 @@ impl WindowsEndpoint {
     pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.inner.notify.wait_timeout(timeout, || {
             take_completed_from_queue(&mut self.pending).map(|mut transfer| {
-                let completion = transfer.take_completion();
+                let completion = transfer.take_completion(&self.inner.interface);
                 self.idle_transfer = Some(transfer);
                 completion
             })
