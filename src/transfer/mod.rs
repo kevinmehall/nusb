@@ -40,7 +40,12 @@ pub enum TransferError {
     Fault,
 
     /// Unknown or OS-specific error.
-    Unknown,
+    ///
+    /// It won't be considered a breaking change to map unhandled errors from
+    /// `Unknown` to one of the above variants. If you are matching on the
+    /// OS-specific code because an error is not correctly mapped, please open
+    /// an issue or pull request.
+    Unknown(i32),
 }
 
 impl Display for TransferError {
@@ -50,7 +55,9 @@ impl Display for TransferError {
             TransferError::Stall => write!(f, "endpoint STALL condition"),
             TransferError::Disconnected => write!(f, "device disconnected"),
             TransferError::Fault => write!(f, "hardware fault or protocol violation"),
-            TransferError::Unknown => write!(f, "unknown error"),
+            TransferError::Unknown(e) => {
+                write!(f, "unknown error ({})", io::Error::from_raw_os_error(*e))
+            }
         }
     }
 }
@@ -64,7 +71,7 @@ impl From<TransferError> for io::Error {
             TransferError::Stall => io::Error::new(io::ErrorKind::ConnectionReset, value),
             TransferError::Disconnected => io::Error::new(io::ErrorKind::ConnectionAborted, value),
             TransferError::Fault => io::Error::new(io::ErrorKind::Other, value),
-            TransferError::Unknown => io::Error::new(io::ErrorKind::Other, value),
+            TransferError::Unknown(_) => io::Error::new(io::ErrorKind::Other, value),
         }
     }
 }

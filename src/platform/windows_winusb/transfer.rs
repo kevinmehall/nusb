@@ -55,7 +55,7 @@ impl TransferData {
             ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
                 Err(TransferError::Disconnected)
             }
-            _ => Err(TransferError::Unknown),
+            e => Err(TransferError::Unknown(e as i32)),
         }
     }
 
