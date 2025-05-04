@@ -323,24 +323,26 @@ impl LinuxDevice {
     }
 
     pub fn control_in(
-        &self,
+        self: Arc<Self>,
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let t = TransferData::new_control_in(data);
-        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
+        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(move |t| {
+            drop(self); // ensure device stays alive
             t.status()?;
             Ok(t.control_in_data().to_owned())
         })
     }
 
     pub fn control_out(
-        &self,
+        self: Arc<Self>,
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let t = TransferData::new_control_out(data);
-        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
+        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(move |t| {
+            drop(self); // ensure device stays alive
             t.status()?;
             Ok(())
         })
@@ -570,7 +572,7 @@ impl LinuxInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        self.device.control_in(data, timeout)
+        self.device.clone().control_in(data, timeout)
     }
 
     pub fn control_out(
@@ -578,7 +580,7 @@ impl LinuxInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        self.device.control_out(data, timeout)
+        self.device.clone().control_out(data, timeout)
     }
 
     pub fn get_alt_setting(&self) -> u8 {

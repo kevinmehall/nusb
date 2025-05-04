@@ -222,7 +222,7 @@ impl MacDevice {
     }
 
     pub fn control_in(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
@@ -244,7 +244,8 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(|t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |t| {
+            drop(self); // ensure device stays alive
             t.status()?;
             let t = ManuallyDrop::new(t);
             Ok(unsafe { Vec::from_raw_parts(t.buf, t.actual_len as usize, t.capacity as usize) })
@@ -252,7 +253,7 @@ impl MacDevice {
     }
 
     pub fn control_out(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
@@ -273,7 +274,8 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(|t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(move |t| {
+            drop(self); // ensure device stays alive
             t.status()?;
             Ok(())
         })
@@ -382,7 +384,7 @@ impl MacInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        self.device.control_in(data, timeout)
+        self.device.clone().control_in(data, timeout)
     }
 
     pub fn control_out(
@@ -390,7 +392,7 @@ impl MacInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        self.device.control_out(data, timeout)
+        self.device.clone().control_out(data, timeout)
     }
 
     pub fn endpoint(
