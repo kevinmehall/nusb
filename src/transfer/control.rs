@@ -1,5 +1,3 @@
-use super::{ResponseBuffer, TransferRequest};
-
 /// Transfer direction
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -52,38 +50,8 @@ pub enum Recipient {
     Other = 3,
 }
 
-/// SETUP packet without direction or buffers
-pub struct Control {
-    /// Request type used for the `bmRequestType` field sent in the SETUP packet.
-    #[doc(alias = "bmRequestType")]
-    pub control_type: ControlType,
-
-    /// Recipient used for the `bmRequestType` field sent in the SETUP packet.
-    #[doc(alias = "bmRequestType")]
-    pub recipient: Recipient,
-
-    /// `bRequest` field sent in the SETUP packet.
-    #[doc(alias = "bRequest")]
-    pub request: u8,
-
-    /// `wValue` field sent in the SETUP packet.
-    #[doc(alias = "wValue")]
-    pub value: u16,
-
-    /// `wIndex` field sent in the SETUP packet.
-    ///
-    /// For [`Recipient::Interface`] this is the interface number. For [`Recipient::Endpoint`] this is the endpoint number.
-    #[doc(alias = "wIndex")]
-    pub index: u16,
-}
-
-impl Control {
-    pub(crate) fn request_type(&self, direction: Direction) -> u8 {
-        request_type(direction, self.control_type, self.recipient)
-    }
-}
-
 /// SETUP packet and associated data to make an **OUT** request on a control endpoint.
+#[derive(Debug, Clone, Copy)]
 pub struct ControlOut<'a> {
     /// Request type used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
@@ -114,16 +82,16 @@ pub struct ControlOut<'a> {
 
 impl<'a> ControlOut<'a> {
     #[allow(unused)]
-    pub(crate) fn setup_packet(&self) -> Result<[u8; SETUP_PACKET_SIZE], ()> {
-        Ok(pack_setup(
+    pub(crate) fn setup_packet(&self) -> [u8; SETUP_PACKET_SIZE] {
+        pack_setup(
             Direction::Out,
             self.control_type,
             self.recipient,
             self.request,
             self.value,
             self.index,
-            self.data.len().try_into().map_err(|_| ())?,
-        ))
+            self.data.len().try_into().expect("length must fit in u16"),
+        )
     }
 
     #[allow(unused)]
@@ -132,11 +100,8 @@ impl<'a> ControlOut<'a> {
     }
 }
 
-impl TransferRequest for ControlOut<'_> {
-    type Response = ResponseBuffer;
-}
-
 /// SETUP packet to make an **IN** request on a control endpoint.
+#[derive(Debug, Clone, Copy)]
 pub struct ControlIn {
     /// Request type used for the `bmRequestType` field sent in the SETUP packet.
     #[doc(alias = "bmRequestType")]
@@ -208,10 +173,6 @@ fn pack_setup(
         (length & 0xFF) as u8,
         (length >> 8) as u8,
     ]
-}
-
-impl TransferRequest for ControlIn {
-    type Response = Vec<u8>;
 }
 
 pub(crate) fn request_type(

@@ -9,6 +9,7 @@ pub use enumeration::{list_buses, list_devices, SysfsPath};
 
 mod device;
 pub(crate) use device::LinuxDevice as Device;
+pub(crate) use device::LinuxEndpoint as Endpoint;
 pub(crate) use device::LinuxInterface as Interface;
 
 mod hotplug;
@@ -30,6 +31,6 @@ fn errno_to_transfer_error(e: Errno) -> TransferError {
         Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
             TransferError::Fault
         }
-        _ => TransferError::Unknown,
+        _ => TransferError::Unknown(e.raw_os_error()),
     }
 }

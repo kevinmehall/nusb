@@ -13,10 +13,7 @@ use std::{
 
 use log::warn;
 
-use crate::{
-    transfer::{Direction, TransferType},
-    Error,
-};
+use crate::{transfer::Direction, Error};
 
 pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
@@ -694,6 +691,23 @@ impl<'a> Debug for EndpointDescriptor<'a> {
             .field("interval", &self.interval())
             .finish()
     }
+}
+
+/// Endpoint type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum TransferType {
+    /// Control endpoint.
+    Control = 0,
+
+    /// Isochronous endpoint.
+    Isochronous = 1,
+
+    /// Bulk endpoint.
+    Bulk = 2,
+
+    /// Interrupt endpoint.
+    Interrupt = 3,
 }
 
 /// Error from [`crate::Device::active_configuration`]

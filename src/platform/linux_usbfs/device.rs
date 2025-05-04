@@ -1,42 +1,59 @@
-use std::io::{ErrorKind, Seek};
-use std::sync::{Mutex, Weak};
-use std::{ffi::c_void, time::Duration};
 use std::{
+    collections::{BTreeMap, VecDeque},
+    ffi::c_void,
     fs::File,
-    io::Read,
+    io::{ErrorKind, Read, Seek},
     mem::ManuallyDrop,
     path::PathBuf,
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc,
+        Arc, Mutex, MutexGuard, Weak,
     },
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use log::{debug, error, warn};
-use rustix::event::epoll;
-use rustix::fd::AsFd;
 use rustix::{
-    fd::{AsRawFd, FromRawFd, OwnedFd},
-    fs::{Mode, OFlags},
+    event::epoll::EventFlags,
+    fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    fs::{Mode, OFlags, Timespec},
     io::Errno,
+    time::{timerfd_create, timerfd_settime, Itimerspec, TimerfdFlags, TimerfdTimerFlags},
 };
 use slab::Slab;
 
 use super::{
     errno_to_transfer_error, events,
     usbfs::{self, Urb},
-    SysfsPath,
+    SysfsPath, TransferData,
 };
-use crate::descriptors::{ConfigurationDescriptor, DeviceDescriptor};
-use crate::maybe_future::{blocking::Blocking, MaybeFuture};
-use crate::transfer::{ControlType, Recipient};
 use crate::{
-    descriptors::{parse_concatenated_config_descriptors, DESCRIPTOR_LEN_DEVICE},
+    bitset::EndpointBitSet,
+    descriptors::{
+        parse_concatenated_config_descriptors, ConfigurationDescriptor, DeviceDescriptor,
+        EndpointDescriptor, TransferType, DESCRIPTOR_LEN_DEVICE,
+    },
+    device::ClaimEndpointError,
+    maybe_future::{blocking::Blocking, MaybeFuture},
     transfer::{
-        notify_completion, Control, Direction, TransferError, TransferHandle, TransferType,
+        internal::{
+            notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
+        },
+        request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient,
+        TransferError,
     },
     DeviceInfo, Error, Speed,
 };
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct TimeoutEntry {
+    deadline: Instant,
+    urb: *mut Urb,
+}
+
+unsafe impl Send for TimeoutEntry {}
+unsafe impl Sync for TimeoutEntry {}
 
 static DEVICES: Mutex<Slab<Weak<LinuxDevice>>> = Mutex::new(Slab::new());
 
@@ -49,6 +66,9 @@ pub(crate) struct LinuxDevice {
 
     sysfs: Option<SysfsPath>,
     active_config: AtomicU8,
+
+    timerfd: OwnedFd,
+    timeouts: Mutex<BTreeMap<TimeoutEntry, ()>>,
 }
 
 impl LinuxDevice {
@@ -104,6 +124,12 @@ impl LinuxDevice {
             Self::get_config(&descriptors, &fd)?
         };
 
+        let timerfd = timerfd_create(
+            rustix::time::TimerfdClockId::Monotonic,
+            TimerfdFlags::CLOEXEC | TimerfdFlags::NONBLOCK,
+        )
+        .inspect_err(|e| log::error!("Failed to create timerfd: {e}"))?;
+
         let arc = Arc::new_cyclic(|weak| {
             let events_id = DEVICES.lock().unwrap().insert(weak.clone());
             LinuxDevice {
@@ -112,6 +138,8 @@ impl LinuxDevice {
                 descriptors,
                 sysfs,
                 active_config: AtomicU8::new(active_config),
+                timerfd,
+                timeouts: Mutex::new(BTreeMap::new()),
             }
         });
 
@@ -124,7 +152,13 @@ impl LinuxDevice {
         events::register_fd(
             arc.fd.as_fd(),
             events::Tag::Device(arc.events_id),
-            epoll::EventFlags::OUT,
+            EventFlags::OUT,
+        )?;
+
+        events::register_fd(
+            arc.timerfd.as_fd(),
+            events::Tag::DeviceTimer(arc.events_id),
+            EventFlags::IN,
         )?;
 
         Ok(arc)
@@ -140,18 +174,29 @@ impl LinuxDevice {
     fn handle_events(&self) {
         debug!("Handling events for device {}", self.events_id);
         match usbfs::reap_urb_ndelay(&self.fd) {
-            Ok(urb_ptr) => {
-                let user_data = {
-                    let urb = unsafe { &*urb_ptr };
+            Ok(urb) => {
+                let transfer_data: *mut TransferData = unsafe { &(*urb) }.usercontext.cast();
+
+                {
+                    let transfer = unsafe { &*transfer_data };
+                    debug_assert!(transfer.urb_ptr() == urb);
                     debug!(
                         "URB {:?} for ep {:x} completed, status={} actual_length={}",
-                        urb_ptr, urb.endpoint, urb.status, urb.actual_length
+                        transfer.urb_ptr(),
+                        transfer.urb().endpoint,
+                        transfer.urb().status,
+                        transfer.urb().actual_length
                     );
-                    urb.usercontext
+
+                    if let Some(deadline) = transfer.deadline {
+                        let mut timeouts = self.timeouts.lock().unwrap();
+                        timeouts.remove(&TimeoutEntry { deadline, urb });
+                        self.update_timeouts(timeouts, Instant::now());
+                    }
                 };
 
-                // SAFETY: pointer came from submit via kernel an we're now done with it
-                unsafe { notify_completion::<super::TransferData>(user_data) }
+                // SAFETY: pointer came from submit via kernel and we're now done with it
+                unsafe { notify_completion::<super::TransferData>(transfer_data) }
             }
             Err(Errno::AGAIN) => {}
             Err(Errno::NODEV) => {
@@ -167,6 +212,71 @@ impl LinuxDevice {
                 error!("Unexpected error {e} from REAPURBNDELAY");
             }
         }
+    }
+
+    pub(crate) fn handle_timer_epoll(id: usize) {
+        let device = DEVICES.lock().unwrap().get(id).and_then(|w| w.upgrade());
+        if let Some(device) = device {
+            device.handle_timeouts();
+        }
+    }
+
+    fn handle_timeouts(&self) {
+        debug!("Handling timeouts for device {}", self.events_id);
+        let now = Instant::now();
+
+        rustix::io::read(self.timerfd.as_fd(), &mut [0u8; 8]).ok();
+
+        let mut timeouts = self.timeouts.lock().unwrap();
+        while let Some(entry) = timeouts.first_entry() {
+            if entry.key().deadline > now {
+                break;
+            }
+
+            let urb = entry.remove_entry().0.urb;
+
+            unsafe {
+                match usbfs::discard_urb(&self.fd, urb) {
+                    Ok(()) => debug!("Cancelled URB {urb:?} after timeout"),
+                    Err(e) => debug!("Failed to cancel timed out URB {urb:?}: {e}"),
+                }
+            }
+        }
+
+        self.update_timeouts(timeouts, now);
+    }
+
+    fn update_timeouts(&self, timeouts: MutexGuard<BTreeMap<TimeoutEntry, ()>>, now: Instant) {
+        const TIMESPEC_ZERO: Timespec = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+
+        let next = if let Some((TimeoutEntry { deadline, .. }, _)) = timeouts.first_key_value() {
+            let duration = deadline
+                .checked_duration_since(now)
+                .unwrap_or(Duration::from_nanos(1));
+            log::debug!("Next timeout in {duration:?}");
+            Timespec {
+                tv_sec: duration.as_secs() as i64,
+                tv_nsec: duration.subsec_nanos() as i64,
+            }
+        } else {
+            TIMESPEC_ZERO
+        };
+
+        timerfd_settime(
+            self.timerfd.as_fd(),
+            TimerfdTimerFlags::empty(),
+            &Itimerspec {
+                it_interval: TIMESPEC_ZERO,
+                it_value: next,
+            },
+        )
+        .inspect_err(|e| {
+            log::error!("Failed to set timerfd: {e}");
+        })
+        .ok();
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
@@ -212,75 +322,28 @@ impl LinuxDevice {
         })
     }
 
-    /// SAFETY: `data` must be valid for `len` bytes to read or write, depending on `Direction`
-    unsafe fn control_blocking(
+    pub fn control_in(
         &self,
-        direction: Direction,
-        control: Control,
-        data: *mut u8,
-        len: usize,
+        data: ControlIn,
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        let r = usbfs::control(
-            &self.fd,
-            usbfs::CtrlTransfer {
-                bRequestType: control.request_type(direction),
-                bRequest: control.request,
-                wValue: control.value,
-                wIndex: control.index,
-                wLength: len.try_into().expect("length must fit in u16"),
-                timeout: timeout
-                    .as_millis()
-                    .try_into()
-                    .expect("timeout must fit in u32 ms"),
-                data: data as *mut c_void,
-            },
-        );
-
-        r.map_err(errno_to_transfer_error)
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
+        let t = TransferData::new_control_in(data);
+        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
+            t.status()?;
+            Ok(t.control_in_data().to_owned())
+        })
     }
 
-    pub fn control_in_blocking(
+    pub fn control_out(
         &self,
-        control: Control,
-        data: &mut [u8],
+        data: ControlOut,
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        unsafe {
-            self.control_blocking(
-                Direction::In,
-                control,
-                data.as_mut_ptr(),
-                data.len(),
-                timeout,
-            )
-        }
-    }
-
-    pub fn control_out_blocking(
-        &self,
-        control: Control,
-        data: &[u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        unsafe {
-            self.control_blocking(
-                Direction::Out,
-                control,
-                data.as_ptr() as *mut u8,
-                data.len(),
-                timeout,
-            )
-        }
-    }
-
-    pub(crate) fn make_control_transfer(self: &Arc<Self>) -> TransferHandle<super::TransferData> {
-        TransferHandle::new(super::TransferData::new(
-            self.clone(),
-            None,
-            0,
-            TransferType::Control,
-        ))
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
+        let t = TransferData::new_control_out(data);
+        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(|t| {
+            t.status()?;
+            Ok(())
+        })
     }
 
     pub(crate) fn claim_interface(
@@ -342,27 +405,59 @@ impl LinuxDevice {
         usbfs::attach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
     }
 
-    pub(crate) unsafe fn submit_urb(&self, urb: *mut Urb) {
-        let ep = unsafe { (*urb).endpoint };
-        if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
-            // SAFETY: Transfer was not submitted. We still own the transfer
-            // and can write to the URB and complete it in place of the handler.
-            unsafe {
-                let user_data = {
-                    let u = &mut *urb;
-                    debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
-                    u.actual_length = 0;
-                    u.status = e.raw_os_error();
-                    u.usercontext
-                };
-                notify_completion::<super::TransferData>(user_data)
+    pub(crate) fn submit(&self, transfer: Idle<TransferData>) -> Pending<TransferData> {
+        let pending = transfer.pre_submit();
+        let urb = pending.urb_ptr();
+
+        // SAFETY: We got the urb from `Idle<TransferData>`, which always points to
+        // a valid URB with valid buffers, which is not already pending
+        unsafe {
+            let ep = (*urb).endpoint;
+            (*urb).usercontext = pending.as_ptr().cast();
+            if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
+                // SAFETY: Transfer was not submitted. We still own the transfer
+                // and can write to the URB and complete it in place of the handler.
+                let u = &mut *urb;
+                debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
+                u.actual_length = 0;
+                u.status = e.raw_os_error();
+                notify_completion::<super::TransferData>(pending.as_ptr().cast());
+            } else {
+                debug!("Submitted URB {urb:?} on ep {ep:x}");
             }
-        } else {
-            debug!("Submitted URB {urb:?} on ep {ep:x}");
-        }
+        };
+
+        pending
     }
 
-    pub(crate) unsafe fn cancel_urb(&self, urb: *mut Urb) {
+    fn submit_timeout(
+        &self,
+        mut transfer: Idle<TransferData>,
+        timeout: Duration,
+    ) -> Pending<TransferData> {
+        let urb = transfer.urb_ptr();
+        let now = Instant::now();
+        let deadline = now + timeout;
+        transfer.deadline = Some(deadline);
+
+        // Hold the lock across `submit`, so that it can't complete before we
+        // insert the timeout entry.
+        let mut timeouts = self.timeouts.lock().unwrap();
+
+        let r = self.submit(transfer);
+
+        // This can only be false if submit failed, because we hold the timeouts lock
+        // and would block the completion handler.
+        if !r.is_complete() {
+            timeouts.insert(TimeoutEntry { deadline, urb }, ());
+            self.update_timeouts(timeouts, now);
+        }
+
+        r
+    }
+
+    pub(crate) fn cancel(&self, transfer: &mut Pending<TransferData>) {
+        let urb = transfer.urb_ptr();
         unsafe {
             if let Err(e) = usbfs::discard_urb(&self.fd, urb) {
                 debug!("Failed to cancel URB {urb:?}: {e}");
@@ -374,22 +469,13 @@ impl LinuxDevice {
         const REQUEST_GET_CONFIGURATION: u8 = 0x08;
 
         let mut dst = [0u8; 1];
-
-        let control = Control {
-            control_type: ControlType::Standard,
-            recipient: Recipient::Device,
-            request: REQUEST_GET_CONFIGURATION,
-            value: 0,
-            index: 0,
-        };
-
         let r = usbfs::control(
             &fd,
             usbfs::CtrlTransfer {
-                bRequestType: control.request_type(Direction::In),
-                bRequest: control.request,
-                wValue: control.value,
-                wIndex: control.index,
+                bRequestType: request_type(Direction::In, ControlType::Standard, Recipient::Device),
+                bRequest: REQUEST_GET_CONFIGURATION,
+                wValue: 0,
+                wIndex: 0,
                 wLength: dst.len() as u16,
                 timeout: Duration::from_millis(50)
                     .as_millis()
@@ -460,6 +546,7 @@ impl Drop for LinuxDevice {
     fn drop(&mut self) {
         debug!("Closing device {}", self.events_id);
         events::unregister_fd(self.fd.as_fd());
+        events::unregister_fd(self.timerfd.as_fd());
         DEVICES.lock().unwrap().remove(self.events_id);
     }
 }
@@ -473,39 +560,25 @@ pub(crate) struct LinuxInterface {
 
 #[derive(Default)]
 struct InterfaceState {
+    endpoints: EndpointBitSet,
     alt_setting: u8,
 }
 
 impl LinuxInterface {
-    pub(crate) fn make_transfer(
-        self: &Arc<Self>,
-        endpoint: u8,
-        ep_type: TransferType,
-    ) -> TransferHandle<super::TransferData> {
-        TransferHandle::new(super::TransferData::new(
-            self.device.clone(),
-            Some(self.clone()),
-            endpoint,
-            ep_type,
-        ))
+    pub fn control_in(
+        &self,
+        data: ControlIn,
+        timeout: Duration,
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
+        self.device.control_in(data, timeout)
     }
 
-    pub fn control_in_blocking(
+    pub fn control_out(
         &self,
-        control: Control,
-        data: &mut [u8],
+        data: ControlOut,
         timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        self.device.control_in_blocking(control, data, timeout)
-    }
-
-    pub fn control_out_blocking(
-        &self,
-        control: Control,
-        data: &[u8],
-        timeout: Duration,
-    ) -> Result<usize, TransferError> {
-        self.device.control_out_blocking(control, data, timeout)
+    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
+        self.device.control_out(data, timeout)
     }
 
     pub fn get_alt_setting(&self) -> u8 {
@@ -518,6 +591,13 @@ impl LinuxInterface {
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             let mut state = self.state.lock().unwrap();
+            if !state.endpoints.is_empty() {
+                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "must drop endpoints before changing alt setting",
+                ));
+            }
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
                 self.interface_number
@@ -528,13 +608,31 @@ impl LinuxInterface {
         })
     }
 
-    pub fn clear_halt(
-        self: Arc<Self>,
-        endpoint: u8,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
-        Blocking::new(move || {
-            debug!("Clear halt, endpoint {endpoint:02x}");
-            Ok(usbfs::clear_halt(&self.device.fd, endpoint)?)
+    pub fn endpoint(
+        self: &Arc<Self>,
+        descriptor: EndpointDescriptor,
+    ) -> Result<LinuxEndpoint, ClaimEndpointError> {
+        let address = descriptor.address();
+        let ep_type = descriptor.transfer_type();
+        let max_packet_size = descriptor.max_packet_size();
+
+        let mut state = self.state.lock().unwrap();
+
+        if state.endpoints.is_set(address) {
+            return Err(ClaimEndpointError::Busy);
+        }
+        state.endpoints.set(address);
+
+        Ok(LinuxEndpoint {
+            inner: Arc::new(EndpointInner {
+                address,
+                ep_type,
+                interface: self.clone(),
+                notify: Notify::new(),
+            }),
+            max_packet_size,
+            pending: VecDeque::new(),
+            idle_transfer: None,
         })
     }
 }
@@ -554,5 +652,111 @@ impl Drop for LinuxInterface {
                 self.interface_number, self.device.events_id
             );
         }
+    }
+}
+
+pub(crate) struct LinuxEndpoint {
+    inner: Arc<EndpointInner>,
+
+    pub(crate) max_packet_size: usize,
+
+    /// A queue of pending transfers, expected to complete in order
+    pending: VecDeque<Pending<super::TransferData>>,
+
+    idle_transfer: Option<Idle<TransferData>>,
+}
+
+struct EndpointInner {
+    interface: Arc<LinuxInterface>,
+    address: u8,
+    ep_type: TransferType,
+    notify: Notify,
+}
+
+impl LinuxEndpoint {
+    pub(crate) fn endpoint_address(&self) -> u8 {
+        self.inner.address
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        // Cancel transfers in reverse order to ensure subsequent transfers
+        // can't complete out of order while we're going through them.
+        for transfer in self.pending.iter_mut().rev() {
+            self.inner.interface.device.cancel(transfer);
+        }
+    }
+
+    pub(crate) fn submit(&mut self, data: Buffer) {
+        let mut transfer = self.idle_transfer.take().unwrap_or_else(|| {
+            Idle::new(
+                self.inner.clone(),
+                super::TransferData::new(self.inner.address, self.inner.ep_type),
+            )
+        });
+        transfer.set_buffer(data);
+        self.pending
+            .push_back(self.inner.interface.device.submit(transfer));
+    }
+
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
+        self.inner.notify.subscribe(cx);
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let completion = transfer.take_completion();
+            self.idle_transfer = Some(transfer);
+            Poll::Ready(completion)
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let completion = transfer.take_completion();
+                self.idle_transfer = Some(transfer);
+                completion
+            })
+        })
+    }
+
+    pub(crate) fn clear_halt(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        let inner = self.inner.clone();
+        Blocking::new(move || {
+            let endpoint = inner.address;
+            debug!("Clear halt, endpoint {endpoint:02x}");
+            Ok(usbfs::clear_halt(&inner.interface.device.fd, endpoint)?)
+        })
+    }
+
+    pub(crate) fn allocate(&self, len: usize) -> Result<Buffer, Errno> {
+        Buffer::mmap(&self.inner.interface.device.fd, len).inspect_err(|e| {
+            warn!(
+                "Failed to allocate zero-copy buffer of length {len} for endpoint {}: {e}",
+                self.inner.address
+            );
+        })
+    }
+}
+
+impl Drop for LinuxEndpoint {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+
+impl AsRef<Notify> for EndpointInner {
+    fn as_ref(&self) -> &Notify {
+        &self.notify
+    }
+}
+
+impl Drop for EndpointInner {
+    fn drop(&mut self) {
+        let mut state = self.interface.state.lock().unwrap();
+        state.endpoints.clear(self.address);
     }
 }

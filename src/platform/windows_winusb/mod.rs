@@ -5,10 +5,10 @@ mod events;
 
 mod device;
 pub(crate) use device::WindowsDevice as Device;
+pub(crate) use device::WindowsEndpoint as Endpoint;
 pub(crate) use device::WindowsInterface as Interface;
 
 mod transfer;
-pub(crate) use transfer::TransferData;
 
 mod cfgmgr32;
 mod hub;

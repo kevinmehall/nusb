@@ -1,3 +1,5 @@
+use crate::transfer::TransferError;
+
 mod transfer;
 use io_kit_sys::ret::IOReturn;
 pub(crate) use transfer::TransferData;
@@ -8,12 +10,11 @@ pub use enumeration::{list_buses, list_devices};
 
 mod device;
 pub(crate) use device::MacDevice as Device;
+pub(crate) use device::MacEndpoint as Endpoint;
 pub(crate) use device::MacInterface as Interface;
 
 mod hotplug;
 pub(crate) use hotplug::MacHotplugWatch as HotplugWatch;
-
-use crate::transfer::TransferError;
 
 mod iokit;
 mod iokit_c;
@@ -30,6 +31,6 @@ fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
         io_kit_sys::ret::kIOReturnNoDevice => Err(TransferError::Disconnected),
         io_kit_sys::ret::kIOReturnAborted => Err(TransferError::Cancelled),
         iokit_c::kIOUSBPipeStalled => Err(TransferError::Stall),
-        _ => Err(TransferError::Unknown),
+        _ => Err(TransferError::Unknown(status as i32)),
     }
 }

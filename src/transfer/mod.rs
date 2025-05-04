@@ -1,62 +1,34 @@
 //! Transfer-related types.
 //!
-//! Use the methods on an [`Interface`][`super::Interface`] to make individual
-//! transfers or obtain a [`Queue`] to manage multiple transfers.
+//! Use the methods on an [`Interface`][`super::Interface`] and
+//! [`Endpoint`][`super::Endpoint`] to perform transfers.
 
-use std::{
-    fmt::Display,
-    future::Future,
-    io,
-    marker::PhantomData,
-    task::{Context, Poll},
-};
-
-use crate::platform;
-
-mod queue;
-pub use queue::Queue;
-
-mod buffer;
-pub use buffer::{RequestBuffer, ResponseBuffer};
+use std::{fmt::Display, io};
 
 mod control;
 #[allow(unused)]
-pub(crate) use control::SETUP_PACKET_SIZE;
-pub use control::{Control, ControlIn, ControlOut, ControlType, Direction, Recipient};
+pub(crate) use control::{request_type, SETUP_PACKET_SIZE};
+pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
 
-mod internal;
-pub(crate) use internal::{
-    notify_completion, PlatformSubmit, PlatformTransfer, TransferHandle, TransferRequest,
-};
+mod buffer;
+pub(crate) use buffer::Allocator;
+pub use buffer::Buffer;
 
-/// Endpoint type.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum TransferType {
-    /// Control endpoint.
-    Control = 0,
+pub(crate) mod internal;
 
-    /// Isochronous endpoint.
-    Isochronous = 1,
-
-    /// Bulk endpoint.
-    Bulk = 2,
-
-    /// Interrupt endpoint.
-    Interrupt = 3,
-}
+use crate::descriptors::TransferType;
 
 /// Transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TransferError {
-    /// Transfer was cancelled.
+    /// Transfer was cancelled or timed out.
     Cancelled,
 
     /// Endpoint in a STALL condition.
     ///
     /// This is used by the device to signal that an error occurred. For bulk
     /// and interrupt endpoints, the stall condition can be cleared with
-    /// [`Interface::clear_halt`][crate::Interface::clear_halt]. For control
+    /// [`Interface::clear_halt`][crate::Endpoint::clear_halt]. For control
     /// requests, the stall is automatically cleared when another request is
     /// submitted.
     Stall,
@@ -68,17 +40,24 @@ pub enum TransferError {
     Fault,
 
     /// Unknown or OS-specific error.
-    Unknown,
+    ///
+    /// It won't be considered a breaking change to map unhandled errors from
+    /// `Unknown` to one of the above variants. If you are matching on the
+    /// OS-specific code because an error is not correctly mapped, please open
+    /// an issue or pull request.
+    Unknown(i32),
 }
 
 impl Display for TransferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TransferError::Cancelled => write!(f, "transfer was cancelled"),
-            TransferError::Stall => write!(f, "endpoint STALL condition"),
+            TransferError::Stall => write!(f, "endpoint stalled"),
             TransferError::Disconnected => write!(f, "device disconnected"),
             TransferError::Fault => write!(f, "hardware fault or protocol violation"),
-            TransferError::Unknown => write!(f, "unknown error"),
+            TransferError::Unknown(e) => {
+                write!(f, "unknown error ({})", io::Error::from_raw_os_error(*e))
+            }
         }
     }
 }
@@ -92,87 +71,82 @@ impl From<TransferError> for io::Error {
             TransferError::Stall => io::Error::new(io::ErrorKind::ConnectionReset, value),
             TransferError::Disconnected => io::Error::new(io::ErrorKind::ConnectionAborted, value),
             TransferError::Fault => io::Error::new(io::ErrorKind::Other, value),
-            TransferError::Unknown => io::Error::new(io::ErrorKind::Other, value),
+            TransferError::Unknown(_) => io::Error::new(io::ErrorKind::Other, value),
         }
     }
 }
 
-/// Status and data returned on transfer completion.
-///
-/// A transfer can return partial data even in the case of failure or
-/// cancellation, thus this is a struct containing both `data` and `status`
-/// rather than a `Result`. Use [`into_result`][`Completion::into_result`] to
-/// ignore a partial transfer and get a `Result`.
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct Completion<T> {
-    /// Returned data or buffer to re-use.
-    pub data: T,
+mod private {
+    pub trait Sealed {}
+}
 
-    /// Indicates successful completion or error.
+/// Type-level endpoint direction
+pub trait EndpointDirection: private::Sealed + Send + Sync {
+    /// Runtime direction value
+    const DIR: Direction;
+}
+
+/// Type-level endpoint direction: device-to-host
+pub enum In {}
+impl private::Sealed for In {}
+impl EndpointDirection for In {
+    const DIR: Direction = Direction::In;
+}
+
+/// Type-level endpoint direction: host-to-device
+pub enum Out {}
+impl private::Sealed for Out {}
+impl EndpointDirection for Out {
+    const DIR: Direction = Direction::Out;
+}
+
+/// Type-level endpoint direction
+pub trait EndpointType: private::Sealed + Send + Sync {
+    /// Runtime direction value
+    const TYPE: TransferType;
+}
+
+/// EndpointType for Bulk and interrupt endpoints.
+pub trait BulkOrInterrupt: EndpointType {}
+
+/// Type-level endpoint type: Bulk
+pub enum Bulk {}
+impl private::Sealed for Bulk {}
+impl EndpointType for Bulk {
+    const TYPE: TransferType = TransferType::Bulk;
+}
+impl BulkOrInterrupt for Bulk {}
+
+/// Type-level endpoint type: Interrupt
+pub enum Interrupt {}
+impl private::Sealed for Interrupt {}
+impl EndpointType for Interrupt {
+    const TYPE: TransferType = TransferType::Interrupt;
+}
+impl BulkOrInterrupt for Interrupt {}
+
+/// A completed transfer returned from [`Endpoint::next_complete`][`crate::Endpoint::next_complete`].
+///
+/// A transfer can partially complete even in the case of failure or
+/// cancellation, thus the [`actual_len`][`Self::actual_len`] may be nonzero
+/// even if the [`status`][`Self::status`] is an error.
+#[derive(Debug)]
+pub struct Completion {
+    /// The transfer buffer.
+    pub buffer: Buffer,
+
+    /// The number of bytes transferred.
+    pub actual_len: usize,
+
+    /// Status of the transfer.
     pub status: Result<(), TransferError>,
 }
 
-impl<T> Completion<T> {
+impl Completion {
     /// Ignore any partial completion, turning `self` into a `Result` containing
     /// either the completed buffer for a successful transfer or a
     /// `TransferError`.
-    pub fn into_result(self) -> Result<T, TransferError> {
-        self.status.map(|()| self.data)
-    }
-}
-
-impl TryFrom<Completion<Vec<u8>>> for Vec<u8> {
-    type Error = TransferError;
-
-    fn try_from(c: Completion<Vec<u8>>) -> Result<Self, Self::Error> {
-        c.into_result()
-    }
-}
-
-impl TryFrom<Completion<ResponseBuffer>> for ResponseBuffer {
-    type Error = TransferError;
-
-    fn try_from(c: Completion<ResponseBuffer>) -> Result<Self, Self::Error> {
-        c.into_result()
-    }
-}
-
-/// [`Future`] used to await the completion of a transfer.
-///
-/// Use the methods on [`Interface`][super::Interface] to
-/// submit an individual transfer and obtain a `TransferFuture`.
-///
-/// The transfer is cancelled on drop. The buffer and
-/// any partially-completed data are destroyed. This means
-/// that `TransferFuture` is not [cancel-safe] and cannot be used
-/// in `select!{}`, When racing a `TransferFuture` with a timeout
-/// you cannot tell whether data may have been partially transferred on timeout.
-/// Use the [`Queue`] interface if these matter for your application.
-///
-/// [cancel-safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-pub struct TransferFuture<D: TransferRequest> {
-    transfer: TransferHandle<platform::TransferData>,
-    ty: PhantomData<D::Response>,
-}
-
-impl<D: TransferRequest> TransferFuture<D> {
-    pub(crate) fn new(transfer: TransferHandle<platform::TransferData>) -> TransferFuture<D> {
-        TransferFuture {
-            transfer,
-            ty: PhantomData,
-        }
-    }
-}
-
-impl<D: TransferRequest> Future for TransferFuture<D>
-where
-    platform::TransferData: PlatformSubmit<D>,
-    D::Response: Unpin,
-{
-    type Output = Completion<D::Response>;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.as_mut().transfer.poll_completion::<D>(cx)
+    pub fn into_result(self) -> Result<Buffer, TransferError> {
+        self.status.map(|()| self.buffer)
     }
 }

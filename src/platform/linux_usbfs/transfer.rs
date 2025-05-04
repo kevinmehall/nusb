@@ -1,15 +1,18 @@
 use std::{
-    ffi::c_void,
     mem::{self, ManuallyDrop},
-    ptr::null_mut,
-    sync::Arc,
+    ptr::{addr_of_mut, null_mut},
+    slice,
+    time::Instant,
 };
 
 use rustix::io::Errno;
 
-use crate::transfer::{
-    Completion, ControlIn, ControlOut, PlatformSubmit, PlatformTransfer, RequestBuffer,
-    ResponseBuffer, TransferError, TransferType, SETUP_PACKET_SIZE,
+use crate::{
+    descriptors::TransferType,
+    transfer::{
+        internal::Pending, Allocator, Buffer, Completion, ControlIn, ControlOut, Direction,
+        TransferError, SETUP_PACKET_SIZE,
+    },
 };
 
 use super::{
@@ -24,27 +27,20 @@ use super::{
 ///
 /// This logically contains a `Vec` with urb.buffer and capacity.
 /// It also owns the `urb` allocation itself, which is stored out-of-line
-/// to avoid violating noalias when submitting the transfer while holding
-/// `&mut TransferData`.
+/// to enable isochronous transfers to allocate the variable-length
+/// `iso_packet_desc` array.
 pub struct TransferData {
     urb: *mut Urb,
-    capacity: usize,
-    device: Arc<super::Device>,
-
-    /// Not directly used, exists just to keep the interface from being released
-    /// while active.
-    _interface: Option<Arc<super::Interface>>,
+    capacity: u32,
+    allocator: Allocator,
+    pub(crate) deadline: Option<Instant>,
 }
 
 unsafe impl Send for TransferData {}
+unsafe impl Sync for TransferData {}
 
 impl TransferData {
-    pub(super) fn new(
-        device: Arc<super::Device>,
-        interface: Option<Arc<super::Interface>>,
-        endpoint: u8,
-        ep_type: TransferType,
-    ) -> TransferData {
+    pub(super) fn new(endpoint: u8, ep_type: TransferType) -> TransferData {
         let ep_type = match ep_type {
             TransferType::Control => USBDEVFS_URB_TYPE_CONTROL,
             TransferType::Interrupt => USBDEVFS_URB_TYPE_INTERRUPT,
@@ -52,13 +48,15 @@ impl TransferData {
             TransferType::Isochronous => USBDEVFS_URB_TYPE_ISO,
         };
 
+        let mut empty = ManuallyDrop::new(Vec::new());
+
         TransferData {
             urb: Box::into_raw(Box::new(Urb {
                 ep_type,
                 endpoint,
                 status: 0,
                 flags: 0,
-                buffer: null_mut(),
+                buffer: empty.as_mut_ptr(),
                 buffer_length: 0,
                 actual_length: 0,
                 start_frame: 0,
@@ -68,155 +66,123 @@ impl TransferData {
                 usercontext: null_mut(),
             })),
             capacity: 0,
-            device,
-            _interface: interface,
+            allocator: Allocator::Default,
+            deadline: None,
         }
     }
 
-    fn urb_mut(&mut self) -> &mut Urb {
-        // SAFETY: if we have `&mut`, the transfer is not pending
+    pub(super) fn new_control_out(data: ControlOut) -> TransferData {
+        let mut t = TransferData::new(0x00, TransferType::Control);
+        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
+        buffer.extend_from_slice(&data.setup_packet());
+        buffer.extend_from_slice(&data.data);
+        t.set_buffer(buffer);
+        t
+    }
+
+    pub(super) fn new_control_in(data: ControlIn) -> TransferData {
+        let mut t = TransferData::new(0x80, TransferType::Control);
+        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.length as usize).unwrap());
+        buffer.extend_from_slice(&data.setup_packet());
+        t.set_buffer(buffer);
+        t
+    }
+
+    pub fn set_buffer(&mut self, buf: Buffer) {
+        debug_assert!(self.capacity == 0);
+        let buf = ManuallyDrop::new(buf);
+        self.capacity = buf.capacity;
+        self.urb_mut().buffer = buf.ptr;
+        self.urb_mut().actual_length = 0;
+        self.urb_mut().buffer_length = match Direction::from_address(self.urb().endpoint) {
+            Direction::Out => buf.len as i32,
+            Direction::In => buf.requested_len as i32,
+        };
+        self.allocator = buf.allocator;
+    }
+
+    pub fn take_completion(&mut self) -> Completion {
+        let status = self.status();
+        let requested_len = (&mut *self).urb().buffer_length as u32;
+        let actual_len = self.urb().actual_length as usize;
+        let len = match Direction::from_address((&mut *self).urb().endpoint) {
+            Direction::Out => (&mut *self).urb().buffer_length as u32,
+            Direction::In => (&mut *self).urb().actual_length as u32,
+        };
+
+        let mut empty = ManuallyDrop::new(Vec::new());
+        let ptr = mem::replace(&mut (&mut *self).urb_mut().buffer, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut (&mut *self).capacity, 0);
+        (&mut *self).urb_mut().buffer_length = 0;
+        (&mut *self).urb_mut().actual_length = 0;
+        let allocator = mem::replace(&mut (&mut *self).allocator, Allocator::Default);
+
+        Completion {
+            status,
+            actual_len,
+            buffer: Buffer {
+                ptr,
+                len,
+                requested_len,
+                capacity,
+                allocator,
+            },
+        }
+    }
+
+    #[inline]
+    pub(super) fn urb(&self) -> &Urb {
+        unsafe { &*self.urb }
+    }
+
+    #[inline]
+    pub(super) fn urb_mut(&mut self) -> &mut Urb {
         unsafe { &mut *self.urb }
     }
 
-    fn fill(&mut self, v: Vec<u8>, len: usize, user_data: *mut c_void) {
-        let mut v = ManuallyDrop::new(v);
-        let urb = self.urb_mut();
-        urb.buffer = v.as_mut_ptr();
-        urb.buffer_length = len.try_into().expect("buffer size should fit in i32");
-        urb.usercontext = user_data;
-        urb.actual_length = 0;
-        self.capacity = v.capacity();
+    #[inline]
+    pub(super) fn urb_ptr(&self) -> *mut Urb {
+        self.urb
     }
 
-    /// SAFETY: requires that the transfer has completed and `length` bytes are initialized
-    unsafe fn take_buf(&mut self, length: usize) -> Vec<u8> {
-        let urb = self.urb_mut();
-        assert!(!urb.buffer.is_null());
-        let ptr = mem::replace(&mut urb.buffer, null_mut());
-        let capacity = mem::replace(&mut self.capacity, 0);
-        assert!(length <= capacity);
-        Vec::from_raw_parts(ptr, length, capacity)
+    #[inline]
+    pub fn status(&self) -> Result<(), TransferError> {
+        if self.urb().status == 0 {
+            return Ok(());
+        }
+
+        // It's sometimes positive, sometimes negative, but rustix panics if negative.
+        Err(errno_to_transfer_error(Errno::from_raw_os_error(
+            self.urb().status.abs(),
+        )))
+    }
+
+    #[inline]
+    pub fn control_in_data(&self) -> &[u8] {
+        debug_assert!(self.urb().endpoint == 0x80);
+        let urb = self.urb();
+        unsafe {
+            slice::from_raw_parts(
+                urb.buffer.add(SETUP_PACKET_SIZE),
+                urb.actual_length as usize,
+            )
+        }
+    }
+}
+
+impl Pending<TransferData> {
+    pub fn urb_ptr(&self) -> *mut Urb {
+        // Get urb pointer without dereferencing as `TransferData`, because
+        // it may be mutably aliased.
+        unsafe { *addr_of_mut!((*self.as_ptr()).urb) }
     }
 }
 
 impl Drop for TransferData {
     fn drop(&mut self) {
         unsafe {
-            if !self.urb_mut().buffer.is_null() {
-                drop(Vec::from_raw_parts(self.urb_mut().buffer, 0, self.capacity));
-            }
+            drop(self.take_completion());
             drop(Box::from_raw(self.urb));
         }
     }
-}
-
-impl PlatformTransfer for TransferData {
-    fn cancel(&self) {
-        unsafe {
-            self.device.cancel_urb(self.urb);
-        }
-    }
-}
-
-impl PlatformSubmit<Vec<u8>> for TransferData {
-    unsafe fn submit(&mut self, data: Vec<u8>, user_data: *mut c_void) {
-        let ep = self.urb_mut().endpoint;
-        assert!(ep & 0x80 == 0);
-        let len = data.len();
-        self.fill(data, len, user_data);
-
-        // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.device.submit_urb(self.urb) }
-    }
-
-    unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {
-        let status = urb_status(self.urb_mut());
-        let len = self.urb_mut().actual_length as usize;
-
-        // SAFETY: self is completed (precondition)
-        let data = ResponseBuffer::from_vec(self.take_buf(0), len);
-        Completion { data, status }
-    }
-}
-
-impl PlatformSubmit<RequestBuffer> for TransferData {
-    unsafe fn submit(&mut self, data: RequestBuffer, user_data: *mut c_void) {
-        let ep = self.urb_mut().endpoint;
-        let ty = self.urb_mut().ep_type;
-        assert!(ep & 0x80 == 0x80);
-        assert!(ty == USBDEVFS_URB_TYPE_BULK || ty == USBDEVFS_URB_TYPE_INTERRUPT);
-
-        let (data, len) = data.into_vec();
-        self.fill(data, len, user_data);
-
-        // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.device.submit_urb(self.urb) }
-    }
-
-    unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
-        let status = urb_status(self.urb_mut());
-        let len = self.urb_mut().actual_length as usize;
-
-        // SAFETY: self is completed (precondition) and `actual_length` bytes were initialized.
-        let data = unsafe { self.take_buf(len) };
-        Completion { data, status }
-    }
-}
-
-impl PlatformSubmit<ControlIn> for TransferData {
-    unsafe fn submit(&mut self, data: ControlIn, user_data: *mut c_void) {
-        let buf_len = SETUP_PACKET_SIZE + data.length as usize;
-        let mut buf = Vec::with_capacity(buf_len);
-        buf.extend_from_slice(&data.setup_packet());
-        self.fill(buf, buf_len, user_data);
-
-        // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.device.submit_urb(self.urb) }
-    }
-
-    unsafe fn take_completed(&mut self) -> Completion<Vec<u8>> {
-        let status = urb_status(self.urb_mut());
-        let len = self.urb_mut().actual_length as usize;
-
-        // SAFETY: transfer is completed (precondition) and `actual_length`
-        // bytes were initialized with setup buf in front
-        let mut data = unsafe { self.take_buf(SETUP_PACKET_SIZE + len) };
-        data.splice(0..SETUP_PACKET_SIZE, []);
-        Completion { data, status }
-    }
-}
-
-impl PlatformSubmit<ControlOut<'_>> for TransferData {
-    unsafe fn submit(&mut self, data: ControlOut, user_data: *mut c_void) {
-        let buf_len = SETUP_PACKET_SIZE + data.data.len();
-        let mut buf = Vec::with_capacity(buf_len);
-        buf.extend_from_slice(
-            &data
-                .setup_packet()
-                .expect("data length should fit in setup packet's u16"),
-        );
-        buf.extend_from_slice(data.data);
-        self.fill(buf, buf_len, user_data);
-
-        // SAFETY: we just properly filled the buffer and it is not already pending
-        unsafe { self.device.submit_urb(self.urb) }
-    }
-
-    unsafe fn take_completed(&mut self) -> Completion<ResponseBuffer> {
-        let status = urb_status(self.urb_mut());
-        let len = self.urb_mut().actual_length as usize;
-        let data = ResponseBuffer::from_vec(self.take_buf(0), len);
-        Completion { data, status }
-    }
-}
-
-fn urb_status(urb: &Urb) -> Result<(), TransferError> {
-    if urb.status == 0 {
-        return Ok(());
-    }
-
-    // It's sometimes positive, sometimes negative, but rustix panics if negative.
-    Err(errno_to_transfer_error(Errno::from_raw_os_error(
-        urb.status.abs(),
-    )))
 }

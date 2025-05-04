@@ -1,5 +1,9 @@
-use futures_lite::future::block_on;
-use nusb::{transfer::RequestBuffer, MaybeFuture};
+use std::time::Duration;
+
+use nusb::{
+    transfer::{Bulk, In, Out},
+    MaybeFuture,
+};
 
 fn main() {
     env_logger::init();
@@ -13,21 +17,27 @@ fn main() {
 
     let device = di.open().wait().unwrap();
     let interface = device.claim_interface(0).wait().unwrap();
-
-    block_on(interface.bulk_out(0x02, Vec::from([1, 2, 3, 4, 5])))
-        .into_result()
+    let mut ep_out = interface.endpoint::<Bulk, Out>(0x02).unwrap();
+    let mut ep_in = interface.endpoint::<Bulk, In>(0x81).unwrap();
+    ep_out.submit(vec![1, 2, 3, 4, 5].into());
+    ep_out
+        .wait_next_complete(Duration::from_millis(1000))
+        .unwrap()
+        .status
         .unwrap();
 
-    let mut queue = interface.bulk_in_queue(0x81);
-
     loop {
-        while queue.pending() < 8 {
-            queue.submit(RequestBuffer::new(256));
+        while ep_in.pending() < 8 {
+            let buffer = ep_in.allocate(4096);
+            ep_in.submit(buffer);
         }
-        let result = block_on(queue.next_complete());
+        let result = ep_in
+            .wait_next_complete(Duration::from_millis(1000))
+            .unwrap();
         println!("{result:?}");
         if result.status.is_err() {
             break;
         }
+        ep_in.submit(result.buffer);
     }
 }
