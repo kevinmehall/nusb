@@ -198,7 +198,7 @@ pub fn take_completed_from_option<P>(option: &mut Option<Pending<P>>) -> Option<
 
 impl<P> Drop for Pending<P> {
     fn drop(&mut self) {
-        match self.state().swap(STATE_ABANDONED, Ordering::Acquire) {
+        match self.state().swap(STATE_ABANDONED, Ordering::AcqRel) {
             STATE_PENDING => { /* handler responsible for dropping */ }
             STATE_IDLE => {
                 // SAFETY: state means there is no concurrent access
@@ -217,7 +217,7 @@ pub(crate) unsafe fn notify_completion<P>(transfer: *mut P) {
     unsafe {
         let transfer = transfer as *mut TransferInner<P>;
         let notify = (*transfer).notify.clone();
-        match (*transfer).state.swap(STATE_IDLE, Ordering::Release) {
+        match (*transfer).state.swap(STATE_IDLE, Ordering::AcqRel) {
             STATE_PENDING => (*notify).as_ref().notify(),
             STATE_ABANDONED => {
                 drop(Box::from_raw(transfer));
