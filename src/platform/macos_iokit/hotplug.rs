@@ -6,7 +6,6 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use atomic_waker::AtomicWaker;
 use core_foundation::{base::TCFType, dictionary::CFDictionary, runloop::CFRunLoopSource};
 use io_kit_sys::{
     kIOMasterPortDefault,
@@ -29,18 +28,18 @@ use super::{
 };
 
 // Wakers are owned by a global slab to avoid race conditions when freeing them
-static WAKERS: Mutex<Slab<AtomicWaker>> = Mutex::new(Slab::new());
+static WAKERS: Mutex<Slab<Option<Waker>>> = Mutex::new(Slab::new());
 
 /// An AtomicWaker registered with `WAKERS`
 struct SlabWaker(usize);
 
 impl SlabWaker {
     fn new() -> SlabWaker {
-        SlabWaker(WAKERS.lock().unwrap().insert(AtomicWaker::new()))
+        SlabWaker(WAKERS.lock().unwrap().insert(None))
     }
 
     fn register(&self, w: &Waker) {
-        WAKERS.lock().unwrap()[self.0].register(w);
+        WAKERS.lock().unwrap()[self.0].replace(w.clone());
     }
 }
 
@@ -181,7 +180,7 @@ fn register_notification(
 unsafe extern "C" fn callback(refcon: *mut c_void, _iterator: io_iterator_t) {
     debug!("hotplug event callback");
     let id = refcon as usize;
-    if let Some(waker) = WAKERS.lock().unwrap().get(id) {
-        waker.wake()
+    if let Some(waker) = WAKERS.lock().unwrap().get_mut(id) {
+        waker.take().map(|w| w.wake());
     }
 }
