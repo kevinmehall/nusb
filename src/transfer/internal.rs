@@ -162,11 +162,15 @@ impl<P: PlatformTransfer> TransferHandle<P> {
 
 impl<P: PlatformTransfer> Drop for TransferHandle<P> {
     fn drop(&mut self) {
+        if self.inner().state.load(Ordering::Acquire) == STATE_PENDING {
+            // Must not touch the transfer to cancel after setting the state to
+            // ABANDONED, because if it completes at that point, we'll race with
+            // the completion handler dropping the transfer.
+            self.cancel();
+        }
+
         match self.inner().state.swap(STATE_ABANDONED, Ordering::Acquire) {
-            STATE_PENDING => {
-                self.cancel();
-                /* handler responsible for dropping */
-            }
+            STATE_PENDING => { /* handler responsible for dropping */ }
             STATE_IDLE | STATE_COMPLETED => {
                 // SAFETY: state means there is no concurrent access
                 unsafe { drop(Box::from_raw(self.ptr.as_ptr())) }
