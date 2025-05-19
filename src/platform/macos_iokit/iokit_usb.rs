@@ -109,10 +109,10 @@ impl IoKitDevice {
                 return Ok(IoKitDevice { raw: raw_device });
             }
 
-            return Err(Error::new(
+            Err(Error::new(
                 ErrorKind::NotFound,
                 "Couldn't create device after retries",
-            ));
+            ))
         }
     }
 
@@ -240,7 +240,7 @@ impl IoKitInterface {
                 panic!("query_interface returned a null pointer, which Apple says is impossible");
             }
 
-            return Ok(IoKitInterface { raw });
+            Ok(IoKitInterface { raw })
         }
     }
 

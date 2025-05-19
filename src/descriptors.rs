@@ -18,15 +18,22 @@ use crate::{transfer::Direction, Error};
 pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_CONFIGURATION: u8 = 9;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_INTERFACE: u8 = 0x04;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_INTERFACE: u8 = 9;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_ENDPOINT: u8 = 0x05;
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_LEN_ENDPOINT: u8 = 7;
 
+/// https://www.beyondlogic.org/usbnutshell/usb5.shtml#ConfigurationDescriptors
 pub(crate) const DESCRIPTOR_TYPE_STRING: u8 = 0x03;
 
 /// USB defined language IDs for string descriptors.
@@ -46,7 +53,7 @@ pub mod language_id {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Descriptor<'a>(&'a [u8]);
 
-impl<'a> Descriptor<'a> {
+impl Descriptor<'_> {
     /// Create a `Descriptor` from a buffer.
     ///
     /// Returns `None` if
@@ -73,7 +80,7 @@ impl<'a> Descriptor<'a> {
     }
 }
 
-impl<'a> Deref for Descriptor<'a> {
+impl Deref for Descriptor<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -192,7 +199,7 @@ impl DeviceDescriptor {
     /// This ignores any trailing data after the `bLength` specified in the descriptor.
     pub fn new(buf: &[u8]) -> Option<Self> {
         let Some(buf) = buf.get(0..DESCRIPTOR_LEN_DEVICE as usize) else {
-            if buf.len() != 0 {
+            if !buf.is_empty() {
                 warn!(
                     "device descriptor buffer is {} bytes, need {}",
                     buf.len(),
@@ -203,7 +210,7 @@ impl DeviceDescriptor {
         };
         let buf: [u8; DESCRIPTOR_LEN_DEVICE as usize] = buf.try_into().ok()?;
         if buf[0] < DESCRIPTOR_LEN_DEVICE {
-            warn!("invalid device descriptor bLength");
+            warn!("invalid config descriptor bLength. expected {DESCRIPTOR_LEN_CONFIGURATION}, got {}", buf[0]);
             None
         } else if buf[1] != DESCRIPTOR_TYPE_DEVICE {
             warn!(
@@ -221,7 +228,7 @@ impl DeviceDescriptor {
         &self.0
     }
 
-    #[allow(unused)]
+    #[allow(unused, clippy::too_many_arguments)]
     pub(crate) fn from_fields(
         usb_version: u16,
         class: u8,
@@ -360,7 +367,7 @@ impl<'a> ConfigurationDescriptor<'a> {
     /// This ignores any trailing data after the length specified in `wTotalLen`.
     pub fn new(buf: &[u8]) -> Option<ConfigurationDescriptor> {
         if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
-            if buf.len() != 0 {
+            if !buf.is_empty() {
                 warn!(
                     "config descriptor buffer is {} bytes, need {}",
                     buf.len(),
@@ -463,7 +470,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> ConfigurationDescriptor<'a> {
+impl ConfigurationDescriptor<'_> {
     /// Index of the string descriptor describing this configuration.
     #[doc(alias = "iConfiguration")]
     pub fn string_index(&self) -> Option<NonZeroU8> {
@@ -484,7 +491,7 @@ where
     }
 }
 
-impl<'a> Debug for ConfigurationDescriptor<'a> {
+impl Debug for ConfigurationDescriptor<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Configuration")
             .field("configuration_value", &self.configuration_value())
@@ -591,7 +598,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> InterfaceDescriptor<'a> {
+impl InterfaceDescriptor<'_> {
     /// Index of the string descriptor describing this interface or alternate setting.
     #[doc(alias = "iInterface")]
     pub fn string_index(&self) -> Option<NonZeroU8> {
@@ -599,7 +606,7 @@ impl<'a> InterfaceDescriptor<'a> {
     }
 }
 
-impl<'a> Debug for InterfaceDescriptor<'a> {
+impl Debug for InterfaceDescriptor<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterfaceAltSetting")
             .field("interface_number", &self.interface_number())
@@ -680,7 +687,7 @@ descriptor_fields! {
     }
 }
 
-impl<'a> Debug for EndpointDescriptor<'a> {
+impl Debug for EndpointDescriptor<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
             .field("address", &format_args!("0x{:02X}", self.address()))
@@ -738,6 +745,7 @@ impl From<ActiveConfigurationError> for Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
 #[allow(unused)]
 pub(crate) fn parse_concatenated_config_descriptors(
@@ -774,6 +782,7 @@ pub fn fuzz_parse_concatenated_config_descriptors(buf: &[u8]) -> impl Iterator<I
     parse_concatenated_config_descriptors(buf)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_concatenated {
     use super::parse_concatenated_config_descriptors;

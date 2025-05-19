@@ -33,6 +33,17 @@ pub enum ControlType {
     Vendor = 2,
 }
 
+#[cfg(target_arch = "wasm32")]
+impl From<ControlType> for web_sys::UsbRequestType {
+    fn from(value: ControlType) -> Self {
+        match value {
+            ControlType::Standard => web_sys::UsbRequestType::Standard,
+            ControlType::Class => web_sys::UsbRequestType::Class,
+            ControlType::Vendor => web_sys::UsbRequestType::Vendor,
+        }
+    }
+}
+
 /// Entity targeted by the request.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -48,6 +59,18 @@ pub enum Recipient {
 
     /// Other request.
     Other = 3,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<Recipient> for web_sys::UsbRecipient {
+    fn from(value: Recipient) -> Self {
+        match value {
+            Recipient::Device => web_sys::UsbRecipient::Device,
+            Recipient::Interface => web_sys::UsbRecipient::Interface,
+            Recipient::Endpoint => web_sys::UsbRecipient::Endpoint,
+            Recipient::Other => web_sys::UsbRecipient::Other,
+        }
+    }
 }
 
 /// SETUP packet and associated data to make an **OUT** request on a control endpoint.
@@ -80,7 +103,7 @@ pub struct ControlOut<'a> {
     pub data: &'a [u8],
 }
 
-impl<'a> ControlOut<'a> {
+impl ControlOut<'_> {
     #[allow(unused)]
     pub(crate) fn setup_packet(&self) -> [u8; SETUP_PACKET_SIZE] {
         pack_setup(

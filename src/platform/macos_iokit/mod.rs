@@ -31,6 +31,6 @@ fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
         io_kit_sys::ret::kIOReturnNoDevice => Err(TransferError::Disconnected),
         io_kit_sys::ret::kIOReturnAborted => Err(TransferError::Cancelled),
         iokit_c::kIOUSBPipeStalled => Err(TransferError::Stall),
-        _ => Err(TransferError::Unknown(status as i32)),
+        _ => Err(TransferError::Unknown(status)),
     }
 }
