@@ -75,7 +75,7 @@ impl TransferData {
         let mut t = TransferData::new(0x00, TransferType::Control);
         let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
         buffer.extend_from_slice(&data.setup_packet());
-        buffer.extend_from_slice(&data.data);
+        buffer.extend_from_slice(data.data);
         t.set_buffer(buffer);
         t
     }
@@ -103,19 +103,19 @@ impl TransferData {
 
     pub fn take_completion(&mut self) -> Completion {
         let status = self.status();
-        let requested_len = (&mut *self).urb().buffer_length as u32;
+        let requested_len = self.urb().buffer_length as u32;
         let actual_len = self.urb().actual_length as usize;
-        let len = match Direction::from_address((&mut *self).urb().endpoint) {
-            Direction::Out => (&mut *self).urb().buffer_length as u32,
-            Direction::In => (&mut *self).urb().actual_length as u32,
+        let len = match Direction::from_address(self.urb().endpoint) {
+            Direction::Out => self.urb().buffer_length as u32,
+            Direction::In => self.urb().actual_length as u32,
         };
 
         let mut empty = ManuallyDrop::new(Vec::new());
-        let ptr = mem::replace(&mut (&mut *self).urb_mut().buffer, empty.as_mut_ptr());
-        let capacity = mem::replace(&mut (&mut *self).capacity, 0);
-        (&mut *self).urb_mut().buffer_length = 0;
-        (&mut *self).urb_mut().actual_length = 0;
-        let allocator = mem::replace(&mut (&mut *self).allocator, Allocator::Default);
+        let ptr = mem::replace(&mut self.urb_mut().buffer, empty.as_mut_ptr());
+        let capacity = mem::replace(&mut self.capacity, 0);
+        self.urb_mut().buffer_length = 0;
+        self.urb_mut().actual_length = 0;
+        let allocator = mem::replace(&mut self.allocator, Allocator::Default);
 
         Completion {
             status,

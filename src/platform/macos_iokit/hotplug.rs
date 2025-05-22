@@ -1,6 +1,5 @@
 use std::{
     ffi::{c_char, c_void},
-    io::ErrorKind,
     mem::ManuallyDrop,
     sync::Mutex,
     task::{Context, Poll, Waker},
@@ -80,7 +79,7 @@ impl MacHotplugWatch {
         let dictionary = unsafe {
             let d = IOServiceMatching(kIOUSBDeviceClassName);
             if d.is_null() {
-                return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
+                return Err(Error::other("IOServiceMatching failed"));
             }
             CFDictionary::wrap_under_create_rule(d)
         };
@@ -163,10 +162,7 @@ fn register_notification(
         );
 
         if r != kIOReturnSuccess {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Failed to register notification",
-            ));
+            return Err(Error::other("Failed to register notification"));
         }
         let mut iter = IoServiceIterator::new(iter);
 
@@ -181,6 +177,8 @@ unsafe extern "C" fn callback(refcon: *mut c_void, _iterator: io_iterator_t) {
     debug!("hotplug event callback");
     let id = refcon as usize;
     if let Some(waker) = WAKERS.lock().unwrap().get_mut(id) {
-        waker.take().map(|w| w.wake());
+        if let Some(w) = waker.take() {
+            w.wake()
+        }
     }
 }

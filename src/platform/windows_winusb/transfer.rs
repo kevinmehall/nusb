@@ -80,7 +80,7 @@ impl TransferData {
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
         let capacity = mem::replace(&mut self.capacity, 0);
         let len = match Direction::from_address(self.endpoint) {
-            Direction::Out => self.request_len as u32,
+            Direction::Out => self.request_len,
             Direction::In => actual_len,
         };
         let requested_len = mem::replace(&mut self.request_len, 0);

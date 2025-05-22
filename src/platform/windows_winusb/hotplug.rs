@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     ffi::c_void,
-    io::ErrorKind,
     mem::size_of,
     ptr::{self, addr_of},
     sync::Mutex,
@@ -80,10 +79,7 @@ impl WindowsHotplugWatch {
 
         if cr != CR_SUCCESS {
             error!("CM_Register_Notification failed: {cr}");
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Failed to initialize hotplug notifications",
-            ));
+            return Err(Error::other("Failed to initialize hotplug notifications"));
         }
 
         Ok(WindowsHotplugWatch {
@@ -165,6 +161,9 @@ unsafe extern "system" fn hotplug_callback(
 
     debug!("Hotplug callback: action={action:?}, instance={device_instance}");
     inner.events.lock().unwrap().push_back((action, devinst));
-    inner.waker.lock().unwrap().take().map(|w| w.wake());
-    return ERROR_SUCCESS;
+    if let Some(w) = inner.waker.lock().unwrap().take() {
+        w.wake()
+    }
+
+    ERROR_SUCCESS
 }

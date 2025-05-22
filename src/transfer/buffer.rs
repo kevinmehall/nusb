@@ -105,6 +105,12 @@ impl Buffer {
         self.len as usize
     }
 
+    /// Returns `true` if the buffer is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Requested length for IN transfer or actual length for OUT transfer.
     #[inline]
     pub fn requested_len(&self) -> usize {

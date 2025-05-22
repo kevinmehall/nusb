@@ -80,10 +80,7 @@ impl IoKitDevice {
 
                 if raw_device_plugin.is_null() {
                     error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        "Could not create PlugInInterface",
-                    ));
+                    return Err(Error::other("Could not create PlugInInterface"));
                 }
 
                 let device_plugin = PluginInterface::new(raw_device_plugin);
@@ -109,10 +106,10 @@ impl IoKitDevice {
                 return Ok(IoKitDevice { raw: raw_device });
             }
 
-            return Err(Error::new(
+            Err(Error::new(
                 ErrorKind::NotFound,
                 "Couldn't create device after retries",
-            ));
+            ))
         }
     }
 
@@ -216,10 +213,7 @@ impl IoKitInterface {
 
             if raw_interface_plugin.is_null() {
                 error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    "Could not create PlugInInterface",
-                ));
+                return Err(Error::other("Could not create PlugInInterface"));
             }
 
             let interface_plugin = PluginInterface::new(raw_interface_plugin);
@@ -240,7 +234,7 @@ impl IoKitInterface {
                 panic!("query_interface returned a null pointer, which Apple says is impossible");
             }
 
-            return Ok(IoKitInterface { raw });
+            Ok(IoKitInterface { raw })
         }
     }
 

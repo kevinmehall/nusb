@@ -82,8 +82,7 @@ impl SysfsPath {
                     SysfsError(
                         p,
                         SysfsErrorKind::Parse(format!(
-                            "Failed to read filename for readlink attribute {}",
-                            attr
+                            "Failed to read filename for readlink attribute {attr}",
                         )),
                     )
                 })
@@ -94,7 +93,7 @@ impl SysfsPath {
         fs::read_dir(&self.0)
             .ok()
             .into_iter()
-            .flat_map(|x| x)
+            .flatten()
             .filter_map(|f| f.ok())
             .filter(|f| f.file_type().ok().is_some_and(|t| t.is_dir()))
             .map(|f| SysfsPath(f.path()))
@@ -117,7 +116,7 @@ impl FromHexStr for u16 {
     }
 }
 
-const SYSFS_USB_PREFIX: &'static str = "/sys/bus/usb/devices/";
+const SYSFS_USB_PREFIX: &str = "/sys/bus/usb/devices/";
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
@@ -215,9 +214,9 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
         device_version: path.read_attr_hex("bcdDevice")?,
         usb_version: path.parse_attr("version", |s| {
             // in sysfs, `bcdUSB`` is formatted as `%2x.%02x, so we have to parse it back.
-            s.split('.')
-                .map(|x| u16::from_hex_str(x))
-                .fold(Ok::<u16, ParseIntError>(0), |a, b| Ok((a? << 8) | b?))
+            s.split('.').try_fold(0, |a, b| {
+                Ok::<u16, ParseIntError>((a << 8) | u16::from_hex_str(b)?)
+            })
         })?,
         class: path.read_attr_hex("bDeviceClass")?,
         subclass: path.read_attr_hex("bDeviceSubClass")?,

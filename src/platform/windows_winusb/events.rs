@@ -36,7 +36,7 @@ impl IoCompletionPort {
     fn register(&self, handle: &OwnedHandle) -> Result<(), Error> {
         unsafe {
             let r = CreateIoCompletionPort(raw_handle(handle), raw_handle(&self.0), 0, 0);
-            if r == ptr::null_mut() {
+            if r.is_null() {
                 let err = std::io::Error::last_os_error();
                 error!("CreateIoCompletionPort (register) failed: {err:?}");
                 Err(err)
