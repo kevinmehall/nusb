@@ -62,8 +62,6 @@ pub(crate) const kIOUSBTransactionTimeout: c_int = SYS_IOKIT | SUB_IOKIT_USB | 0
 pub(crate) const kIOUSBFindInterfaceDontCare: UInt16 = 0xFFFF;
 
 //
-
-//
 // Type aliases.
 //
 pub(crate) type REFIID = CFUUIDBytes;
