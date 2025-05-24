@@ -43,7 +43,7 @@ fn usb_service_iter() -> Result<IoServiceIterator, Error> {
     unsafe {
         let dictionary = IOServiceMatching(kIOUSBDeviceClassName);
         if dictionary.is_null() {
-            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
+            return Err(Error::other("IOServiceMatching failed"));
         }
 
         let mut iterator = 0;
@@ -67,7 +67,7 @@ fn usb_controller_service_iter(
             UsbControllerType::VHCI => IOServiceMatching(kAppleUSBVHCI),
         };
         if dictionary.is_null() {
-            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
+            return Err(Error::other("IOServiceMatching failed"));
         }
 
         let mut iterator = 0;
@@ -271,7 +271,7 @@ fn parse_location_id(id: u32) -> Vec<u8> {
     while shift != 0 {
         let port = shift >> 28;
         chain.push(port as u8);
-        shift = shift << 4;
+        shift <<= 4;
     }
 
     chain
@@ -281,18 +281,18 @@ fn parse_location_id(id: u32) -> Vec<u8> {
 /// we have all the fields to rebuild it exactly.
 pub(crate) fn device_descriptor_from_fields(device: &IoService) -> Option<DeviceDescriptor> {
     Some(DeviceDescriptor::from_fields(
-        get_integer_property(&device, "bcdUSB")? as u16,
-        get_integer_property(&device, "bDeviceClass")? as u8,
-        get_integer_property(&device, "bDeviceSubClass")? as u8,
-        get_integer_property(&device, "bDeviceProtocol")? as u8,
-        get_integer_property(&device, "bMaxPacketSize0")? as u8,
-        get_integer_property(&device, "idVendor")? as u16,
-        get_integer_property(&device, "idProduct")? as u16,
-        get_integer_property(&device, "bcdDevice")? as u16,
-        get_integer_property(&device, "iManufacturer")? as u8,
-        get_integer_property(&device, "iProduct")? as u8,
-        get_integer_property(&device, "iSerialNumber")? as u8,
-        get_integer_property(&device, "bNumConfigurations")? as u8,
+        get_integer_property(device, "bcdUSB")? as u16,
+        get_integer_property(device, "bDeviceClass")? as u8,
+        get_integer_property(device, "bDeviceSubClass")? as u8,
+        get_integer_property(device, "bDeviceProtocol")? as u8,
+        get_integer_property(device, "bMaxPacketSize0")? as u8,
+        get_integer_property(device, "idVendor")? as u16,
+        get_integer_property(device, "idProduct")? as u16,
+        get_integer_property(device, "bcdDevice")? as u16,
+        get_integer_property(device, "iManufacturer")? as u8,
+        get_integer_property(device, "iProduct")? as u8,
+        get_integer_property(device, "iSerialNumber")? as u8,
+        get_integer_property(device, "bNumConfigurations")? as u8,
     ))
 }
 

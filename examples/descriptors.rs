@@ -37,6 +37,6 @@ fn inspect_device(dev: DeviceInfo) {
     for config in dev.configurations() {
         println!("{config:#?}");
     }
-    println!("");
-    println!("");
+    println!();
+    println!();
 }

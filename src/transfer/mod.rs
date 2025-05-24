@@ -70,8 +70,8 @@ impl From<TransferError> for io::Error {
             TransferError::Cancelled => io::Error::new(io::ErrorKind::Interrupted, value),
             TransferError::Stall => io::Error::new(io::ErrorKind::ConnectionReset, value),
             TransferError::Disconnected => io::Error::new(io::ErrorKind::ConnectionAborted, value),
-            TransferError::Fault => io::Error::new(io::ErrorKind::Other, value),
-            TransferError::Unknown(_) => io::Error::new(io::ErrorKind::Other, value),
+            TransferError::Fault => io::Error::other(value),
+            TransferError::Unknown(_) => io::Error::other(value),
         }
     }
 }

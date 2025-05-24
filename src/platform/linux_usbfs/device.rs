@@ -472,7 +472,7 @@ impl LinuxDevice {
 
         let mut dst = [0u8; 1];
         let r = usbfs::control(
-            &fd,
+            fd,
             usbfs::CtrlTransfer {
                 bRequestType: request_type(Direction::In, ControlType::Standard, Recipient::Device),
                 bRequest: REQUEST_GET_CONFIGURATION,
@@ -525,7 +525,7 @@ impl LinuxDevice {
             "No available configurations for device fd {}",
             fd.as_raw_fd()
         );
-        return Err(ErrorKind::Other.into());
+        Err(ErrorKind::Other.into())
     }
 
     pub(crate) fn speed(&self) -> Option<Speed> {
@@ -595,8 +595,7 @@ impl LinuxInterface {
             let mut state = self.state.lock().unwrap();
             if !state.endpoints.is_empty() {
                 // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
-                return Err(Error::new(
-                    ErrorKind::Other,
+                return Err(Error::other(
                     "must drop endpoints before changing alt setting",
                 ));
             }

@@ -115,7 +115,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
             })
             .collect()
     } else {
-        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or(Vec::new())
+        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default()
     };
 
     interfaces.sort_unstable_by_key(|i| i.interface_number);
@@ -241,10 +241,7 @@ pub(crate) fn get_winusb_device_path(dev: DevInst) -> Result<WCString, Error> {
     let paths = dev.interfaces(GUID_DEVINTERFACE_USB_DEVICE);
 
     let Some(path) = paths.iter().next() else {
-        return Err(Error::new(
-            ErrorKind::Other,
-            "Failed to find device path for WinUSB device",
-        ));
+        return Err(Error::other("Failed to find device path for WinUSB device"));
     };
 
     Ok(path.to_owned())
@@ -301,8 +298,7 @@ pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString,
 
     let paths = child.interfaces(guid);
     let Some(path) = paths.iter().next() else {
-        return Err(Error::new(
-            ErrorKind::Other,
+        return Err(Error::other(
             "Failed to find device path for WinUSB interface",
         ));
     };

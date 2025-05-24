@@ -122,10 +122,9 @@ pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), Error> {
     #[deny(unreachable_patterns)]
     match r {
         io_kit_sys::ret::kIOReturnSuccess => Ok(()),
-        io_kit_sys::ret::kIOReturnExclusiveAccess => Err(Error::new(
-            ErrorKind::Other,
-            "could not be opened for exclusive access",
-        )),
+        io_kit_sys::ret::kIOReturnExclusiveAccess => {
+            Err(Error::other("could not be opened for exclusive access"))
+        }
         io_kit_sys::ret::kIOReturnNotFound => Err(Error::new(ErrorKind::NotFound, "not found")),
         _ => Err(Error::from_raw_os_error(r)),
     }

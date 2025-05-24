@@ -18,7 +18,8 @@ use windows_sys::Win32::{
     Devices::Usb::{
         self, WinUsb_ControlTransfer, WinUsb_Free, WinUsb_GetAssociatedInterface,
         WinUsb_Initialize, WinUsb_ReadPipe, WinUsb_ResetPipe, WinUsb_SetCurrentAlternateSetting,
-        WinUsb_SetPipePolicy, WinUsb_WritePipe, WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET,
+        WinUsb_SetPipePolicy, WinUsb_WritePipe, USB_DEVICE_DESCRIPTOR, WINUSB_INTERFACE_HANDLE,
+        WINUSB_SETUP_PACKET,
     },
     Foundation::{GetLastError, ERROR_IO_PENDING, ERROR_NOT_FOUND, FALSE, HANDLE, TRUE},
     System::IO::{CancelIoEx, OVERLAPPED},
@@ -78,7 +79,9 @@ impl WindowsDevice {
 
             // Safety: Windows API struct is repr(C), packed, and we're assuming Windows is little-endian
             let device_descriptor = unsafe {
-                &transmute::<_, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(connection_info.device_desc)
+                &transmute::<USB_DEVICE_DESCRIPTOR, [u8; DESCRIPTOR_LEN_DEVICE as usize]>(
+                    connection_info.device_desc,
+                )
             };
             let device_descriptor = DeviceDescriptor::new(device_descriptor)
                 .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid device descriptor"))?;
@@ -100,7 +103,7 @@ impl WindowsDevice {
                 config_descriptors,
                 speed: connection_info.speed,
                 active_config: connection_info.active_config,
-                devinst: devinst,
+                devinst,
                 handles: Mutex::new(BTreeMap::new()),
             }))
         })
@@ -260,7 +263,7 @@ unsafe impl Sync for WinusbFileHandle {}
 
 impl WinusbFileHandle {
     fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
-        let handle = create_file(&path)?;
+        let handle = create_file(path)?;
         super::events::register(&handle)?;
 
         let winusb_handle = unsafe {
@@ -466,12 +469,11 @@ impl WindowsInterface {
             let mut state = self.state.lock().unwrap();
             if !state.endpoints.is_empty() {
                 // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
-                return Err(Error::new(
-                    ErrorKind::Other,
+                return Err(Error::other(
                     "must drop endpoints before changing alt setting",
                 ));
             }
-            let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting.into());
+            let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting);
             if r == TRUE {
                 debug!(
                     "Set interface {} alt setting to {alt_setting}",
@@ -550,7 +552,7 @@ impl WindowsInterface {
                     self.winusb_handle,
                     endpoint,
                     buf,
-                    len.try_into().expect("transfer size should fit in u32"),
+                    len,
                     null_mut(),
                     ptr as *mut OVERLAPPED,
                 ),
@@ -558,7 +560,7 @@ impl WindowsInterface {
                     self.winusb_handle,
                     endpoint,
                     buf,
-                    len.try_into().expect("transfer size should fit in u32"),
+                    len,
                     null_mut(),
                     ptr as *mut OVERLAPPED,
                 ),
@@ -611,7 +613,7 @@ impl WindowsInterface {
             // Safety: Transfer was not submitted, so we still own it
             // and must complete it in place of the event thread.
             unsafe {
-                (&mut *t.as_ptr()).overlapped.Internal = err as _;
+                (*t.as_ptr()).overlapped.Internal = err as _;
                 notify_completion::<TransferData>(t.as_ptr());
             }
         }

@@ -61,5 +61,5 @@ fn inspect_device(dev: DeviceInfo) {
         println!("  Serial({i_serial}): {s:?}");
     }
 
-    println!("");
+    println!();
 }

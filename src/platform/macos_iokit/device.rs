@@ -82,12 +82,8 @@ impl MacDevice {
                 }
             };
 
-            let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Other,
-                    "could not read properties for device descriptor",
-                )
-            })?;
+            let device_descriptor = device_descriptor_from_fields(&service)
+                .ok_or_else(|| Error::other("could not read properties for device descriptor"))?;
 
             let active_config = if let Some(active_config) = guess_active_config(&device) {
                 log::debug!("Active config from single descriptor is {}", active_config);
@@ -132,15 +128,14 @@ impl MacDevice {
     }
 
     fn require_open_exclusive(&self) -> Result<(), Error> {
-        let mut state = self.is_open_exclusive.lock().unwrap();
-        if *state == false {
+        let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
+        if !*is_open_exclusive {
             unsafe { check_iokit_return(call_iokit_function!(self.device.raw, USBDeviceOpen()))? };
-            *state = true;
+            *is_open_exclusive = true;
         }
 
         if self.claimed_interfaces.load(Ordering::Relaxed) != 0 {
-            return Err(Error::new(
-                ErrorKind::Other,
+            return Err(Error::other(
                 "cannot perform this operation while interfaces are claimed",
             ));
         }
@@ -187,14 +182,8 @@ impl MacDevice {
                 .device
                 .create_interface_iterator()?
                 .find(|io_service| {
-                    let current_number = get_integer_property(io_service, "bInterfaceNumber");
-                    let found = current_number == Some(interface_number as i64);
-                    debug!(
-                        "Looking for interface to claim [n={interface_number}], examining interface [n={}]{}",
-                        current_number.map(|n| n.to_string()).unwrap_or_else(|| "unknown".to_string()),
-                        found.then(|| " (found)").unwrap_or("")
-                    );
-                    found
+                    get_integer_property(io_service, "bInterfaceNumber")
+                        == Some(interface_number as i64)
                 })
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
@@ -351,8 +340,7 @@ impl MacInterface {
             if !state.endpoints_used.is_empty() {
                 // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
 
-                return Err(Error::new(
-                    ErrorKind::Other,
+                return Err(Error::other(
                     "must drop endpoints before changing alt setting",
                 ));
             }

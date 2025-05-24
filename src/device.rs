@@ -139,7 +139,7 @@ impl Device {
 
         self.configurations()
             .find(|c| c.configuration_value() == active)
-            .ok_or_else(|| ActiveConfigurationError {
+            .ok_or(ActiveConfigurationError {
                 configuration_value: active,
             })
     }
@@ -661,7 +661,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// ## Panics
     ///  * if there are no transfers pending (that is, if [`Self::pending()`]
-    /// would return 0).
+    ///    would return 0).
     pub fn poll_next_complete(&mut self, cx: &mut Context<'_>) -> Poll<Completion> {
         self.backend.poll_next_complete(cx)
     }
@@ -676,7 +676,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// ## Panics
     ///  * if there are no transfers pending (that is, if [`Self::pending()`]
-    /// would return 0).
+    ///    would return 0).
     pub fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.backend.wait_next_complete(timeout)
     }

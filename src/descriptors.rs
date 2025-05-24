@@ -5,7 +5,6 @@
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
-    io::ErrorKind,
     iter,
     num::NonZeroU8,
     ops::Deref,
@@ -192,7 +191,7 @@ impl DeviceDescriptor {
     /// This ignores any trailing data after the `bLength` specified in the descriptor.
     pub fn new(buf: &[u8]) -> Option<Self> {
         let Some(buf) = buf.get(0..DESCRIPTOR_LEN_DEVICE as usize) else {
-            if buf.len() != 0 {
+            if !buf.is_empty() {
                 warn!(
                     "device descriptor buffer is {} bytes, need {}",
                     buf.len(),
@@ -222,6 +221,7 @@ impl DeviceDescriptor {
     }
 
     #[allow(unused)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_fields(
         usb_version: u16,
         class: u8,
@@ -360,7 +360,7 @@ impl<'a> ConfigurationDescriptor<'a> {
     /// This ignores any trailing data after the length specified in `wTotalLen`.
     pub fn new(buf: &[u8]) -> Option<ConfigurationDescriptor> {
         if buf.len() < DESCRIPTOR_LEN_CONFIGURATION as usize {
-            if buf.len() != 0 {
+            if !buf.is_empty() {
                 warn!(
                     "config descriptor buffer is {} bytes, need {}",
                     buf.len(),
@@ -734,7 +734,7 @@ impl std::error::Error for ActiveConfigurationError {}
 
 impl From<ActiveConfigurationError> for Error {
     fn from(value: ActiveConfigurationError) -> Self {
-        Error::new(ErrorKind::Other, value)
+        Error::other(value)
     }
 }
 

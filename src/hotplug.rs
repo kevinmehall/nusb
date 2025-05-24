@@ -26,6 +26,7 @@ impl Stream for HotplugWatch {
 
 /// Event returned from the [`HotplugWatch`] stream.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum HotplugEvent {
     /// A device has been connected.
     Connected(DeviceInfo),

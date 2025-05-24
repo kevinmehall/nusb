@@ -52,7 +52,7 @@ impl From<&OsStr> for WCString {
 
 impl Borrow<WCStr> for WCString {
     fn borrow(&self) -> &WCStr {
-        &self
+        self
     }
 }
 

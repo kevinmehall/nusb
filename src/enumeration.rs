@@ -457,7 +457,7 @@ impl UsbControllerType {
         match lower_s
             .find("hci")
             .filter(|i| *i > 0)
-            .and_then(|i| lower_s.bytes().nth(i - 1))
+            .and_then(|i| lower_s.as_bytes().get(i - 1))
         {
             Some(b'x') => Some(UsbControllerType::XHCI),
             Some(b'e') => Some(UsbControllerType::EHCI),
