@@ -73,7 +73,7 @@ impl TransferData {
             ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
                 Err(TransferError::Disconnected)
             }
-            e => Err(TransferError::Unknown(e as i32)),
+            e => Err(TransferError::Unknown(e)),
         };
 
         let mut empty = ManuallyDrop::new(Vec::new());

@@ -45,7 +45,7 @@ pub enum TransferError {
     /// `Unknown` to one of the above variants. If you are matching on the
     /// OS-specific code because an error is not correctly mapped, please open
     /// an issue or pull request.
-    Unknown(i32),
+    Unknown(u32),
 }
 
 impl Display for TransferError {
@@ -56,7 +56,11 @@ impl Display for TransferError {
             TransferError::Disconnected => write!(f, "device disconnected"),
             TransferError::Fault => write!(f, "hardware fault or protocol violation"),
             TransferError::Unknown(e) => {
-                write!(f, "unknown error ({})", io::Error::from_raw_os_error(*e))
+                if cfg!(target_os = "macos") {
+                    write!(f, "unknown error (0x{e:08x})")
+                } else {
+                    write!(f, "unknown error ({e})")
+                }
             }
         }
     }
