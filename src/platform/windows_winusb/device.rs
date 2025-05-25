@@ -21,7 +21,10 @@ use windows_sys::Win32::{
         WinUsb_SetPipePolicy, WinUsb_WritePipe, USB_DEVICE_DESCRIPTOR, WINUSB_INTERFACE_HANDLE,
         WINUSB_SETUP_PACKET,
     },
-    Foundation::{GetLastError, ERROR_IO_PENDING, ERROR_NOT_FOUND, FALSE, HANDLE, TRUE},
+    Foundation::{
+        GetLastError, ERROR_BAD_COMMAND, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND,
+        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, FALSE, HANDLE, TRUE,
+    },
     System::IO::{CancelIoEx, OVERLAPPED},
 };
 
@@ -540,6 +543,7 @@ impl WindowsInterface {
         let len = t.request_len;
         let buf = t.buf;
         t.overlapped.InternalHigh = 0;
+        t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
@@ -580,6 +584,7 @@ impl WindowsInterface {
         let len = t.request_len;
         let buf = t.buf;
         t.overlapped.InternalHigh = 0;
+        t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
@@ -613,7 +618,13 @@ impl WindowsInterface {
             // Safety: Transfer was not submitted, so we still own it
             // and must complete it in place of the event thread.
             unsafe {
-                (*t.as_ptr()).overlapped.Internal = err as _;
+                (*t.as_ptr()).error_from_submit = match err {
+                    ERROR_BAD_COMMAND
+                    | ERROR_FILE_NOT_FOUND
+                    | ERROR_DEVICE_NOT_CONNECTED
+                    | ERROR_NO_SUCH_DEVICE => Err(TransferError::Disconnected),
+                    other => Err(TransferError::Unknown(other)),
+                };
                 notify_completion::<TransferData>(t.as_ptr());
             }
         }
