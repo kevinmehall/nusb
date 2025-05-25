@@ -24,6 +24,7 @@ pub struct TransferData {
     pub(crate) capacity: u32,
     pub(crate) request_len: u32,
     pub(crate) endpoint: u8,
+    pub(crate) error_from_submit: Result<(), TransferError>,
 }
 
 unsafe impl Send for TransferData {}
@@ -39,6 +40,7 @@ impl TransferData {
             capacity: 0,
             request_len: 0,
             endpoint,
+            error_from_submit: Ok(()),
         }
     }
 
@@ -62,19 +64,22 @@ impl TransferData {
     pub fn take_completion(&mut self, intf: &Interface) -> Completion {
         let mut actual_len: u32 = 0;
 
-        unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
+        let status = self.error_from_submit.and_then(|()| {
+            unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
 
-        let status = match unsafe { GetLastError() } {
-            ERROR_SUCCESS => Ok(()),
-            ERROR_GEN_FAILURE => Err(TransferError::Stall),
-            ERROR_REQUEST_ABORTED | ERROR_TIMEOUT | ERROR_SEM_TIMEOUT | ERROR_OPERATION_ABORTED => {
-                Err(TransferError::Cancelled)
+            match unsafe { GetLastError() } {
+                ERROR_SUCCESS => Ok(()),
+                ERROR_GEN_FAILURE => Err(TransferError::Stall),
+                ERROR_REQUEST_ABORTED
+                | ERROR_TIMEOUT
+                | ERROR_SEM_TIMEOUT
+                | ERROR_OPERATION_ABORTED => Err(TransferError::Cancelled),
+                ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
+                    Err(TransferError::Disconnected)
+                }
+                e => Err(TransferError::Unknown(e)),
             }
-            ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
-                Err(TransferError::Disconnected)
-            }
-            e => Err(TransferError::Unknown(e as i32)),
-        };
+        });
 
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());

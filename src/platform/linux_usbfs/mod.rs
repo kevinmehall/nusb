@@ -31,6 +31,7 @@ fn errno_to_transfer_error(e: Errno) -> TransferError {
         Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
             TransferError::Fault
         }
-        _ => TransferError::Unknown(e.raw_os_error()),
+        Errno::INVAL => TransferError::InvalidArgument,
+        _ => TransferError::Unknown(e.raw_os_error() as u32),
     }
 }

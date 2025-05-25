@@ -29,8 +29,11 @@ fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
     match status {
         io_kit_sys::ret::kIOReturnSuccess | io_kit_sys::ret::kIOReturnUnderrun => Ok(()),
         io_kit_sys::ret::kIOReturnNoDevice => Err(TransferError::Disconnected),
-        io_kit_sys::ret::kIOReturnAborted => Err(TransferError::Cancelled),
+        io_kit_sys::ret::kIOReturnAborted | iokit_c::kIOUSBTransactionTimeout => {
+            Err(TransferError::Cancelled)
+        }
         iokit_c::kIOUSBPipeStalled => Err(TransferError::Stall),
-        _ => Err(TransferError::Unknown(status as i32)),
+        io_kit_sys::ret::kIOReturnBadArgument => Err(TransferError::InvalidArgument), // used for `submit_err`
+        _ => Err(TransferError::Unknown(status as u32)),
     }
 }

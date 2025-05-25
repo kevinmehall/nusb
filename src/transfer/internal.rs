@@ -128,6 +128,12 @@ impl<P> Idle<P> {
             ptr: unsafe { NonNull::new_unchecked(Box::into_raw(self.0)) },
         }
     }
+
+    pub(crate) fn simulate_complete(self) -> Pending<P> {
+        Pending {
+            ptr: unsafe { NonNull::new_unchecked(Box::into_raw(self.0)) },
+        }
+    }
 }
 
 impl<P> Deref for Idle<P> {

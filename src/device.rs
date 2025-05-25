@@ -10,7 +10,7 @@ use crate::{
     },
     DeviceInfo, Error, MaybeFuture, Speed,
 };
-use log::error;
+use log::{error, warn};
 use std::{
     future::{poll_fn, Future},
     io::ErrorKind,
@@ -635,10 +635,26 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// For an OUT transfer, the buffer's `len` is the number of bytes
     /// initialized, which will be sent to the device.
     ///
-    /// For an IN transfer, the buffer's `requested_len` is the number of
-    /// bytes requested. It must be a multiple of the endpoint's [maximum packet
-    /// size][`Self::max_packet_size`].
+    /// For an IN transfer, the buffer's `requested_len` is the number of bytes
+    /// requested. It must be a nonzero multiple of the endpoint's [maximum
+    /// packet size][`Self::max_packet_size`] or the transfer will fail with
+    /// `TransferError::InvalidArgument`. Up to `requested_len /
+    /// max_packet_size` packets will be received, ending early when any packet
+    /// is shorter than `max_packet_size`.
     pub fn submit(&mut self, buf: Buffer) {
+        if Dir::DIR == Direction::In {
+            let req_len = buf.requested_len();
+            if req_len == 0 || req_len % self.max_packet_size() != 0 {
+                warn!(
+                    "Submitting transfer with length {req_len} which is not a multiple of max packet size {} on IN endpoint {:02x}",
+                    self.max_packet_size(),
+                    self.endpoint_address(),
+                );
+
+                return self.backend.submit_err(buf, TransferError::InvalidArgument);
+            }
+        }
+
         self.backend.submit(buf)
     }
 
@@ -646,6 +662,12 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// This future is cancel-safe: it can be cancelled and re-created without
     /// side effects, enabling its use in `select!{}` or similar.
+    ///
+    /// An OUT transfer completes when the specified data has been sent or an
+    /// error occurs. An IN transfer completes when a packet smaller than
+    /// `max_packet_size` is received, the full `requested_len` is received
+    /// (without waiting for or consuming any subsequent zero-length packet), or
+    /// an error occurs.
     ///
     /// ## Panics
     /// * if there are no transfers pending (that is, if [`Self::pending()`]

@@ -21,7 +21,10 @@ use windows_sys::Win32::{
         WinUsb_SetPipePolicy, WinUsb_WritePipe, USB_DEVICE_DESCRIPTOR, WINUSB_INTERFACE_HANDLE,
         WINUSB_SETUP_PACKET,
     },
-    Foundation::{GetLastError, ERROR_IO_PENDING, ERROR_NOT_FOUND, FALSE, HANDLE, TRUE},
+    Foundation::{
+        GetLastError, ERROR_BAD_COMMAND, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND,
+        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, FALSE, HANDLE, TRUE,
+    },
     System::IO::{CancelIoEx, OVERLAPPED},
 };
 
@@ -409,10 +412,6 @@ impl WindowsInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
-            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
-        }
-
         let mut t = TransferData::new(0x80);
         t.set_buffer(Buffer::new(data.length as usize));
 
@@ -438,10 +437,6 @@ impl WindowsInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
-            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
-        }
-
         let mut t = TransferData::new(0x00);
         t.set_buffer(Buffer::from(data.data.to_vec()));
 
@@ -540,6 +535,7 @@ impl WindowsInterface {
         let len = t.request_len;
         let buf = t.buf;
         t.overlapped.InternalHigh = 0;
+        t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
@@ -580,6 +576,15 @@ impl WindowsInterface {
         let len = t.request_len;
         let buf = t.buf;
         t.overlapped.InternalHigh = 0;
+        t.error_from_submit = Ok(());
+
+        if pkt.RequestType & 0x1f == Recipient::Interface as u8
+            && pkt.Index as u8 != self.interface_number
+        {
+            warn!("WinUSB requires control transfer with `Recipient::Interface` to pass the interface number in `index`");
+            t.error_from_submit = Err(TransferError::InvalidArgument);
+            return t.simulate_complete();
+        }
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
@@ -613,7 +618,13 @@ impl WindowsInterface {
             // Safety: Transfer was not submitted, so we still own it
             // and must complete it in place of the event thread.
             unsafe {
-                (*t.as_ptr()).overlapped.Internal = err as _;
+                (*t.as_ptr()).error_from_submit = match err {
+                    ERROR_BAD_COMMAND
+                    | ERROR_FILE_NOT_FOUND
+                    | ERROR_DEVICE_NOT_CONNECTED
+                    | ERROR_NO_SUCH_DEVICE => Err(TransferError::Disconnected),
+                    other => Err(TransferError::Unknown(other)),
+                };
                 notify_completion::<TransferData>(t.as_ptr());
             }
         }
@@ -672,13 +683,24 @@ impl WindowsEndpoint {
         }
     }
 
-    pub(crate) fn submit(&mut self, buffer: Buffer) {
+    fn make_transfer(&mut self, buffer: Buffer) -> Idle<TransferData> {
         let mut t = self.idle_transfer.take().unwrap_or_else(|| {
             Idle::new(self.inner.clone(), TransferData::new(self.inner.address))
         });
         t.set_buffer(buffer);
+        t
+    }
+
+    pub(crate) fn submit(&mut self, buffer: Buffer) {
+        let t = self.make_transfer(buffer);
         let t = self.inner.interface.submit(t);
         self.pending.push_back(t);
+    }
+
+    pub(crate) fn submit_err(&mut self, buffer: Buffer, err: TransferError) {
+        let mut t = self.make_transfer(buffer);
+        t.error_from_submit = Err(err);
+        self.pending.push_back(t.simulate_complete());
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
