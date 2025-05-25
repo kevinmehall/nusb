@@ -691,16 +691,28 @@ impl LinuxEndpoint {
         }
     }
 
-    pub(crate) fn submit(&mut self, data: Buffer) {
-        let mut transfer = self.idle_transfer.take().unwrap_or_else(|| {
+    fn get_transfer(&mut self) -> Idle<TransferData> {
+        self.idle_transfer.take().unwrap_or_else(|| {
             Idle::new(
                 self.inner.clone(),
                 super::TransferData::new(self.inner.address, self.inner.ep_type),
             )
-        });
+        })
+    }
+
+    pub(crate) fn submit(&mut self, data: Buffer) {
+        let mut transfer = self.get_transfer();
         transfer.set_buffer(data);
         self.pending
             .push_back(self.inner.interface.device.submit(transfer));
+    }
+
+    pub(crate) fn submit_err(&mut self, data: Buffer, error: TransferError) {
+        assert_eq!(error, TransferError::InvalidArgument);
+        let mut transfer = self.get_transfer();
+        transfer.set_buffer(data);
+        transfer.urb_mut().status = Errno::INVAL.raw_os_error();
+        self.pending.push_back(transfer.simulate_complete());
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {

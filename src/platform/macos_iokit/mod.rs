@@ -33,6 +33,7 @@ fn status_to_transfer_result(status: IOReturn) -> Result<(), TransferError> {
             Err(TransferError::Cancelled)
         }
         iokit_c::kIOUSBPipeStalled => Err(TransferError::Stall),
+        io_kit_sys::ret::kIOReturnBadArgument => Err(TransferError::InvalidArgument), // used for `submit_err`
         _ => Err(TransferError::Unknown(status as u32)),
     }
 }

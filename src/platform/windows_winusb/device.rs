@@ -578,22 +578,16 @@ impl WindowsInterface {
         t.overlapped.InternalHigh = 0;
         t.error_from_submit = Ok(());
 
-        let t = t.pre_submit();
-        let ptr = t.as_ptr();
-
         if pkt.RequestType & 0x1f == Recipient::Interface as u8
             && pkt.Index as u8 != self.interface_number
         {
             warn!("WinUSB requires control transfer with `Recipient::Interface` to pass the interface number in `index`");
-
-            // Safety: Transfer is not submitted, so we can complete it in place of the event thread.
-            unsafe {
-                (*t.as_ptr()).error_from_submit = Err(TransferError::InvalidArgument);
-                notify_completion::<TransferData>(t.as_ptr());
-            }
-
-            return t;
+            t.error_from_submit = Err(TransferError::InvalidArgument);
+            return t.simulate_complete();
         }
+
+        let t = t.pre_submit();
+        let ptr = t.as_ptr();
 
         debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
 
@@ -689,13 +683,24 @@ impl WindowsEndpoint {
         }
     }
 
-    pub(crate) fn submit(&mut self, buffer: Buffer) {
+    fn make_transfer(&mut self, buffer: Buffer) -> Idle<TransferData> {
         let mut t = self.idle_transfer.take().unwrap_or_else(|| {
             Idle::new(self.inner.clone(), TransferData::new(self.inner.address))
         });
         t.set_buffer(buffer);
+        t
+    }
+
+    pub(crate) fn submit(&mut self, buffer: Buffer) {
+        let t = self.make_transfer(buffer);
         let t = self.inner.interface.submit(t);
         self.pending.push_back(t);
+    }
+
+    pub(crate) fn submit_err(&mut self, buffer: Buffer, err: TransferError) {
+        let mut t = self.make_transfer(buffer);
+        t.error_from_submit = Err(err);
+        self.pending.push_back(t.simulate_complete());
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {

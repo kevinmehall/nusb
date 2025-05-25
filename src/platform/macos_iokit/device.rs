@@ -466,25 +466,30 @@ impl MacEndpoint {
         );
     }
 
-    pub(crate) fn submit(&mut self, buffer: Buffer) {
+    fn make_transfer(&mut self, buffer: Buffer) -> Idle<TransferData> {
         let mut transfer = self
             .idle_transfer
             .take()
             .unwrap_or_else(|| Idle::new(self.inner.clone(), super::TransferData::new()));
 
         let buffer = ManuallyDrop::new(buffer);
-        let endpoint = self.inner.address;
-        let dir = Direction::from_address(endpoint);
-        let pipe_ref = self.inner.pipe_ref;
-
         transfer.buf = buffer.ptr;
         transfer.capacity = buffer.capacity;
         transfer.actual_len = 0;
-        let req_len = match dir {
+        let req_len = match Direction::from_address(self.inner.address) {
             Direction::Out => buffer.len,
             Direction::In => buffer.requested_len,
         };
         transfer.requested_len = req_len;
+        transfer
+    }
+
+    pub(crate) fn submit(&mut self, buffer: Buffer) {
+        let transfer = self.make_transfer(buffer);
+        let endpoint = self.inner.address;
+        let dir = Direction::from_address(endpoint);
+        let req_len = transfer.requested_len;
+        let buf_ptr = transfer.buf;
 
         let transfer = transfer.pre_submit();
         let ptr = transfer.as_ptr();
@@ -494,9 +499,9 @@ impl MacEndpoint {
                 Direction::Out => call_iokit_function!(
                     self.inner.interface.interface.raw,
                     WritePipeAsync(
-                        pipe_ref,
-                        buffer.ptr as *mut c_void,
-                        buffer.len,
+                        self.inner.pipe_ref,
+                        buf_ptr as *mut c_void,
+                        req_len,
                         transfer_callback,
                         ptr as *mut c_void
                     )
@@ -504,9 +509,9 @@ impl MacEndpoint {
                 Direction::In => call_iokit_function!(
                     self.inner.interface.interface.raw,
                     ReadPipeAsync(
-                        pipe_ref,
-                        buffer.ptr as *mut c_void,
-                        buffer.requested_len,
+                        self.inner.pipe_ref,
+                        buf_ptr as *mut c_void,
+                        req_len,
                         transfer_callback,
                         ptr as *mut c_void
                     )
@@ -519,7 +524,7 @@ impl MacEndpoint {
                 "Submitted {dir:?} transfer {ptr:?} of len {req_len} on endpoint {endpoint:02X}"
             );
         } else {
-            error!("Failed to submit transfer {ptr:?} of len {req_len} on endpoint {endpoint:02X}: {res:x}");
+            error!("Failed to submit {dir:?} transfer {ptr:?} of len {req_len} on endpoint {endpoint:02X}: {res:x}");
             unsafe {
                 // Complete the transfer in the place of the callback
                 (*ptr).status = res;
@@ -528,6 +533,13 @@ impl MacEndpoint {
         }
 
         self.pending.push_back(transfer);
+    }
+
+    pub(crate) fn submit_err(&mut self, buffer: Buffer, err: TransferError) {
+        assert_eq!(err, TransferError::InvalidArgument);
+        let mut transfer = self.make_transfer(buffer);
+        transfer.status = io_kit_sys::ret::kIOReturnBadArgument;
+        self.pending.push_back(transfer.simulate_complete());
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
