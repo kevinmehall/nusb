@@ -412,10 +412,6 @@ impl WindowsInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
-            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
-        }
-
         let mut t = TransferData::new(0x80);
         t.set_buffer(Buffer::new(data.length as usize));
 
@@ -441,10 +437,6 @@ impl WindowsInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        if data.recipient == Recipient::Interface && data.index as u8 != self.interface_number {
-            warn!("WinUSB sends interface number instead of passed `index` when performing a control transfer with `Recipient::Interface`");
-        }
-
         let mut t = TransferData::new(0x00);
         t.set_buffer(Buffer::from(data.data.to_vec()));
 
@@ -588,6 +580,20 @@ impl WindowsInterface {
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
+
+        if pkt.RequestType & 0x1f == Recipient::Interface as u8
+            && pkt.Index as u8 != self.interface_number
+        {
+            warn!("WinUSB requires control transfer with `Recipient::Interface` to pass the interface number in `index`");
+
+            // Safety: Transfer is not submitted, so we can complete it in place of the event thread.
+            unsafe {
+                (*t.as_ptr()).error_from_submit = Err(TransferError::InvalidArgument);
+                notify_completion::<TransferData>(t.as_ptr());
+            }
+
+            return t;
+        }
 
         debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
 
