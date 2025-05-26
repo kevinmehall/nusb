@@ -28,7 +28,7 @@ pub enum TransferError {
     ///
     /// This is used by the device to signal that an error occurred. For bulk
     /// and interrupt endpoints, the stall condition can be cleared with
-    /// [`Interface::clear_halt`][crate::Endpoint::clear_halt]. For control
+    /// [`Endpoint::clear_halt`][crate::Endpoint::clear_halt]. For control
     /// requests, the stall is automatically cleared when another request is
     /// submitted.
     Stall,
