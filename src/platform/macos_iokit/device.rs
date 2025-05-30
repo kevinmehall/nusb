@@ -41,6 +41,7 @@ pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
     pub(super) device: IoKitDevice,
     device_descriptor: DeviceDescriptor,
+    config_descriptors: Vec<Vec<u8>>,
     speed: Option<Speed>,
     active_config: AtomicU8,
     is_open_exclusive: Mutex<bool>,
@@ -50,14 +51,13 @@ pub(crate) struct MacDevice {
 // `get_configuration` does IO, so avoid it in the common case that:
 //    * the device has a single configuration
 //    * the device has at least one interface, indicating that it is configured
-fn guess_active_config(dev: &IoKitDevice) -> Option<u8> {
-    if dev.get_number_of_configurations().unwrap_or(0) != 1 {
+fn guess_active_config(configs: &[Vec<u8>], dev: &IoKitDevice) -> Option<u8> {
+    if configs.len() != 1 {
         return None;
     }
     let mut intf = dev.create_interface_iterator().ok()?;
     intf.next()?;
-    let config_desc = dev.get_configuration_descriptor(0).ok()?;
-    config_desc.get(5).copied() // get bConfigurationValue from descriptor
+    configs[0].get(5).copied() // get bConfigurationValue from descriptor
 }
 
 impl MacDevice {
@@ -85,19 +85,39 @@ impl MacDevice {
             let device_descriptor = device_descriptor_from_fields(&service)
                 .ok_or_else(|| Error::other("could not read properties for device descriptor"))?;
 
-            let active_config = if let Some(active_config) = guess_active_config(&device) {
-                log::debug!("Active config from single descriptor is {}", active_config);
-                active_config
-            } else {
-                let res = device.get_configuration();
-                log::debug!("Active config from request is {:?}", res);
-                res.unwrap_or(0)
-            };
+            let num_configs = device.get_number_of_configurations().inspect_err(|e| {
+                log::warn!("failed to get number of configurations: {e}");
+            })?;
+
+            let config_descriptors: Vec<Vec<u8>> = (0..num_configs)
+                .flat_map(|i| {
+                    let d = device
+                        .get_configuration_descriptor(i)
+                        .inspect_err(|e| {
+                            log::warn!("failed to get configuration descriptor {i}: {e}");
+                        })
+                        .ok()?;
+
+                    ConfigurationDescriptor::new(&d).is_some().then_some(d)
+                })
+                .map(|desc| desc.to_owned())
+                .collect();
+
+            let active_config =
+                if let Some(active_config) = guess_active_config(&config_descriptors, &device) {
+                    log::debug!("Active config from single descriptor is {}", active_config);
+                    active_config
+                } else {
+                    let res = device.get_configuration();
+                    log::debug!("Active config from request is {:?}", res);
+                    res.unwrap_or(0)
+                };
 
             Ok(Arc::new(MacDevice {
                 _event_registration,
                 device,
                 device_descriptor,
+                config_descriptors,
                 speed,
                 active_config: AtomicU8::new(active_config),
                 is_open_exclusive: Mutex::new(opened),
@@ -121,10 +141,9 @@ impl MacDevice {
     pub(crate) fn configuration_descriptors(
         &self,
     ) -> impl Iterator<Item = ConfigurationDescriptor> {
-        let num_configs = self.device.get_number_of_configurations().unwrap_or(0);
-        (0..num_configs)
-            .flat_map(|i| self.device.get_configuration_descriptor(i).ok())
-            .flat_map(ConfigurationDescriptor::new)
+        self.config_descriptors
+            .iter()
+            .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
     fn require_open_exclusive(&self) -> Result<(), Error> {
