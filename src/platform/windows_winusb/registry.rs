@@ -1,7 +1,6 @@
 use std::{
     alloc::{self, Layout},
     ffi::OsStr,
-    io::ErrorKind,
     mem,
     ptr::{null, null_mut},
 };
@@ -9,7 +8,7 @@ use std::{
 use windows_sys::{
     core::GUID,
     Win32::{
-        Foundation::{ERROR_SUCCESS, S_OK},
+        Foundation::{GetLastError, ERROR_SUCCESS, S_OK},
         System::{
             Com::IIDFromString,
             Registry::{RegCloseKey, RegQueryValueExW, HKEY, REG_MULTI_SZ, REG_SZ},
@@ -45,13 +44,18 @@ impl RegKey {
             );
 
             if r != ERROR_SUCCESS {
-                return Err(Error::from_raw_os_error(r as i32));
+                return Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to read registry value",
+                    GetLastError(),
+                ));
             }
 
             if ty != REG_MULTI_SZ && ty != REG_SZ {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "registry value type not string",
+                return Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to read registry value: expected string",
+                    GetLastError(),
                 ));
             }
 
@@ -63,7 +67,11 @@ impl RegKey {
 
             if r != ERROR_SUCCESS {
                 alloc::dealloc(buf, layout);
-                return Err(Error::from_raw_os_error(r as i32));
+                return Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to read registry value data",
+                    GetLastError(),
+                ));
             }
 
             let mut guid = GUID::from_u128(0);
@@ -74,7 +82,10 @@ impl RegKey {
             if r == S_OK {
                 Ok(guid)
             } else {
-                Err(Error::new(ErrorKind::InvalidData, "invalid UUID"))
+                Err(Error::new(
+                    crate::ErrorKind::Other,
+                    "failed to parse GUID from registry value",
+                ))
             }
         }
     }

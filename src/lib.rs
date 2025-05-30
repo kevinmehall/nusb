@@ -134,8 +134,6 @@
 //! These features do not affect and are not required for transfers, which are
 //! implemented on top of natively-async OS APIs.
 
-use std::io;
-
 mod platform;
 
 pub mod descriptors;
@@ -143,7 +141,7 @@ mod enumeration;
 pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
-pub use device::{ClaimEndpointError, Device, Endpoint, Interface};
+pub use device::{Device, Endpoint, Interface};
 
 pub mod transfer;
 
@@ -154,8 +152,8 @@ pub use maybe_future::MaybeFuture;
 
 mod bitset;
 
-/// OS error returned from operations other than transfers.
-pub type Error = io::Error;
+mod error;
+pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 
 /// Get an iterator listing the connected devices.
 ///

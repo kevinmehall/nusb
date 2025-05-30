@@ -18,7 +18,7 @@ use io_kit_sys::{
 use log::debug;
 use slab::Slab;
 
-use crate::{hotplug::HotplugEvent, DeviceId, Error};
+use crate::{hotplug::HotplugEvent, DeviceId, Error, ErrorKind};
 
 use super::{
     enumeration::{get_registry_id, probe_device},
@@ -79,7 +79,7 @@ impl MacHotplugWatch {
         let dictionary = unsafe {
             let d = IOServiceMatching(kIOUSBDeviceClassName);
             if d.is_null() {
-                return Err(Error::other("IOServiceMatching failed"));
+                return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
             }
             CFDictionary::wrap_under_create_rule(d)
         };
@@ -162,7 +162,9 @@ fn register_notification(
         );
 
         if r != kIOReturnSuccess {
-            return Err(Error::other("Failed to register notification"));
+            return Err(
+                Error::new_os(ErrorKind::Other, "failed to register notification", r).log_error(),
+            );
         }
         let mut iter = IoServiceIterator::new(iter);
 

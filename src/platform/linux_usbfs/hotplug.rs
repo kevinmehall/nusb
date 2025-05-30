@@ -10,7 +10,7 @@ use rustix::{
 };
 use std::{mem::MaybeUninit, os::unix::prelude::BorrowedFd, path::Path, task::Poll};
 
-use crate::{hotplug::HotplugEvent, Error};
+use crate::{hotplug::HotplugEvent, Error, ErrorKind};
 
 use super::{enumeration::probe_device, events::Async, SysfsPath};
 
@@ -28,8 +28,15 @@ impl LinuxHotplugWatch {
             SocketType::RAW,
             SocketFlags::CLOEXEC,
             Some(netlink::KOBJECT_UEVENT),
-        )?;
-        bind(&fd, &SocketAddrNetlink::new(0, UDEV_MULTICAST_GROUP))?;
+        )
+        .map_err(|e| {
+            Error::new_os(ErrorKind::Other, "failed to open udev netlink socket", e).log_error()
+        })?;
+
+        bind(&fd, &SocketAddrNetlink::new(0, UDEV_MULTICAST_GROUP)).map_err(|e| {
+            Error::new_os(ErrorKind::Other, "failed to bind udev netlink socket", e).log_error()
+        })?;
+
         Ok(LinuxHotplugWatch {
             fd: Async::new(fd)?,
         })

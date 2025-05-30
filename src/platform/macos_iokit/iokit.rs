@@ -5,9 +5,6 @@
 
 use core_foundation_sys::uuid::CFUUIDBytes;
 use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
-use std::io::ErrorKind;
-
-use crate::Error;
 
 use super::iokit_c::{self, CFUUIDGetUUIDBytes, IOCFPlugInInterface};
 
@@ -117,15 +114,9 @@ pub(crate) fn usb_interface_type_id() -> CFUUIDBytes {
     unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID500()) }
 }
 
-pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), Error> {
-    #[allow(non_upper_case_globals)]
-    #[deny(unreachable_patterns)]
+pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), IOReturn> {
     match r {
         io_kit_sys::ret::kIOReturnSuccess => Ok(()),
-        io_kit_sys::ret::kIOReturnExclusiveAccess => {
-            Err(Error::other("could not be opened for exclusive access"))
-        }
-        io_kit_sys::ret::kIOReturnNotFound => Err(Error::new(ErrorKind::NotFound, "not found")),
-        _ => Err(Error::from_raw_os_error(r)),
+        e => Err(e),
     }
 }

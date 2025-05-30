@@ -2,17 +2,11 @@
 //!
 //! Descriptors are blocks of data that describe the functionality of a USB device.
 
-use std::{
-    collections::BTreeMap,
-    fmt::{Debug, Display},
-    iter,
-    num::NonZeroU8,
-    ops::Deref,
-};
+use std::{collections::BTreeMap, fmt::Debug, iter, num::NonZeroU8, ops::Deref};
 
 use log::warn;
 
-use crate::{transfer::Direction, Error};
+use crate::transfer::Direction;
 
 pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
@@ -710,34 +704,6 @@ pub enum TransferType {
     Interrupt = 3,
 }
 
-/// Error from [`crate::Device::active_configuration`]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct ActiveConfigurationError {
-    pub(crate) configuration_value: u8,
-}
-
-impl Display for ActiveConfigurationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.configuration_value == 0 {
-            write!(f, "device is not configured")
-        } else {
-            write!(
-                f,
-                "no descriptor found for active configuration {}",
-                self.configuration_value
-            )
-        }
-    }
-}
-
-impl std::error::Error for ActiveConfigurationError {}
-
-impl From<ActiveConfigurationError> for Error {
-    fn from(value: ActiveConfigurationError) -> Self {
-        Error::other(value)
-    }
-}
-
 /// Split a chain of concatenated configuration descriptors by `wTotalLength`
 #[allow(unused)]
 pub(crate) fn parse_concatenated_config_descriptors(
@@ -914,7 +880,7 @@ fn test_linux_root_hub() {
 fn test_dell_webcam() {
     let c = ConfigurationDescriptor(&[
         0x09, 0x02, 0xa3, 0x02, 0x02, 0x01, 0x00, 0x80, 0xfa,
-        
+
         // unknown (skipped)
         0x28, 0xff, 0x42, 0x49, 0x53, 0x54, 0x00, 0x01, 0x06, 0x01, 0x10, 0x00,
         0x00, 0x00, 0x00, 0x00, 0xd1, 0x10, 0xd0, 0x07, 0xd2, 0x11, 0xf4, 0x01,

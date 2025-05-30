@@ -1,5 +1,3 @@
-use std::io::ErrorKind;
-
 use core_foundation::{
     base::{CFType, TCFType},
     data::CFData,
@@ -18,7 +16,7 @@ use log::debug;
 use crate::{
     descriptors::DeviceDescriptor,
     maybe_future::{MaybeFuture, Ready},
-    BusInfo, DeviceInfo, Error, InterfaceInfo, Speed, UsbControllerType,
+    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, Speed, UsbControllerType,
 };
 
 use super::iokit::{IoService, IoServiceIterator};
@@ -43,13 +41,17 @@ fn usb_service_iter() -> Result<IoServiceIterator, Error> {
     unsafe {
         let dictionary = IOServiceMatching(kIOUSBDeviceClassName);
         if dictionary.is_null() {
-            return Err(Error::other("IOServiceMatching failed"));
+            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
         }
 
         let mut iterator = 0;
         let r = IOServiceGetMatchingServices(kIOMasterPortDefault, dictionary, &mut iterator);
         if r != kIOReturnSuccess {
-            return Err(Error::from_raw_os_error(r));
+            return Err(Error::new_os(
+                ErrorKind::Other,
+                "failed to create IOKit iterator",
+                r,
+            ));
         }
 
         Ok(IoServiceIterator::new(iterator))
@@ -67,13 +69,17 @@ fn usb_controller_service_iter(
             UsbControllerType::VHCI => IOServiceMatching(kAppleUSBVHCI),
         };
         if dictionary.is_null() {
-            return Err(Error::other("IOServiceMatching failed"));
+            return Err(Error::new(ErrorKind::Other, "IOServiceMatching failed"));
         }
 
         let mut iterator = 0;
         let r = IOServiceGetMatchingServices(kIOMasterPortDefault, dictionary, &mut iterator);
         if r != kIOReturnSuccess {
-            return Err(Error::from_raw_os_error(r));
+            return Err(Error::new_os(
+                ErrorKind::Other,
+                "failed to create IOKit iterator",
+                r,
+            ));
         }
 
         Ok(IoServiceIterator::new(iterator))
@@ -245,7 +251,11 @@ fn get_children(device: &IoService) -> Result<IoServiceIterator, Error> {
             IORegistryEntryGetChildIterator(device.get(), kIOServicePlane as *mut _, &mut iterator);
         if r != kIOReturnSuccess {
             debug!("IORegistryEntryGetChildIterator failed: {r}");
-            return Err(Error::from_raw_os_error(r));
+            return Err(Error::new_os(
+                ErrorKind::Other,
+                "failed to create IOKit child iterator",
+                r,
+            ));
         }
 
         Ok(IoServiceIterator::new(iterator))

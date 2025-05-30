@@ -7,7 +7,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use log::{debug, error};
+use log::debug;
 use windows_sys::Win32::{
     Devices::{
         DeviceAndDriverInstallation::{
@@ -78,8 +78,12 @@ impl WindowsHotplugWatch {
         };
 
         if cr != CR_SUCCESS {
-            error!("CM_Register_Notification failed: {cr}");
-            return Err(Error::other("Failed to initialize hotplug notifications"));
+            return Err(Error::new_os(
+                crate::ErrorKind::Other,
+                "failed to initialize hotplug notifications",
+                cr,
+            )
+            .log_error());
         }
 
         Ok(WindowsHotplugWatch {

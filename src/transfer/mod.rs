@@ -16,7 +16,7 @@ pub use buffer::Buffer;
 
 pub(crate) mod internal;
 
-use crate::descriptors::TransferType;
+use crate::{descriptors::TransferType, platform};
 
 /// Transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -60,11 +60,9 @@ impl Display for TransferError {
             TransferError::Fault => write!(f, "hardware fault or protocol violation"),
             TransferError::InvalidArgument => write!(f, "invalid or unsupported argument"),
             TransferError::Unknown(e) => {
-                if cfg!(target_os = "macos") {
-                    write!(f, "unknown error (0x{e:08x})")
-                } else {
-                    write!(f, "unknown error ({e})")
-                }
+                write!(f, "unknown (")?;
+                platform::format_os_error_code(f, *e)?;
+                write!(f, ")")
             }
         }
     }
