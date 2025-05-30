@@ -175,7 +175,6 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
             Some(BusInfo {
                 bus_id: rh.bus_id.to_owned(),
                 path: rh.path.to_owned(),
-                parent_path: parent_path.to_owned(),
                 busnum: rh.busnum,
                 controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
                 driver,

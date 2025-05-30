@@ -479,9 +479,6 @@ pub struct BusInfo {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) path: SysfsPath,
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub(crate) parent_path: SysfsPath,
-
     /// The phony root hub device
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) root_hub: DeviceInfo,
@@ -533,12 +530,6 @@ impl BusInfo {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
-    }
-
-    /// *(Linux-only)* Sysfs path for the parent controller
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub fn parent_sysfs_path(&self) -> &std::path::Path {
-        &self.parent_path.0
     }
 
     /// *(Linux-only)* Bus number.
@@ -664,7 +655,6 @@ impl std::fmt::Debug for BusInfo {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             s.field("sysfs_path", &self.path);
-            s.field("parent_sysfs_path", &self.parent_path);
             s.field("busnum", &self.busnum);
         }
 
