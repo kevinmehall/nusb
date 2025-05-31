@@ -137,6 +137,8 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
                 return None;
             }
 
+            let path = path.canonicalize().ok()?;
+
             probe_device(SysfsPath(path))
                 .inspect_err(|e| warn!("{e}; ignoring device"))
                 .ok()
@@ -154,6 +156,8 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
             return None;
         }
 
+        let path = path.canonicalize().ok()?;
+
         probe_device(SysfsPath(path))
             .inspect_err(|e| warn!("{e}; ignoring root hub"))
             .ok()
@@ -164,20 +168,13 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
     Ready((|| {
         Ok(list_root_hubs()?.filter_map(|rh| {
             // get the parent by following the absolute symlink; root hub in /bus/usb is a symlink to a dir in parent bus
-            let parent_path = rh
-                .path
-                .0
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|p| SysfsPath(p.to_owned())))?;
+            let parent_path = rh.path.0.parent().map(|p| SysfsPath(p.to_owned()))?;
 
-            debug!("Probing parent device {:?}", parent_path.0);
             let driver = parent_path.readlink_attr_filename("driver").ok();
 
             Some(BusInfo {
                 bus_id: rh.bus_id.to_owned(),
                 path: rh.path.to_owned(),
-                parent_path: parent_path.to_owned(),
                 busnum: rh.busnum,
                 controller_type: driver.as_ref().and_then(|p| UsbControllerType::from_str(p)),
                 driver,
