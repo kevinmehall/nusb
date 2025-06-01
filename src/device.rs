@@ -12,6 +12,7 @@ use crate::{
 };
 use log::{error, warn};
 use std::{
+    fmt::Debug,
     future::{poll_fn, Future},
     marker::PhantomData,
     num::NonZeroU8,
@@ -346,6 +347,12 @@ impl Device {
     }
 }
 
+impl Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device").finish()
+    }
+}
+
 /// An opened interface of a USB device.
 ///
 /// Obtain an `Interface` with the [`Device::claim_interface`] method.
@@ -521,6 +528,14 @@ impl Interface {
     }
 }
 
+impl Debug for Interface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Interface")
+            .field("number", &self.backend.interface_number)
+            .finish()
+    }
+}
+
 /// Exclusive access to an endpoint of a USB device.
 ///
 /// Obtain an `Endpoint` with the [`Interface::endpoint`] method.
@@ -690,6 +705,19 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clear_halt()
+    }
+}
+
+impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field(
+                "address",
+                &format_args!("0x{:02x}", self.endpoint_address()),
+            )
+            .field("type", &EpType::TYPE)
+            .field("direction", &Dir::DIR)
+            .finish()
     }
 }
 
