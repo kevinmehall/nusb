@@ -134,8 +134,6 @@
 //! These features do not affect and are not required for transfers, which are
 //! implemented on top of natively-async OS APIs.
 
-use std::io;
-
 mod platform;
 
 pub mod descriptors;
@@ -154,8 +152,10 @@ pub use maybe_future::MaybeFuture;
 
 mod bitset;
 
+pub mod io;
+
 /// OS error returned from operations other than transfers.
-pub type Error = io::Error;
+pub type Error = std::io::Error;
 
 /// Get an iterator listing the connected devices.
 ///
