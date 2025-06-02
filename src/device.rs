@@ -1,19 +1,19 @@
 use crate::{
     descriptors::{
-        decode_string_descriptor, validate_string_descriptor, ActiveConfigurationError,
-        ConfigurationDescriptor, DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
+        decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
+        DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
     },
     platform,
     transfer::{
         Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
         EndpointType, TransferError,
     },
-    DeviceInfo, Error, MaybeFuture, Speed,
+    ActiveConfigurationError, DeviceInfo, Error, ErrorKind, GetDescriptorError, MaybeFuture, Speed,
 };
 use log::{error, warn};
 use std::{
+    fmt::Debug,
     future::{poll_fn, Future},
-    io::ErrorKind,
     marker::PhantomData,
     num::NonZeroU8,
     sync::Arc,
@@ -51,9 +51,7 @@ impl Device {
         Device { backend }
     }
 
-    pub(crate) fn open(
-        d: &DeviceInfo,
-    ) -> impl MaybeFuture<Output = Result<Device, std::io::Error>> {
+    pub(crate) fn open(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Device, Error>> {
         platform::Device::from_device_info(d).map(|d| d.map(Device::wrap))
     }
 
@@ -181,13 +179,14 @@ impl Device {
         desc_index: u8,
         language_id: u16,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, GetDescriptorError>> {
         #[cfg(target_os = "windows")]
         {
             let _ = timeout;
             self.backend
                 .clone()
                 .get_descriptor(desc_type, desc_index, language_id)
+                .map(|r| r.map_err(GetDescriptorError::Transfer))
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -206,7 +205,7 @@ impl Device {
                 },
                 timeout,
             )
-            .map(|r| Ok(r?))
+            .map(|r| r.map_err(GetDescriptorError::Transfer))
         }
     }
 
@@ -218,16 +217,13 @@ impl Device {
     pub fn get_string_descriptor_supported_languages(
         &self,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<impl Iterator<Item = u16>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<impl Iterator<Item = u16>, GetDescriptorError>> {
         self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)
             .map(move |r| {
                 let data = r?;
                 if !validate_string_descriptor(&data) {
                     error!("String descriptor language list read {data:?}, not a valid string descriptor");
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "string descriptor data was invalid",
-                    ));
+                    return Err(GetDescriptorError::InvalidDescriptor)
                 }
 
                 //TODO: Use array_chunks once stable
@@ -252,7 +248,7 @@ impl Device {
         desc_index: NonZeroU8,
         language_id: u16,
         timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<String, Error>> {
+    ) -> impl MaybeFuture<Output = Result<String, GetDescriptorError>> {
         self.get_descriptor(
             DESCRIPTOR_TYPE_STRING,
             desc_index.get(),
@@ -261,9 +257,7 @@ impl Device {
         )
         .map(|r| {
             let data = r?;
-            decode_string_descriptor(&data).map_err(|_| {
-                Error::new(ErrorKind::InvalidData, "string descriptor data was invalid")
-            })
+            decode_string_descriptor(&data).map_err(|_| GetDescriptorError::InvalidDescriptor)
         })
     }
 
@@ -350,6 +344,12 @@ impl Device {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.backend.clone().control_out(data, timeout)
+    }
+}
+
+impl Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device").finish()
     }
 }
 
@@ -500,16 +500,23 @@ impl Interface {
     pub fn endpoint<EpType: EndpointType, Dir: EndpointDirection>(
         &self,
         address: u8,
-    ) -> Result<Endpoint<EpType, Dir>, ClaimEndpointError> {
+    ) -> Result<Endpoint<EpType, Dir>, Error> {
         let intf_desc = self.descriptor();
         let ep_desc =
             intf_desc.and_then(|desc| desc.endpoints().find(|ep| ep.address() == address));
         let Some(ep_desc) = ep_desc else {
-            return Err(ClaimEndpointError::InvalidAddress);
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "specified endpoint does not exist on this interface",
+            ));
         };
 
-        if ep_desc.transfer_type() != EpType::TYPE || address & Direction::MASK != Dir::DIR as u8 {
-            return Err(ClaimEndpointError::InvalidType);
+        if address & Direction::MASK != Dir::DIR as u8 {
+            return Err(Error::new(ErrorKind::Other, "incorrect endpoint direction"));
+        }
+
+        if ep_desc.transfer_type() != EpType::TYPE {
+            return Err(Error::new(ErrorKind::Other, "incorrect endpoint type"));
         }
 
         let backend = self.backend.endpoint(ep_desc)?;
@@ -521,31 +528,13 @@ impl Interface {
     }
 }
 
-/// Error from [`Interface::endpoint`].
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ClaimEndpointError {
-    /// The specified address does not exist on this interface and alternate setting
-    InvalidAddress,
-
-    /// The type or direction does not match the endpoint descriptor for this address
-    InvalidType,
-
-    /// The endpoint is already claimed
-    Busy,
-}
-
-impl std::fmt::Display for ClaimEndpointError {
+impl Debug for Interface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ClaimEndpointError::InvalidAddress => write!(f, "invalid endpoint address"),
-            ClaimEndpointError::InvalidType => write!(f, "incorrect endpoint type or direction"),
-            ClaimEndpointError::Busy => write!(f, "endpoint is already claimed"),
-        }
+        f.debug_struct("Interface")
+            .field("number", &self.backend.interface_number)
+            .finish()
     }
 }
-
-impl std::error::Error for ClaimEndpointError {}
 
 /// Exclusive access to an endpoint of a USB device.
 ///
@@ -716,6 +705,19 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clear_halt()
+    }
+}
+
+impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field(
+                "address",
+                &format_args!("0x{:02x}", self.endpoint_address()),
+            )
+            .field("type", &EpType::TYPE)
+            .field("direction", &Dir::DIR)
+            .finish()
     }
 }
 

@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     ffi::c_void,
-    io::ErrorKind,
     mem::ManuallyDrop,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -17,7 +16,6 @@ use log::{debug, error};
 use crate::{
     bitset::EndpointBitSet,
     descriptors::{ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor},
-    device::ClaimEndpointError,
     maybe_future::blocking::Blocking,
     transfer::{
         internal::{
@@ -25,13 +23,13 @@ use crate::{
         },
         Buffer, Completion, ControlIn, ControlOut, Direction, TransferError,
     },
-    DeviceInfo, Error, MaybeFuture, Speed,
+    DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
 
 use super::{
     enumeration::{device_descriptor_from_fields, get_integer_property, service_by_registry_id},
     events::{add_event_source, EventRegistration},
-    iokit::{call_iokit_function, check_iokit_return},
+    iokit::call_iokit_function,
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
     TransferData,
@@ -70,23 +68,32 @@ impl MacDevice {
             log::info!("Opening device from registry id {}", registry_id);
             let service = service_by_registry_id(registry_id)?;
             let device = IoKitDevice::new(&service)?;
-            let _event_registration = add_event_source(device.create_async_event_source()?);
+            let event_source = device.create_async_event_source().map_err(|e| {
+                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
+                    .log_error()
+            })?;
+            let _event_registration = add_event_source(event_source);
 
-            let opened = match unsafe { call_iokit_function!(device.raw, USBDeviceOpen()) } {
-                io_kit_sys::ret::kIOReturnSuccess => true,
-                err => {
-                    // Most methods don't require USBDeviceOpen() so this can be ignored
-                    // to allow different processes to open different interfaces.
-                    log::debug!("Could not open device for exclusive access: {err:x}");
-                    false
-                }
-            };
+            let opened = device
+                .open()
+                .inspect_err(|err| {
+                    log::debug!("Could not open device for exclusive access: 0x{err:08x}");
+                })
+                .is_ok();
 
-            let device_descriptor = device_descriptor_from_fields(&service)
-                .ok_or_else(|| Error::other("could not read properties for device descriptor"))?;
+            let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Other,
+                    "could not read properties for device descriptor",
+                )
+            })?;
 
-            let num_configs = device.get_number_of_configurations().inspect_err(|e| {
-                log::warn!("failed to get number of configurations: {e}");
+            let num_configs = device.get_number_of_configurations().map_err(|e| {
+                Error::new_os(
+                    ErrorKind::Other,
+                    "failed to get number of configurations",
+                    e,
+                )
             })?;
 
             let config_descriptors: Vec<Vec<u8>> = (0..num_configs)
@@ -149,12 +156,22 @@ impl MacDevice {
     fn require_open_exclusive(&self) -> Result<(), Error> {
         let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
         if !*is_open_exclusive {
-            unsafe { check_iokit_return(call_iokit_function!(self.device.raw, USBDeviceOpen()))? };
+            self.device.open().map_err(|e| match e {
+                io_kit_sys::ret::kIOReturnNoDevice => {
+                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                }
+                _ => Error::new_os(
+                    ErrorKind::Other,
+                    "could not open device for exclusive access",
+                    e,
+                ),
+            })?;
             *is_open_exclusive = true;
         }
 
         if self.claimed_interfaces.load(Ordering::Relaxed) != 0 {
-            return Err(Error::other(
+            return Err(Error::new(
+                ErrorKind::Busy,
                 "cannot perform this operation while interfaces are claimed",
             ));
         }
@@ -168,12 +185,17 @@ impl MacDevice {
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    self.device.raw,
-                    SetConfiguration(configuration)
-                ))?
-            }
+            self.device
+                .set_configuration(configuration)
+                .map_err(|e| match e {
+                    io_kit_sys::ret::kIOReturnNoDevice => {
+                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                    }
+                    io_kit_sys::ret::kIOReturnNotFound => {
+                        Error::new_os(ErrorKind::NotFound, "configuration not found", e)
+                    }
+                    _ => Error::new_os(ErrorKind::Other, "failed to set configuration", e),
+                })?;
             log::debug!("Set configuration {configuration}");
             self.active_config.store(configuration, Ordering::SeqCst);
             Ok(())
@@ -183,12 +205,12 @@ impl MacDevice {
     pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    self.device.raw,
-                    USBDeviceReEnumerate(0)
-                ))
-            }
+            self.device.reset().map_err(|e| match e {
+                io_kit_sys::ret::kIOReturnNoDevice => {
+                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                }
+                _ => Error::new_os(ErrorKind::Other, "failed to reset device", e),
+            })
         })
     }
 
@@ -199,7 +221,10 @@ impl MacDevice {
         Blocking::new(move || {
             let intf_service = self
                 .device
-                .create_interface_iterator()?
+                .create_interface_iterator()
+                .map_err(|e| {
+                    Error::new_os(ErrorKind::Other, "failed to create interface iterator", e)
+                })?
                 .find(|io_service| {
                     get_integer_property(io_service, "bInterfaceNumber")
                         == Some(interface_number as i64)
@@ -207,9 +232,23 @@ impl MacDevice {
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
             let mut interface = IoKitInterface::new(intf_service)?;
-            let _event_registration = add_event_source(interface.create_async_event_source()?);
+            let source = interface.create_async_event_source().map_err(|e| {
+                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
+                    .log_error()
+            })?;
+            let _event_registration = add_event_source(source);
 
-            interface.open()?;
+            interface.open().map_err(|e| match e {
+                io_kit_sys::ret::kIOReturnExclusiveAccess => Error::new_os(
+                    ErrorKind::Busy,
+                    "could not open interface for exclusive access",
+                    e,
+                ),
+                io_kit_sys::ret::kIOReturnNoDevice => {
+                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                }
+                _ => Error::new_os(ErrorKind::Other, "failed to open interface", e),
+            })?;
             self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
             Ok(Arc::new(MacInterface {
@@ -357,19 +396,20 @@ impl MacInterface {
             let mut state = self.state.lock().unwrap();
 
             if !state.endpoints_used.is_empty() {
-                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
-
-                return Err(Error::other(
-                    "must drop endpoints before changing alt setting",
+                return Err(Error::new(
+                    ErrorKind::Busy,
+                    "can't change alternate setting while endpoints are in use",
                 ));
             }
 
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    self.interface.raw,
-                    SetAlternateInterface(alt_setting)
-                ))?;
-            }
+            self.interface
+                .set_alternate_interface(alt_setting)
+                .map_err(|e| match e {
+                    io_kit_sys::ret::kIOReturnNoDevice => {
+                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                    }
+                    _ => Error::new_os(ErrorKind::Other, "failed to set alternate interface", e),
+                })?;
 
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
@@ -405,7 +445,7 @@ impl MacInterface {
     pub fn endpoint(
         self: &Arc<Self>,
         descriptor: EndpointDescriptor,
-    ) -> Result<MacEndpoint, ClaimEndpointError> {
+    ) -> Result<MacEndpoint, Error> {
         let address = descriptor.address();
         let max_packet_size = descriptor.max_packet_size();
 
@@ -413,11 +453,14 @@ impl MacInterface {
 
         let Some(pipe_ref) = self.interface.find_pipe_ref(address) else {
             debug!("Endpoint {address:02X} not found in iokit");
-            return Err(ClaimEndpointError::InvalidAddress);
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "specified endpoint does not exist on IOKit interface",
+            ));
         };
 
         if state.endpoints_used.is_set(address) {
-            return Err(ClaimEndpointError::Busy);
+            return Err(Error::new(ErrorKind::Busy, "endpoint already in use"));
         }
         state.endpoints_used.set(address);
 
@@ -589,12 +632,16 @@ impl MacEndpoint {
         Blocking::new(move || {
             debug!("Clear halt, endpoint {:02x}", inner.address);
 
-            unsafe {
-                check_iokit_return(call_iokit_function!(
-                    inner.interface.interface.raw,
-                    ClearPipeStallBothEnds(inner.pipe_ref)
-                ))
-            }
+            inner
+                .interface
+                .interface
+                .clear_pipe_stall_both_ends(inner.pipe_ref)
+                .map_err(|e| match e {
+                    io_kit_sys::ret::kIOReturnNoDevice => {
+                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                    }
+                    _ => Error::new_os(ErrorKind::Other, "failed to clear halt on endpoint", e),
+                })
         })
     }
 }

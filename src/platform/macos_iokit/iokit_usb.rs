@@ -3,12 +3,12 @@
 //! Based on Kate Temkin's [usrs](https://github.com/ktemkin/usrs)
 //! licensed under MIT OR Apache-2.0.
 
-use std::{io::ErrorKind, ptr, slice, time::Duration};
+use std::{ptr, slice, time::Duration};
 
 use core_foundation::{base::TCFType, runloop::CFRunLoopSource};
 use core_foundation_sys::runloop::CFRunLoopSourceRef;
 use io_kit_sys::{
-    ret::{kIOReturnNoResources, kIOReturnSuccess},
+    ret::{kIOReturnNoResources, kIOReturnSuccess, IOReturn},
     types::io_iterator_t,
 };
 use log::error;
@@ -17,7 +17,7 @@ use crate::{
     platform::macos_iokit::{
         iokit::usb_interface_type_id, iokit_c::kIOUsbInterfaceUserClientTypeID,
     },
-    Error,
+    Error, ErrorKind,
 };
 
 use super::{
@@ -75,12 +75,15 @@ impl IoKitDevice {
                 }
 
                 if rc != kIOReturnSuccess {
-                    return Err(Error::from_raw_os_error(rc));
+                    return Err(Error::new_os(ErrorKind::Other, "failed to open device", rc));
                 }
 
                 if raw_device_plugin.is_null() {
                     error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
-                    return Err(Error::other("Could not create PlugInInterface"));
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        "could not create PlugInInterface",
+                    ));
                 }
 
                 let device_plugin = PluginInterface::new(raw_device_plugin);
@@ -113,7 +116,24 @@ impl IoKitDevice {
         }
     }
 
-    pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, Error> {
+    pub(crate) fn open(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceOpen())) }
+    }
+
+    pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), IOReturn> {
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                SetConfiguration(configuration)
+            ))
+        }
+    }
+
+    pub(crate) fn reset(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceReEnumerate(0))) }
+    }
+
+    pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, IOReturn> {
         unsafe {
             let mut raw_source: CFRunLoopSourceRef = std::ptr::null_mut();
             check_iokit_return(call_iokit_function!(
@@ -125,7 +145,7 @@ impl IoKitDevice {
     }
 
     /// Returns an IOKit iterator that can be used to iterate over all interfaces on this device.
-    pub(crate) fn create_interface_iterator(&self) -> Result<IoServiceIterator, Error> {
+    pub(crate) fn create_interface_iterator(&self) -> Result<IoServiceIterator, IOReturn> {
         unsafe {
             let mut iterator: io_iterator_t = 0;
 
@@ -145,7 +165,7 @@ impl IoKitDevice {
         }
     }
 
-    pub(crate) fn get_number_of_configurations(&self) -> Result<u8, Error> {
+    pub(crate) fn get_number_of_configurations(&self) -> Result<u8, IOReturn> {
         unsafe {
             let mut num = 0;
             check_iokit_return(call_iokit_function!(
@@ -156,7 +176,7 @@ impl IoKitDevice {
         }
     }
 
-    pub(crate) fn get_configuration_descriptor(&self, index: u8) -> Result<&[u8], Error> {
+    pub(crate) fn get_configuration_descriptor(&self, index: u8) -> Result<&[u8], IOReturn> {
         unsafe {
             let mut ptr: *mut IOUSBConfigurationDescriptor = ptr::null_mut();
             check_iokit_return(call_iokit_function!(
@@ -168,7 +188,7 @@ impl IoKitDevice {
         }
     }
 
-    pub(crate) fn get_configuration(&self) -> Result<u8, Error> {
+    pub(crate) fn get_configuration(&self) -> Result<u8, IOReturn> {
         unsafe {
             let mut val = 0;
             check_iokit_return(call_iokit_function!(self.raw, GetConfiguration(&mut val)))?;
@@ -208,12 +228,19 @@ impl IoKitInterface {
             );
 
             if rc != kIOReturnSuccess {
-                return Err(Error::from_raw_os_error(rc));
+                return Err(Error::new_os(
+                    ErrorKind::Other,
+                    "failed to open interface",
+                    rc,
+                ));
             }
 
             if raw_interface_plugin.is_null() {
                 error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
-                return Err(Error::other("Could not create PlugInInterface"));
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "could not create PlugInInterface",
+                ));
             }
 
             let interface_plugin = PluginInterface::new(raw_interface_plugin);
@@ -238,15 +265,15 @@ impl IoKitInterface {
         }
     }
 
-    pub(crate) fn open(&mut self) -> Result<(), Error> {
+    pub(crate) fn open(&mut self) -> Result<(), IOReturn> {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBInterfaceOpen())) }
     }
 
-    pub(crate) fn close(&mut self) -> Result<(), Error> {
+    pub(crate) fn close(&mut self) -> Result<(), IOReturn> {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBInterfaceClose())) }
     }
 
-    pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, Error> {
+    pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, IOReturn> {
         unsafe {
             let mut raw_source: CFRunLoopSourceRef = std::ptr::null_mut();
             check_iokit_return(call_iokit_function!(
@@ -289,6 +316,24 @@ impl IoKitInterface {
                 }
             }
             None
+        }
+    }
+
+    pub(crate) fn set_alternate_interface(&self, alt_setting: u8) -> Result<(), IOReturn> {
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                SetAlternateInterface(alt_setting)
+            ))
+        }
+    }
+
+    pub(crate) fn clear_pipe_stall_both_ends(&self, pipe_ref: u8) -> Result<(), IOReturn> {
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                ClearPipeStallBothEnds(pipe_ref)
+            ))
         }
     }
 }

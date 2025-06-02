@@ -2,7 +2,6 @@ use std::{
     borrow::Borrow,
     ffi::{OsStr, OsString},
     fmt::{Display, Write},
-    io,
     ops::Deref,
     os::windows::prelude::{
         AsHandle, AsRawHandle, HandleOrInvalid, OsStrExt, OsStringExt, OwnedHandle, RawHandle,
@@ -12,14 +11,14 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE},
+    Foundation::{GetLastError, GENERIC_READ, GENERIC_WRITE, HANDLE, WIN32_ERROR},
     Storage::FileSystem::{
         CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     },
 };
 
 /// Wrapper around `CreateFile`
-pub fn create_file(path: &WCStr) -> Result<OwnedHandle, io::Error> {
+pub fn create_file(path: &WCStr) -> Result<OwnedHandle, WIN32_ERROR> {
     unsafe {
         let r = CreateFileW(
             path.as_ptr(),
@@ -32,7 +31,7 @@ pub fn create_file(path: &WCStr) -> Result<OwnedHandle, io::Error> {
         );
         HandleOrInvalid::from_raw_handle(r as RawHandle)
             .try_into()
-            .map_err(|_| io::Error::last_os_error())
+            .map_err(|_| GetLastError())
     }
 }
 

@@ -11,7 +11,7 @@
 //! on a device use the same file descriptor, putting USB-specific
 //! dispatch in the event loop avoids additonal synchronization.
 
-use crate::Error;
+use crate::{Error, ErrorKind};
 use once_cell::sync::OnceCell;
 use rustix::{
     event::epoll::{self, EventData, EventFlags},
@@ -19,7 +19,7 @@ use rustix::{
     io::Errno,
 };
 use slab::Slab;
-use std::{io, mem::MaybeUninit, sync::Mutex, task::Waker, thread};
+use std::{mem::MaybeUninit, sync::Mutex, task::Waker, thread};
 
 use super::Device;
 
@@ -61,8 +61,8 @@ pub(super) fn register_fd(fd: BorrowedFd, tag: Tag, flags: EventFlags) -> Result
     let mut start_thread = false;
     let epoll_fd = EPOLL_FD.get_or_try_init(|| {
         start_thread = true;
-        epoll::create(epoll::CreateFlags::CLOEXEC).inspect_err(|e| {
-            log::error!("Failed to initialize epoll: {e}");
+        epoll::create(epoll::CreateFlags::CLOEXEC).map_err(|e| {
+            Error::new_os(ErrorKind::Other, "failed to initialize epoll", e).log_error()
         })
     })?;
 
@@ -70,9 +70,8 @@ pub(super) fn register_fd(fd: BorrowedFd, tag: Tag, flags: EventFlags) -> Result
         thread::spawn(event_loop);
     }
 
-    epoll::add(epoll_fd, fd, tag.as_event_data(), flags).inspect_err(|e| {
-        log::error!("Failed to add epoll watch: {e}");
-    })?;
+    epoll::add(epoll_fd, fd, tag.as_event_data(), flags)
+        .map_err(|e| Error::new_os(ErrorKind::Other, "failed to add epoll watch", e).log_error())?;
 
     Ok(())
 }
@@ -115,13 +114,13 @@ pub(crate) struct Async<T: AsFd> {
 }
 
 impl<T: AsFd> Async<T> {
-    pub fn new(inner: T) -> Result<Self, io::Error> {
+    pub fn new(inner: T) -> Result<Self, Error> {
         let id = WAKERS.lock().unwrap().insert(None);
         register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::empty())?;
         Ok(Async { inner, id })
     }
 
-    pub fn register(&self, waker: &Waker) -> Result<(), io::Error> {
+    pub fn register(&self, waker: &Waker) -> Result<(), Error> {
         WAKERS
             .lock()
             .unwrap()
@@ -134,7 +133,10 @@ impl<T: AsFd> Async<T> {
             self.inner.as_fd(),
             Tag::Waker(self.id).as_event_data(),
             EventFlags::ONESHOT | EventFlags::IN,
-        )?;
+        )
+        .map_err(|e| {
+            Error::new_os(ErrorKind::Other, "failed to modify epoll watch", e).log_error()
+        })?;
         Ok(())
     }
 }

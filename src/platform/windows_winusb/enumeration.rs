@@ -1,7 +1,4 @@
-use std::{
-    ffi::{OsStr, OsString},
-    io::ErrorKind,
-};
+use std::ffi::{OsStr, OsString};
 
 use log::debug;
 use windows_sys::Win32::Devices::{
@@ -19,7 +16,7 @@ use crate::{
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
     maybe_future::{blocking::Blocking, MaybeFuture},
-    BusInfo, DeviceInfo, Error, InterfaceInfo, UsbControllerType,
+    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, UsbControllerType,
 };
 
 use super::{
@@ -241,7 +238,10 @@ pub(crate) fn get_winusb_device_path(dev: DevInst) -> Result<WCString, Error> {
     let paths = dev.interfaces(GUID_DEVINTERFACE_USB_DEVICE);
 
     let Some(path) = paths.iter().next() else {
-        return Err(Error::other("Failed to find device path for WinUSB device"));
+        return Err(Error::new(
+            ErrorKind::Other,
+            "failed to find device path for WinUSB device",
+        ));
     };
 
     Ok(path.to_owned())
@@ -266,14 +266,15 @@ pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString,
     let Some(driver) = child.get_property::<OsString>(DEVPKEY_Device_Service) else {
         return Err(Error::new(
             ErrorKind::Unsupported,
-            "Could not determine driver for interface",
+            "could not determine driver for interface",
         ));
     };
 
     if !driver.eq_ignore_ascii_case("winusb") {
+        debug!("Incompatible driver {driver:?} for interface, not WinUSB");
         return Err(Error::new(
             ErrorKind::Unsupported,
-            format!("Interface driver is {driver:?}, not WinUSB"),
+            "incompatible driver is installed for this interface",
         ));
     }
 
@@ -298,9 +299,11 @@ pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString,
 
     let paths = child.interfaces(guid);
     let Some(path) = paths.iter().next() else {
-        return Err(Error::other(
-            "Failed to find device path for WinUSB interface",
-        ));
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "failed to find device path for WinUSB interface",
+        )
+        .log_debug());
     };
 
     Ok(path.to_owned())

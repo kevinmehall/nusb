@@ -1,7 +1,7 @@
 use std::{
     collections::{btree_map::Entry, BTreeMap, VecDeque},
     ffi::c_void,
-    io::{self, ErrorKind},
+    io,
     mem::{size_of_val, transmute},
     os::windows::{
         io::{AsRawHandle, RawHandle},
@@ -23,7 +23,8 @@ use windows_sys::Win32::{
     },
     Foundation::{
         GetLastError, ERROR_BAD_COMMAND, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND,
-        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_SUCH_DEVICE, FALSE, HANDLE, TRUE,
+        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVICE, FALSE,
+        HANDLE, TRUE,
     },
     System::IO::{CancelIoEx, OVERLAPPED},
 };
@@ -34,7 +35,6 @@ use crate::{
         ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor, DESCRIPTOR_LEN_DEVICE,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
-    device::ClaimEndpointError,
     maybe_future::{blocking::Blocking, Ready},
     transfer::{
         internal::{
@@ -42,7 +42,7 @@ use crate::{
         },
         Buffer, Completion, ControlIn, ControlOut, Direction, Recipient, TransferError,
     },
-    DeviceInfo, Error, MaybeFuture, Speed,
+    DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
 
 use super::{
@@ -87,7 +87,7 @@ impl WindowsDevice {
                 )
             };
             let device_descriptor = DeviceDescriptor::new(device_descriptor)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid device descriptor"))?;
+                .ok_or_else(|| Error::new(ErrorKind::Other, "invalid device descriptor"))?;
 
             let num_configurations = connection_info.device_desc.bNumConfigurations;
             let config_descriptors = (0..num_configurations)
@@ -136,7 +136,7 @@ impl WindowsDevice {
         &self,
         _configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
-        Ready(Err(io::Error::new(
+        Ready(Err(Error::new(
             ErrorKind::Unsupported,
             "set_configuration not supported by WinUSB",
         )))
@@ -147,18 +147,24 @@ impl WindowsDevice {
         desc_type: u8,
         desc_index: u8,
         language_id: u16,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, Error>> {
+    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         Blocking::new(move || {
-            HubPort::by_child_devinst(self.devinst)?.get_descriptor(
-                desc_type,
-                desc_index,
-                language_id,
-            )
+            fn to_transfer_error(e: Error) -> TransferError {
+                match e.kind() {
+                    ErrorKind::Disconnected => TransferError::Disconnected,
+                    _ => TransferError::Unknown(e.os_error().unwrap_or(0)),
+                }
+            }
+
+            HubPort::by_child_devinst(self.devinst)
+                .map_err(to_transfer_error)?
+                .get_descriptor(desc_type, desc_index, language_id)
+                .map_err(to_transfer_error)
         })
     }
 
     pub(crate) fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
-        Ready(Err(io::Error::new(
+        Ready(Err(Error::new(
             ErrorKind::Unsupported,
             "reset not supported by WinUSB",
         )))
@@ -204,9 +210,10 @@ impl WindowsDevice {
                     }
                 }
             } else {
+                debug!("Device driver is {driver:?}, not WinUSB or USBCCGP");
                 Err(Error::new(
                     ErrorKind::Unsupported,
-                    format!("Device driver is {driver:?}, not WinUSB or USBCCGP"),
+                    "incompatible driver is installed for this device",
                 ))
             }
         })
@@ -266,14 +273,19 @@ unsafe impl Sync for WinusbFileHandle {}
 
 impl WinusbFileHandle {
     fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
-        let handle = create_file(path)?;
+        let handle = create_file(path)
+            .map_err(|e| Error::new_os(ErrorKind::Other, "failed to open device", e).log_debug())?;
         super::events::register(&handle)?;
 
         let winusb_handle = unsafe {
             let mut h = ptr::null_mut();
             if WinUsb_Initialize(raw_handle(&handle), &mut h) == FALSE {
-                error!("WinUsb_Initialize failed: {:?}", io::Error::last_os_error());
-                return Err(io::Error::last_os_error());
+                return Err(Error::new_os(
+                    ErrorKind::Other,
+                    "failed to initialize WinUSB",
+                    GetLastError(),
+                )
+                .log_debug());
             }
             h
         };
@@ -296,10 +308,7 @@ impl WinusbFileHandle {
         assert!(interface_number >= self.first_interface);
 
         if self.claimed_interfaces.is_set(interface_number) {
-            return Err(Error::new(
-                ErrorKind::AddrInUse,
-                "Interface is already claimed",
-            ));
+            Error::new(ErrorKind::Busy, "interface is already claimed");
         }
 
         let winusb_handle = if self.first_interface == interface_number {
@@ -310,13 +319,22 @@ impl WinusbFileHandle {
                 let idx = interface_number - self.first_interface - 1;
                 if WinUsb_GetAssociatedInterface(self.winusb_handle, idx, &mut out_handle) == FALSE
                 {
+                    let err = GetLastError();
                     error!(
                         "WinUsb_GetAssociatedInterface for {} on {} failed: {:?}",
-                        interface_number,
-                        self.first_interface,
-                        io::Error::last_os_error()
+                        interface_number, self.first_interface, err
                     );
-                    return Err(io::Error::last_os_error());
+
+                    return Err(match err {
+                        ERROR_NO_MORE_ITEMS => {
+                            Error::new_os(ErrorKind::NotFound, "interface not found", err)
+                        }
+                        _ => Error::new_os(
+                            ErrorKind::Other,
+                            "failed to initialize WinUSB for associated interface",
+                            err,
+                        ),
+                    });
                 }
                 out_handle
             }
@@ -463,9 +481,9 @@ impl WindowsInterface {
         Blocking::new(move || unsafe {
             let mut state = self.state.lock().unwrap();
             if !state.endpoints.is_empty() {
-                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
-                return Err(Error::other(
-                    "must drop endpoints before changing alt setting",
+                return Err(Error::new(
+                    ErrorKind::Busy,
+                    "can't change alternate setting while endpoints are in use",
                 ));
             }
             let r = WinUsb_SetCurrentAlternateSetting(self.winusb_handle, alt_setting);
@@ -477,7 +495,15 @@ impl WindowsInterface {
                 state.alt_setting = alt_setting;
                 Ok(())
             } else {
-                Err(io::Error::last_os_error())
+                Err(match GetLastError() {
+                    e @ ERROR_NOT_FOUND => {
+                        Error::new_os(ErrorKind::NotFound, "alternate setting not found", e)
+                    }
+                    e @ ERROR_BAD_COMMAND => {
+                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                    }
+                    e => Error::new_os(ErrorKind::Other, "failed to set alternate setting", e),
+                })
             }
         })
     }
@@ -489,14 +515,14 @@ impl WindowsInterface {
     pub fn endpoint(
         self: &Arc<Self>,
         descriptor: EndpointDescriptor,
-    ) -> Result<WindowsEndpoint, ClaimEndpointError> {
+    ) -> Result<WindowsEndpoint, Error> {
         let address = descriptor.address();
         let max_packet_size = descriptor.max_packet_size();
 
         let mut state = self.state.lock().unwrap();
 
         if state.endpoints.is_set(address) {
-            return Err(ClaimEndpointError::Busy);
+            return Err(Error::new(ErrorKind::Busy, "endpoint already in use"));
         }
         state.endpoints.set(address);
 
@@ -730,11 +756,12 @@ impl WindowsEndpoint {
             let endpoint = inner.address;
             debug!("Clear halt, endpoint {endpoint:02x}");
             unsafe {
-                let r = WinUsb_ResetPipe(inner.interface.winusb_handle, endpoint);
-                if r == TRUE {
+                if WinUsb_ResetPipe(inner.interface.winusb_handle, endpoint) == TRUE {
                     Ok(())
                 } else {
-                    Err(io::Error::last_os_error())
+                    Err(match GetLastError() {
+                        e => Error::new_os(ErrorKind::Other, "failed to clear halt", e),
+                    })
                 }
             }
         })

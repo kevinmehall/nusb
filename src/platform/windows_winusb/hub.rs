@@ -1,7 +1,6 @@
 use std::{
     alloc::{self, Layout},
     ffi::c_void,
-    io::ErrorKind,
     mem,
     os::windows::prelude::OwnedHandle,
     ptr::{addr_of, null_mut},
@@ -25,6 +24,13 @@ use windows_sys::Win32::{
     System::IO::DeviceIoControl,
 };
 
+use crate::{descriptors::DESCRIPTOR_TYPE_DEVICE, Error, ErrorKind, Speed};
+
+use super::{
+    cfgmgr32::DevInst,
+    util::{create_file, raw_handle},
+};
+
 // flags for USB_NODE_CONNECTION_INFORMATION_EX_V2.SupportedUsbProtocols
 const USB110: u32 = 0x01;
 const USB200: u32 = 0x02;
@@ -35,13 +41,6 @@ const DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER: u32 = 0x01;
 const DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER: u32 = 0x02;
 const DEVICE_IS_OPERATING_AT_SUPER_SPEED_PLUS_OR_HIGHER: u32 = 0x04;
 const DEVICE_IS_SUPER_SPEED_PLUS_CAPABLE_OR_HIGHER: u32 = 0x08;
-
-use crate::{descriptors::DESCRIPTOR_TYPE_DEVICE, Error, Speed};
-
-use super::{
-    cfgmgr32::DevInst,
-    util::{create_file, raw_handle},
-};
 
 /// Safe wrapper around hub ioctls used to get descriptors for child devices.
 pub struct HubHandle(OwnedHandle);
@@ -83,19 +82,25 @@ impl HubHandle {
             );
 
             if r == TRUE {
+                if info.ConnectionStatus != windows_sys::Win32::Devices::Usb::DeviceConnected {
+                    return Err(Error::new(ErrorKind::Disconnected, "device disconnected"));
+                }
                 if info.DeviceDescriptor.bDescriptorType != DESCRIPTOR_TYPE_DEVICE {
                     // When the device is disconnected during this call, Windows is observed to
                     // sometimes return an all-zero device descriptor.
-                    return Err(Error::other(
+                    return Err(Error::new(ErrorKind::Other,
                        "IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX returned an invalid device descriptor",
                     ));
                 }
 
                 Ok(info)
             } else {
-                let err = Error::last_os_error();
-                debug!("Hub DeviceIoControl failed: {err:?}");
-                Err(err)
+                Err(Error::new_os(
+                    ErrorKind::Other,
+                    "hub DeviceIoControl failed",
+                    GetLastError(),
+                )
+                .log_debug())
             }
         }
     }
@@ -124,9 +129,12 @@ impl HubHandle {
             if r == TRUE {
                 Ok(info)
             } else {
-                let err = Error::last_os_error();
-                debug!("Hub DeviceIoControl failed: {err:?}");
-                Err(err)
+                Err(Error::new_os(
+                    ErrorKind::Other,
+                    "hub DeviceIoControl failed",
+                    GetLastError(),
+                )
+                .log_debug())
             }
         }
     }
@@ -186,10 +194,12 @@ impl HubHandle {
                 let err = GetLastError();
                 debug!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
                 Err(match err {
-                    ERROR_GEN_FAILURE => {
-                        Error::other("Descriptor request failed. Device might be suspended.")
-                    }
-                    _ => Error::from_raw_os_error(err as i32),
+                    ERROR_GEN_FAILURE => Error::new_os(
+                        ErrorKind::Other,
+                        "descriptor request failed: device might be suspended.",
+                        err,
+                    ),
+                    _ => Error::new_os(ErrorKind::Other, "descriptor request failed", err),
                 })
             };
 
@@ -215,12 +225,12 @@ impl HubPort {
     pub fn by_child_devinst(devinst: DevInst) -> Result<HubPort, Error> {
         let parent_hub = devinst
             .parent()
-            .ok_or_else(|| Error::other("failed to find parent hub"))?;
+            .ok_or_else(|| Error::new(ErrorKind::Disconnected, "failed to find parent hub"))?;
         let hub_handle = HubHandle::by_devinst(parent_hub)
-            .ok_or_else(|| Error::other("failed to open parent hub"))?;
+            .ok_or_else(|| Error::new(ErrorKind::Disconnected, "failed to open parent hub"))?;
         let Some(port_number) = devinst.get_property::<u32>(DEVPKEY_Device_Address) else {
             return Err(Error::new(
-                ErrorKind::NotConnected,
+                ErrorKind::Disconnected,
                 "Could not find hub port number",
             ));
         };

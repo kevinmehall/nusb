@@ -1,4 +1,3 @@
-use log::error;
 use once_cell::sync::OnceCell;
 use std::{
     os::windows::{
@@ -24,11 +23,12 @@ impl IoCompletionPort {
             let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 0);
             match HandleOrNull::from_raw_handle(port as RawHandle).try_into() {
                 Ok(handle) => Ok(IoCompletionPort(handle)),
-                Err(_) => {
-                    let err = GetLastError();
-                    error!("CreateIoCompletionPort (create) failed: {err:?}");
-                    Err(std::io::Error::from_raw_os_error(err as i32))
-                }
+                Err(_) => Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to create IO completion port",
+                    GetLastError(),
+                )
+                .log_error()),
             }
         }
     }
@@ -37,9 +37,12 @@ impl IoCompletionPort {
         unsafe {
             let r = CreateIoCompletionPort(raw_handle(handle), raw_handle(&self.0), 0, 0);
             if r.is_null() {
-                let err = std::io::Error::last_os_error();
-                error!("CreateIoCompletionPort (register) failed: {err:?}");
-                Err(err)
+                Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to register IO completion port",
+                    GetLastError(),
+                )
+                .log_error())
             } else {
                 Ok(())
             }
@@ -62,9 +65,12 @@ impl IoCompletionPort {
             );
 
             if r == FALSE {
-                let err = std::io::Error::last_os_error();
-                error!("GetQueuedCompletionStatusEx failed: {err:?}");
-                Err(err)
+                Err(Error::new_os(
+                    crate::ErrorKind::Other,
+                    "failed to get events from IO completion port",
+                    GetLastError(),
+                )
+                .log_error())
             } else {
                 events.set_len(event_count as usize);
                 Ok(())
