@@ -14,7 +14,10 @@ use windows_sys::Win32::Devices::{
 };
 
 use crate::{
-    descriptors::{decode_string_descriptor, language_id::US_ENGLISH, DESCRIPTOR_TYPE_STRING},
+    descriptors::{
+        decode_string_descriptor, language_id::US_ENGLISH, validate_config_descriptor,
+        Configuration, DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
+    },
     DeviceInfo, Error, InterfaceInfo,
 };
 
@@ -65,10 +68,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         None
     };
 
-    let driver = devinst
-        .get_property::<OsString>(DEVPKEY_Device_Service)
-        .and_then(|s| s.into_string().ok())
-        .unwrap_or_default();
+    let driver = get_driver_name(devinst);
 
     let mut interfaces = if driver.eq_ignore_ascii_case("usbccgp") {
         devinst
@@ -93,7 +93,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
             })
             .collect()
     } else {
-        Vec::new()
+        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or(Vec::new())
     };
 
     interfaces.sort_unstable_by_key(|i| i.interface_number);
@@ -120,81 +120,116 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     })
 }
 
-/// Find the path to open for an interface of a device
-///
-/// If the whole device is bound to WinUSB, it can be opened directly. For a
-/// composite device, USB interfaces are represented by child device nodes.
-pub(crate) fn find_device_interface_path(dev: DevInst, intf: u8) -> Result<WCString, Error> {
-    let driver = dev
-        .get_property::<OsString>(DEVPKEY_Device_Service)
-        .and_then(|s| s.into_string().ok())
-        .unwrap_or_default();
+fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Vec<InterfaceInfo>> {
+    let buf = hub_port
+        .get_descriptor(
+            DESCRIPTOR_TYPE_CONFIGURATION,
+            active_config.saturating_sub(1),
+            0,
+        )
+        .ok()?;
+    let len = validate_config_descriptor(&buf)?;
+    let desc = Configuration::new(&buf[..len]);
 
-    if driver.eq_ignore_ascii_case("usbccgp") {
-        let child = dev
-            .children()
-            .find(|i| get_interface_number(*i) == Some(intf))
-            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
+    if desc.configuration_value() != active_config {
+        return None;
+    }
 
-        let Some(driver) = child.get_property::<OsString>(DEVPKEY_Device_Service) else {
-            return Err(Error::new(
-                ErrorKind::Unsupported,
-                "Could not determine driver for interface",
-            ));
-        };
+    Some(
+        desc.interfaces()
+            .map(|i| {
+                let i_desc = i.first_alt_setting();
 
-        if !driver.eq_ignore_ascii_case("winusb") {
-            return Err(Error::new(
-                ErrorKind::Unsupported,
-                format!("Interface driver is {driver:?}, not WinUSB"),
-            ));
-        }
-
-        let reg_key = child.registry_key().unwrap();
-        let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
-            Ok(s) => s,
-            Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
-                Ok(s) => s,
-                Err(f) => {
-                    if e.kind() == f.kind() {
-                        debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
-                    } else {
-                        debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
-                    }
-                    return Err(Error::new(
-                        ErrorKind::Unsupported,
-                        "Could not find DeviceInterfaceGUIDs in registry. WinUSB driver may not be correctly installed for this interface."
-                    ));
+                InterfaceInfo {
+                    interface_number: i.interface_number(),
+                    class: i_desc.class(),
+                    subclass: i_desc.subclass(),
+                    protocol: i_desc.protocol(),
+                    interface_string: None,
                 }
-            },
-        };
+            })
+            .collect(),
+    )
+}
 
-        let paths = child.interfaces(guid);
-        let Some(path) = paths.iter().next() else {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Failed to find device path for WinUSB interface",
-            ));
-        };
+pub(crate) fn get_driver_name(dev: DevInst) -> String {
+    dev.get_property::<OsString>(DEVPKEY_Device_Service)
+        .and_then(|s| s.into_string().ok())
+        .unwrap_or_default()
+}
 
-        Ok(path.to_owned())
-    } else if driver.eq_ignore_ascii_case("winusb") {
-        let paths = dev.interfaces(GUID_DEVINTERFACE_USB_DEVICE);
+/// Get the device path to open for a whole device bound to WinUSB.
+pub(crate) fn get_winusb_device_path(dev: DevInst) -> Result<WCString, Error> {
+    let paths = dev.interfaces(GUID_DEVINTERFACE_USB_DEVICE);
 
-        let Some(path) = paths.iter().next() else {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Failed to find device path for WinUSB device",
-            ));
-        };
+    let Some(path) = paths.iter().next() else {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "Failed to find device path for WinUSB device",
+        ));
+    };
 
-        Ok(path.to_owned())
-    } else {
+    Ok(path.to_owned())
+}
+
+/// Find the child PDO of a USBCCGP device for an interface.
+///
+/// To handle the case when multiple interfaces are represented by one PDO (e.g.
+/// with interface association descriptors), this returns the highest-numbered
+/// interface less than or equal to the target interface.
+///
+/// Returns the discovered interface number and DevInst.
+pub(crate) fn find_usbccgp_child(dev: DevInst, interface: u8) -> Option<(u8, DevInst)> {
+    dev.children()
+        .filter_map(|child| Some((get_interface_number(child)?, child)))
+        .filter(|(interface_number, _)| *interface_number <= interface)
+        .max_by_key(|(interface_number, _)| *interface_number)
+}
+
+/// Get the device path to open for a child PDO of a USBCCGP device.
+pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString, Error> {
+    let Some(driver) = child.get_property::<OsString>(DEVPKEY_Device_Service) else {
         return Err(Error::new(
             ErrorKind::Unsupported,
-            format!("Device driver is {driver:?}, not WinUSB"),
+            "Could not determine driver for interface",
+        ));
+    };
+
+    if !driver.eq_ignore_ascii_case("winusb") {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            format!("Interface driver is {driver:?}, not WinUSB"),
         ));
     }
+
+    let reg_key = child.registry_key().unwrap();
+    let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
+        Ok(s) => s,
+        Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
+            Ok(s) => s,
+            Err(f) => {
+                if e.kind() == f.kind() {
+                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
+                } else {
+                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
+                }
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Could not find DeviceInterfaceGUIDs in registry. WinUSB driver may not be correctly installed for this interface."
+                ));
+            }
+        },
+    };
+
+    let paths = child.interfaces(guid);
+    let Some(path) = paths.iter().next() else {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "Failed to find device path for WinUSB interface",
+        ));
+    };
+
+    Ok(path.to_owned())
 }
 
 fn get_interface_number(intf_dev: DevInst) -> Option<u8> {

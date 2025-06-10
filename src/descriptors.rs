@@ -356,6 +356,13 @@ impl<'a> InterfaceGroup<'a> {
     pub fn alt_settings(&self) -> impl Iterator<Item = InterfaceAltSetting> {
         self.interfaces.iter().cloned()
     }
+
+    /// Get the descriptor for the first alt setting.
+    ///
+    /// There is guaranteed to be at least one alt setting or this would not have been found.
+    pub fn first_alt_setting(&self) -> InterfaceAltSetting<'a> {
+        self.interfaces[0].clone()
+    }
 }
 
 /// Information about a USB interface alternate setting, with access to associated endpoints and other descriptors.
