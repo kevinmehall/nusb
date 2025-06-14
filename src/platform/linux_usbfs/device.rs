@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     ffi::c_void,
     fs::File,
-    io::{ErrorKind, Read, Seek},
+    io::{Read, Seek},
     mem::ManuallyDrop,
     path::PathBuf,
     sync::{
@@ -34,7 +34,6 @@ use crate::{
         parse_concatenated_config_descriptors, ConfigurationDescriptor, DeviceDescriptor,
         EndpointDescriptor, TransferType, DESCRIPTOR_LEN_DEVICE,
     },
-    device::ClaimEndpointError,
     maybe_future::{blocking::Blocking, MaybeFuture},
     transfer::{
         internal::{
@@ -43,7 +42,7 @@ use crate::{
         request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient,
         TransferError,
     },
-    DeviceInfo, Error, Speed,
+    DeviceInfo, Error, ErrorKind, Speed,
 };
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -80,11 +79,22 @@ impl LinuxDevice {
         let sysfs_path = d.path.clone();
 
         Blocking::new(move || {
-            let active_config = sysfs_path.read_attr("bConfigurationValue")?;
             let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
             let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
-                .inspect_err(|e| warn!("Failed to open device {path:?}: {e}"))?;
-            Self::create_inner(fd, Some(sysfs_path), Some(active_config))
+                .map_err(|e| {
+                    match e {
+                        Errno::NOENT => {
+                            Error::new_os(ErrorKind::Disconnected, "device not found", e)
+                        }
+                        Errno::PERM => {
+                            Error::new_os(ErrorKind::PermissionDenied, "permission denied", e)
+                        }
+                        e => Error::new_os(ErrorKind::Other, "failed to open device", e),
+                    }
+                    .log_debug()
+                })?;
+
+            Self::create_inner(fd, Some(sysfs_path))
         })
     }
 
@@ -93,42 +103,47 @@ impl LinuxDevice {
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
         Blocking::new(move || {
             debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
-            Self::create_inner(fd, None, None)
+            Self::create_inner(fd, None)
         })
     }
 
     pub(crate) fn create_inner(
         fd: OwnedFd,
         sysfs: Option<SysfsPath>,
-        active_config: Option<u8>,
     ) -> Result<Arc<LinuxDevice>, Error> {
-        let descriptors = {
-            let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
-            // NOTE: Seek required on android
-            file.seek(std::io::SeekFrom::Start(0))?;
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf)?;
-            buf
-        };
+        let descriptors = read_all_from_fd(&fd).map_err(|e| {
+            Error::new_io(ErrorKind::Other, "failed to read descriptors", e).log_error()
+        })?;
 
         let Some(_) = DeviceDescriptor::new(&descriptors) else {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "invalid device descriptor",
-            ));
+            return Err(Error::new(ErrorKind::Other, "invalid device descriptor"));
         };
 
-        let active_config = if let Some(active_config) = active_config {
-            active_config
+        let active_config: u8 = if let Some(sysfs) = sysfs.as_ref() {
+            sysfs.read_attr("bConfigurationValue").map_err(|e| {
+                warn!("failed to read sysfs bConfigurationValue: {e}");
+                Error::new(ErrorKind::Other, "failed to read sysfs bConfigurationValue")
+            })?
         } else {
-            Self::get_config(&descriptors, &fd)?
+            request_configuration(&fd).unwrap_or_else(|()| {
+                let mut config_descriptors = parse_concatenated_config_descriptors(
+                    &descriptors[DESCRIPTOR_LEN_DEVICE as usize..],
+                );
+
+                if let Some(config) = config_descriptors.next() {
+                    config.configuration_value()
+                } else {
+                    error!("no configurations for device fd {}", fd.as_raw_fd());
+                    0
+                }
+            })
         };
 
         let timerfd = timerfd_create(
             rustix::time::TimerfdClockId::Monotonic,
             TimerfdFlags::CLOEXEC | TimerfdFlags::NONBLOCK,
         )
-        .inspect_err(|e| log::error!("Failed to create timerfd: {e}"))?;
+        .map_err(|e| Error::new_os(ErrorKind::Other, "failed to create timerfd", e).log_error())?;
 
         let arc = Arc::new_cyclic(|weak| {
             let events_id = DEVICES.lock().unwrap().insert(weak.clone());
@@ -309,7 +324,12 @@ impl LinuxDevice {
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
-            usbfs::set_configuration(&self.fd, configuration)?;
+            usbfs::set_configuration(&self.fd, configuration).map_err(|e| match e {
+                Errno::INVAL => Error::new_os(ErrorKind::NotFound, "configuration not found", e),
+                Errno::BUSY => Error::new_os(ErrorKind::Busy, "device is busy", e),
+                Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+                _ => Error::new_os(ErrorKind::Other, "failed to set configuration", e),
+            })?;
             self.active_config.store(configuration, Ordering::SeqCst);
             Ok(())
         })
@@ -317,8 +337,11 @@ impl LinuxDevice {
 
     pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
-            usbfs::reset(&self.fd)?;
-            Ok(())
+            usbfs::reset(&self.fd).map_err(|e| match e {
+                Errno::BUSY => Error::new_os(ErrorKind::Busy, "device is busy", e),
+                Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+                _ => Error::new_os(ErrorKind::Other, "failed to reset device", e),
+            })
         })
     }
 
@@ -348,27 +371,40 @@ impl LinuxDevice {
         })
     }
 
+    fn handle_claim_interface_result(
+        self: Arc<Self>,
+        interface_number: u8,
+        result: Result<(), Errno>,
+        reattach: bool,
+    ) -> Result<Arc<LinuxInterface>, Error> {
+        result.map_err(|e| {
+            match e {
+                Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+                Errno::BUSY => Error::new_os(ErrorKind::Busy, "interface is busy", e),
+                Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+                _ => Error::new_os(ErrorKind::Other, "failed to claim interface", e),
+            }
+            .log_error()
+        })?;
+        debug!(
+            "Claimed interface {interface_number} on device id {dev}",
+            dev = self.events_id
+        );
+        Ok(Arc::new(LinuxInterface {
+            device: self,
+            interface_number,
+            reattach,
+            state: Mutex::new(Default::default()),
+        }))
+    }
+
     pub(crate) fn claim_interface(
         self: Arc<Self>,
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxInterface>, Error>> {
         Blocking::new(move || {
-            usbfs::claim_interface(&self.fd, interface_number).inspect_err(|e| {
-                warn!(
-                    "Failed to claim interface {interface_number} on device id {dev}: {e}",
-                    dev = self.events_id
-                )
-            })?;
-            debug!(
-                "Claimed interface {interface_number} on device id {dev}",
-                dev = self.events_id
-            );
-            Ok(Arc::new(LinuxInterface {
-                device: self,
-                interface_number,
-                reattach: false,
-                state: Mutex::new(Default::default()),
-            }))
+            let result = usbfs::claim_interface(&self.fd, interface_number);
+            self.handle_claim_interface_result(interface_number, result, false)
         })
     }
 
@@ -377,17 +413,8 @@ impl LinuxDevice {
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxInterface>, Error>> {
         Blocking::new(move || {
-            usbfs::detach_and_claim_interface(&self.fd, interface_number)?;
-            debug!(
-                "Detached and claimed interface {interface_number} on device id {dev}",
-                dev = self.events_id
-            );
-            Ok(Arc::new(LinuxInterface {
-                device: self,
-                interface_number,
-                reattach: true,
-                state: Mutex::new(Default::default()),
-            }))
+            let result = usbfs::detach_and_claim_interface(&self.fd, interface_number);
+            self.handle_claim_interface_result(interface_number, result, true)
         })
     }
 
@@ -396,7 +423,12 @@ impl LinuxDevice {
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<(), Error> {
-        usbfs::detach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
+        usbfs::detach_kernel_driver(&self.fd, interface_number).map_err(|e| match e {
+            Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+            Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+            Errno::NODATA => Error::new_os(ErrorKind::Other, "no kernel driver attached", e),
+            _ => Error::new_os(ErrorKind::Other, "failed to detach kernel driver", e),
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -404,7 +436,12 @@ impl LinuxDevice {
         self: &Arc<Self>,
         interface_number: u8,
     ) -> Result<(), Error> {
-        usbfs::attach_kernel_driver(&self.fd, interface_number).map_err(|e| e.into())
+        usbfs::attach_kernel_driver(&self.fd, interface_number).map_err(|e| match e {
+            Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+            Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+            Errno::BUSY => Error::new_os(ErrorKind::Busy, "kernel driver already attached", e),
+            _ => Error::new_os(ErrorKind::Other, "failed to attach kernel driver", e),
+        })
     }
 
     pub(crate) fn submit(&self, transfer: Idle<TransferData>) -> Pending<TransferData> {
@@ -467,67 +504,6 @@ impl LinuxDevice {
         }
     }
 
-    fn get_config(descriptors: &[u8], fd: &OwnedFd) -> Result<u8, Error> {
-        const REQUEST_GET_CONFIGURATION: u8 = 0x08;
-
-        let mut dst = [0u8; 1];
-        let r = usbfs::control(
-            fd,
-            usbfs::CtrlTransfer {
-                bRequestType: request_type(Direction::In, ControlType::Standard, Recipient::Device),
-                bRequest: REQUEST_GET_CONFIGURATION,
-                wValue: 0,
-                wIndex: 0,
-                wLength: dst.len() as u16,
-                timeout: Duration::from_millis(50)
-                    .as_millis()
-                    .try_into()
-                    .expect("timeout must fit in u32 ms"),
-                data: &mut dst[0] as *mut u8 as *mut c_void,
-            },
-        );
-
-        match r {
-            Ok(n) => {
-                if n == dst.len() {
-                    let active_config = dst[0];
-                    debug!("Obtained active configuration for fd {} from GET_CONFIGURATION request: {active_config}", fd.as_raw_fd());
-                    return Ok(active_config);
-                } else {
-                    warn!("GET_CONFIGURATION request returned incorrect length: {n}, expected 1",);
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "GET_CONFIGURATION request failed: {:?}",
-                    errno_to_transfer_error(e)
-                );
-            }
-        }
-
-        if descriptors.len() < DESCRIPTOR_LEN_DEVICE as usize {
-            warn!(
-                "Descriptors for device fd {} too short to use fallback configuration",
-                fd.as_raw_fd()
-            );
-            return Err(ErrorKind::Other.into());
-        }
-
-        // Assume the current configuration is the first one
-        // See: https://github.com/libusb/libusb/blob/467b6a8896daea3d104958bf0887312c5d14d150/libusb/os/linux_usbfs.c#L865
-        let mut descriptors =
-            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..]);
-        if let Some(config) = descriptors.next() {
-            return Ok(config.configuration_value());
-        }
-
-        error!(
-            "No available configurations for device fd {}",
-            fd.as_raw_fd()
-        );
-        Err(ErrorKind::Other.into())
-    }
-
     pub(crate) fn speed(&self) -> Option<Speed> {
         usbfs::get_speed(&self.fd)
             .inspect_err(|e| log::error!("USBDEVFS_GET_SPEED failed: {e}"))
@@ -541,6 +517,52 @@ impl LinuxDevice {
                 6 => Some(Speed::SuperPlus),
                 _ => None,
             })
+    }
+}
+
+fn read_all_from_fd(fd: &OwnedFd) -> Result<Vec<u8>, std::io::Error> {
+    let mut file = unsafe { ManuallyDrop::new(File::from_raw_fd(fd.as_raw_fd())) };
+    file.seek(std::io::SeekFrom::Start(0))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// Get the active configuration with a blocking request to the device.
+fn request_configuration(fd: &OwnedFd) -> Result<u8, ()> {
+    const REQUEST_GET_CONFIGURATION: u8 = 0x08;
+
+    let mut dst = [0u8; 1];
+    let r = usbfs::control(
+        fd,
+        usbfs::CtrlTransfer {
+            bRequestType: request_type(Direction::In, ControlType::Standard, Recipient::Device),
+            bRequest: REQUEST_GET_CONFIGURATION,
+            wValue: 0,
+            wIndex: 0,
+            wLength: dst.len() as u16,
+            timeout: 50,
+            data: &mut dst[0] as *mut u8 as *mut c_void,
+        },
+    );
+
+    match r {
+        Ok(1) => {
+            let active_config = dst[0];
+            debug!("Obtained active configuration for fd {} from GET_CONFIGURATION request: {active_config}", fd.as_raw_fd());
+            return Ok(active_config);
+        }
+        Ok(n) => {
+            warn!("GET_CONFIGURATION request returned unexpected length: {n}, expected 1");
+            Err(())
+        }
+        Err(e) => {
+            warn!(
+                "GET_CONFIGURATION request failed: {:?}",
+                errno_to_transfer_error(e)
+            );
+            Err(())
+        }
     }
 }
 
@@ -594,16 +616,26 @@ impl LinuxInterface {
         Blocking::new(move || {
             let mut state = self.state.lock().unwrap();
             if !state.endpoints.is_empty() {
-                // TODO: Use ErrorKind::ResourceBusy once compatible with MSRV
-                return Err(Error::other(
-                    "must drop endpoints before changing alt setting",
+                return Err(Error::new(
+                    ErrorKind::Busy,
+                    "can't change alternate setting while endpoints are in use",
                 ));
             }
+            usbfs::set_interface(&self.device.fd, self.interface_number, alt_setting).map_err(
+                |e| match e {
+                    Errno::INVAL => {
+                        Error::new_os(ErrorKind::NotFound, "alternate setting not found", e)
+                    }
+                    Errno::NODEV => {
+                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
+                    }
+                    _ => Error::new_os(ErrorKind::Other, "failed to set alternate setting", e),
+                },
+            )?;
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
                 self.interface_number
             );
-            usbfs::set_interface(&self.device.fd, self.interface_number, alt_setting)?;
             state.alt_setting = alt_setting;
             Ok(())
         })
@@ -612,7 +644,7 @@ impl LinuxInterface {
     pub fn endpoint(
         self: &Arc<Self>,
         descriptor: EndpointDescriptor,
-    ) -> Result<LinuxEndpoint, ClaimEndpointError> {
+    ) -> Result<LinuxEndpoint, Error> {
         let address = descriptor.address();
         let ep_type = descriptor.transfer_type();
         let max_packet_size = descriptor.max_packet_size();
@@ -620,7 +652,7 @@ impl LinuxInterface {
         let mut state = self.state.lock().unwrap();
 
         if state.endpoints.is_set(address) {
-            return Err(ClaimEndpointError::Busy);
+            return Err(Error::new(ErrorKind::Busy, "endpoint already in use"));
         }
         state.endpoints.set(address);
 
@@ -741,7 +773,10 @@ impl LinuxEndpoint {
         Blocking::new(move || {
             let endpoint = inner.address;
             debug!("Clear halt, endpoint {endpoint:02x}");
-            Ok(usbfs::clear_halt(&inner.interface.device.fd, endpoint)?)
+            usbfs::clear_halt(&inner.interface.device.fd, endpoint).map_err(|e| match e {
+                Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+                _ => Error::new_os(ErrorKind::Other, "failed to clear halt", e),
+            })
         })
     }
 

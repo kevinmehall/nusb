@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use crate::enumeration::InterfaceInfo;
 use crate::maybe_future::{MaybeFuture, Ready};
+use crate::ErrorKind;
 use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 
 #[derive(Debug, Clone)]
@@ -38,12 +39,6 @@ impl std::error::Error for SysfsError {
             SysfsErrorKind::Io(ref e) => Some(e),
             _ => None,
         }
-    }
-}
-
-impl From<SysfsError> for io::Error {
-    fn from(value: SysfsError) -> Self {
-        io::Error::other(Box::new(value))
     }
 }
 
@@ -116,12 +111,24 @@ impl FromHexStr for u16 {
     }
 }
 
-const SYSFS_USB_PREFIX: &str = "/sys/bus/usb/devices/";
+fn sysfs_list_usb() -> Result<fs::ReadDir, Error> {
+    fs::read_dir("/sys/bus/usb/devices/").map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => {
+            Error::new_io(ErrorKind::Other, "/sys/bus/usb/devices/ not found", e)
+        }
+        io::ErrorKind::PermissionDenied => Error::new_io(
+            ErrorKind::PermissionDenied,
+            "/sys/bus/usb/devices/ permission denied",
+            e,
+        ),
+        _ => Error::new_io(ErrorKind::Other, "failed to open /sys/bus/usb/devices/", e),
+    })
+}
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
     Ready((|| {
-        Ok(fs::read_dir(SYSFS_USB_PREFIX)?.flat_map(|entry| {
+        Ok(sysfs_list_usb()?.flat_map(|entry| {
             let path = entry.ok()?.path();
             let name = path.file_name()?;
 
@@ -147,7 +154,7 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 }
 
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    Ok(fs::read_dir(SYSFS_USB_PREFIX)?.filter_map(|entry| {
+    Ok(sysfs_list_usb()?.filter_map(|entry| {
         let path = entry.ok()?.path();
         let name = path.file_name()?;
 
