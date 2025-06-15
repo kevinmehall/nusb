@@ -44,6 +44,8 @@ smol = ["dep:blocking", "dep:futures-io"]
 # Use `tokio`'s IO threadpool for making blocking IO async
 tokio = ["dep:tokio"]
 
-
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[package.metadata.docs.rs]
+all-features = true
