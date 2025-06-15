@@ -106,7 +106,7 @@ pub mod blocking {
         }
 
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
-        fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
+        fn spawn(_f: impl FnOnce() -> R + Send + 'static) -> Self {
             panic!("Awaiting blocking syscall without an async runtime: enable the `smol` or `tokio` feature of nusb.");
         }
     }

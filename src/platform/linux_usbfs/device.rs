@@ -551,7 +551,7 @@ fn request_configuration(fd: &OwnedFd) -> Result<u8, ()> {
         Ok(1) => {
             let active_config = dst[0];
             debug!("Obtained active configuration for fd {} from GET_CONFIGURATION request: {active_config}", fd.as_raw_fd());
-            return Ok(active_config);
+            Ok(active_config)
         }
         Ok(n) => {
             warn!("GET_CONFIGURATION request returned unexpected length: {n}, expected 1");
