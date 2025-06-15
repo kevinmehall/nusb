@@ -22,7 +22,7 @@ use core_foundation_sys::{
 use io_kit_sys::{
     ret::IOReturn,
     types::{io_iterator_t, io_service_t, IOByteCount},
-    IOAsyncCallback1,
+    IOAsyncCallback1, IOAsyncCallback2,
 };
 
 //
@@ -76,6 +76,24 @@ pub(crate) type kern_return_t = ::std::os::raw::c_int;
 pub(crate) type USBDeviceAddress = UInt16;
 pub(crate) type AbsoluteTime = UnsignedWide;
 pub(crate) type Boolean = std::os::raw::c_uchar;
+
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
+pub struct IOUSBEndpointProperties {
+    pub bVersion: UInt8,
+    pub bAlternateSetting: UInt8,
+    pub bDirection: UInt8,
+    pub bEndpointNumber: UInt8,
+    pub bTransferType: UInt8,
+    pub bUsageType: UInt8,
+    pub bSyncType: UInt8,
+    pub bInterval: UInt8,
+    pub wMaxPacketSize: UInt16,
+    pub bMaxBurst: UInt8,
+    pub bMaxStreams: UInt8,
+    pub bMult: UInt8,
+    pub wBytesPerInterval: UInt16,
+}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -297,50 +315,50 @@ pub fn kIOCFPlugInInterfaceID() -> CFUUIDRef {
     }
 }
 
-pub fn kIOUSBDeviceInterfaceID500() -> CFUUIDRef {
+pub fn kIOUSBDeviceInterfaceID650() -> CFUUIDRef {
     unsafe {
         CFUUIDGetConstantUUIDWithBytes(
             kCFAllocatorSystemDefault,
-            0xA3,
-            0x3C,
-            0xF0,
+            0x4A,
+            0xAC,
+            0x1B,
+            0x2E,
+            0x24,
+            0xC2,
             0x47,
-            0x4B,
-            0x5B,
-            0x48,
-            0xE2,
-            0xB5,
-            0x7D,
-            0x02,
-            0x07,
-            0xFC,
-            0xEA,
-            0xE1,
-            0x3B,
+            0x6A,
+            0x96,
+            0x4D,
+            0x91,
+            0x33,
+            0x35,
+            0x34,
+            0xF2,
+            0xCC,
         )
     }
 }
 
-pub fn kIOUSBInterfaceInterfaceID500() -> CFUUIDRef {
+pub fn kIOUSBInterfaceInterfaceID700() -> CFUUIDRef {
     unsafe {
         CFUUIDGetConstantUUIDWithBytes(
             kCFAllocatorSystemDefault,
-            0x6C,
-            0x0D,
-            0x38,
-            0xC3,
+            0x17,
+            0xF9,
+            0xE5,
+            0x9C,
             0xB0,
-            0x93,
-            0x4E,
-            0xA7,
-            0x80,
-            0x9B,
-            0x09,
-            0xFB,
-            0x5D,
-            0xDD,
-            0xAC,
-            0x16,
+            0xA1,
+            0x40,
+            0x1D,
+            0x9A,
+            0xC0,
+            0x8D,
+            0xE2,
+            0x7A,
+            0xC6,
+            0x04,
+            0x7E,
         )
     }
 }
@@ -361,7 +379,7 @@ pub type IOUSBConfigurationDescriptorPtr = *mut IOUSBConfigurationDescriptor;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct IOUSBDeviceStruct500 {
+pub struct IOUSBDeviceStruct650 {
     pub _reserved: *mut ::std::os::raw::c_void,
     pub QueryInterface: ::std::option::Option<
         unsafe extern "C" fn(
@@ -583,19 +601,48 @@ pub struct IOUSBDeviceStruct500 {
             bandwidth: *mut UInt32,
         ) -> IOReturn,
     >,
+    pub SetConfigurationV2: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            configNum: UInt8,
+            startInterfaceMatching: bool,
+            issueRemoteWakeup: bool,
+        ) -> IOReturn,
+    >,
+    pub RegisterForNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            notificationMask: UInt64,
+            callback: IOAsyncCallback2,
+            refCon: *mut ::std::os::raw::c_void,
+            pRegistrationToken: *mut UInt64,
+        ) -> IOReturn,
+    >,
+    pub UnregisterNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            registrationToken: UInt64,
+        ) -> IOReturn,
+    >,
+    pub AcknowledgeNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            notificationToken: UInt64,
+        ) -> IOReturn,
+    >,
 }
-pub type IOUSBDeviceInterface500 = IOUSBDeviceStruct500;
+pub type IOUSBDeviceInterface650 = IOUSBDeviceStruct650;
 
 // Tweak: these are just function pointers to thread-safe functions,
 // so add send and sync to the C-type. (Calling these from multiple threads
 // may cause odd behavior on the USB bus, though, so we'll still want to wrap the
 // device in Mutex somewhere up from here.)
-unsafe impl Send for IOUSBDeviceInterface500 {}
-unsafe impl Sync for IOUSBDeviceInterface500 {}
+unsafe impl Send for IOUSBDeviceInterface650 {}
+unsafe impl Sync for IOUSBDeviceInterface650 {}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct IOUSBInterfaceStruct500 {
+pub struct IOUSBInterfaceStruct700 {
     pub _reserved: *mut ::std::os::raw::c_void,
     pub QueryInterface: ::std::option::Option<
         unsafe extern "C" fn(
@@ -998,11 +1045,124 @@ pub struct IOUSBInterfaceStruct500 {
             bytesPerInterval: *mut UInt16,
         ) -> IOReturn,
     >,
+    pub GetPipePropertiesV3: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            properties: *mut IOUSBEndpointProperties,
+        ) -> IOReturn,
+    >,
+    pub GetEndpointPropertiesV3: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            properties: *mut IOUSBEndpointProperties,
+        ) -> IOReturn,
+    >,
+    pub SupportsStreams: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            supportsStreams: *mut UInt32,
+        ) -> IOReturn,
+    >,
+    pub CreateStreams: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+        ) -> IOReturn,
+    >,
+    pub GetConfiguredStreams: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            configuredStreams: *mut UInt32,
+        ) -> IOReturn,
+    >,
+    pub ReadStreamsPipeTO: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+            buf: *mut ::std::os::raw::c_void,
+            size: *mut UInt32,
+            noDataTimeout: UInt32,
+            completionTimeout: UInt32,
+        ) -> IOReturn,
+    >,
+    pub WriteStreamsPipeTO: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+            buf: *mut ::std::os::raw::c_void,
+            size: UInt32,
+            noDataTimeout: UInt32,
+            completionTimeout: UInt32,
+        ) -> IOReturn,
+    >,
+    pub ReadStreamsPipeAsyncTO: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+            buf: *mut ::std::os::raw::c_void,
+            size: UInt32,
+            noDataTimeout: UInt32,
+            completionTimeout: UInt32,
+            callback: IOAsyncCallback1,
+            refcon: *mut ::std::os::raw::c_void,
+        ) -> IOReturn,
+    >,
+    pub WriteStreamsPipeAsyncTO: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+            buf: *mut ::std::os::raw::c_void,
+            size: UInt32,
+            noDataTimeout: UInt32,
+            completionTimeout: UInt32,
+            callback: IOAsyncCallback1,
+            refcon: *mut ::std::os::raw::c_void,
+        ) -> IOReturn,
+    >,
+    pub AbortStreamsPipe: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            pipeRef: UInt8,
+            streamID: UInt32,
+        ) -> IOReturn,
+    >,
+    pub RegisterForNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            notificationMask: UInt64,
+            callback: IOAsyncCallback2,
+            refCon: *mut ::std::os::raw::c_void,
+            pRegistrationToken: *mut UInt64,
+        ) -> IOReturn,
+    >,
+    pub UnregisterNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            registrationToken: UInt64,
+        ) -> IOReturn,
+    >,
+    pub AcknowledgeNotification: ::std::option::Option<
+        unsafe extern "C" fn(
+            self_: *mut ::std::os::raw::c_void,
+            notificationToken: UInt64,
+        ) -> IOReturn,
+    >,
+    pub RegisterDriver:
+        ::std::option::Option<unsafe extern "C" fn(self_: *mut ::std::os::raw::c_void) -> IOReturn>,
 }
+pub type IOUSBInterfaceInterface700 = IOUSBInterfaceStruct700;
 
 // Tweak: these are just function pointers to thread-safe functions,
 // so add send and sync to the C-type. (Calling these from multiple threads
 // may cause odd behavior on the USB bus, though, so we'll still want to wrap the
 // device in Mutex somewhere up from here.)
-unsafe impl Send for IOUSBInterfaceStruct500 {}
-unsafe impl Sync for IOUSBInterfaceStruct500 {}
+unsafe impl Send for IOUSBInterfaceInterface700 {}
+unsafe impl Sync for IOUSBInterfaceInterface700 {}

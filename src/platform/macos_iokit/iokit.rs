@@ -99,19 +99,17 @@ impl Drop for PluginInterface {
     }
 }
 
-/// Alias that select the "version 500" (IOKit 5.0.0) version of UsbDevice, which means
-/// that we support macOS versions back to 10.7.3, which is currently every version that Rust
-/// supports. Use this instead of touching the iokit_c structure; this may be bumped to
-/// (compatible) newer versions of the struct as Rust's support changes.
-pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct500;
-pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct500;
+/// Alias to select the "version 650" version of UsbDevice, and and "version 700" of UsbInterface.
+/// These are supported on macOS versions back to 10.10, which is older than Rust's minimum supported version of 10.12.
+pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct650;
+pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct700;
 
 pub(crate) fn usb_device_type_id() -> CFUUIDBytes {
-    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBDeviceInterfaceID500()) }
+    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBDeviceInterfaceID650()) }
 }
 
 pub(crate) fn usb_interface_type_id() -> CFUUIDBytes {
-    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID500()) }
+    unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID700()) }
 }
 
 pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), IOReturn> {
