@@ -1,5 +1,4 @@
 use std::{
-    ops::Deref,
     sync::{mpsc, Mutex},
     thread,
 };
@@ -8,23 +7,13 @@ use core_foundation::runloop::{CFRunLoop, CFRunLoopSource};
 use core_foundation_sys::runloop::kCFRunLoopCommonModes;
 use log::info;
 
-// Pending release of https://github.com/servo/core-foundation-rs/pull/610
-struct SendCFRunLoop(CFRunLoop);
-unsafe impl Send for SendCFRunLoop {}
-impl Deref for SendCFRunLoop {
-    type Target = CFRunLoop;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
+// Pending https://github.com/servo/core-foundation-rs/pull/649
 struct SendCFRunLoopSource(CFRunLoopSource);
 unsafe impl Send for SendCFRunLoopSource {}
 unsafe impl Sync for SendCFRunLoopSource {}
 
 struct EventLoop {
-    runloop: Option<SendCFRunLoop>,
+    runloop: Option<CFRunLoop>,
     count: usize,
 }
 
@@ -49,7 +38,7 @@ pub(crate) fn add_event_source(source: CFRunLoopSource) -> EventRegistration {
             let runloop = CFRunLoop::get_current();
             let source = source;
             runloop.add_source(&source.0, unsafe { kCFRunLoopCommonModes });
-            tx.send(SendCFRunLoop(runloop)).unwrap();
+            tx.send(runloop).unwrap();
             CFRunLoop::run_current();
             info!("event loop thread exited");
         });
