@@ -120,16 +120,17 @@
 //! This allows for async usage in an async context, or blocking usage in a
 //! non-async context.
 //!
-//! Operations such as [`DeviceInfo::open`], [`Device::set_configuration`],
-//! [`Device::reset`], [`Device::claim_interface`],
-//! [`Interface::set_alt_setting`], and [`Endpoint::clear_halt`] require
-//! blocking system calls. To use these in an asynchronous context, `nusb`
-//! relies on an async runtime to run these operations on an IO thread to avoid
-//! blocking in async code. Enable the cargo feature `tokio` or `smol` to use
-//! the corresponding runtime for blocking IO. If neither feature is enabled,
-//! `.await` on these methods will log a warning and block the calling thread.
-//! `.wait()` always runs the blocking operation directly without the overhead
-//! of handing off to an IO thread.
+//! Operations such as [`list_devices`], [`list_buses`], [`DeviceInfo::open`],
+//! [`Device::set_configuration`], [`Device::reset`],
+//! [`Device::claim_interface`], [`Interface::set_alt_setting`], and
+//! [`Endpoint::clear_halt`] require blocking system calls. To use these in an
+//! asynchronous context, `nusb` requires an async runtime to run these
+//! operations on an IO thread to avoid blocking in async code. Enable the cargo
+//! feature `tokio` or `smol` to use the corresponding runtime for blocking IO.
+//! If neither feature is enabled, `.await` on these methods will panic.
+//!
+//! For blocking usage, `.wait()` always runs the blocking operation directly
+//! without the overhead of handing off to an IO thread.
 //!
 //! These features do not affect and are not required for transfers, which are
 //! implemented on top of natively-async OS APIs.
