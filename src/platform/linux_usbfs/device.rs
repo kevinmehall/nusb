@@ -445,6 +445,7 @@ impl LinuxDevice {
     }
 
     pub(crate) fn submit(&self, transfer: Idle<TransferData>) -> Pending<TransferData> {
+        let len = transfer.urb().buffer_length;
         let pending = transfer.pre_submit();
         let urb = pending.urb_ptr();
 
@@ -457,12 +458,12 @@ impl LinuxDevice {
                 // SAFETY: Transfer was not submitted. We still own the transfer
                 // and can write to the URB and complete it in place of the handler.
                 let u = &mut *urb;
-                debug!("Failed to submit URB {urb:?} on ep {ep:x}: {e} {u:?}");
+                debug!("Failed to submit URB {urb:?}: {len} bytes on ep {ep:x}: {e} {u:?}");
                 u.actual_length = 0;
                 u.status = e.raw_os_error();
                 notify_completion::<super::TransferData>(pending.as_ptr().cast());
             } else {
-                debug!("Submitted URB {urb:?} on ep {ep:x}");
+                debug!("Submitted URB {urb:?}: {len} bytes on ep {ep:x}");
             }
         };
 
