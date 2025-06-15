@@ -153,6 +153,8 @@ pub use maybe_future::MaybeFuture;
 
 mod bitset;
 
+pub mod io;
+
 mod error;
 pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 

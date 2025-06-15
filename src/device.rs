@@ -3,10 +3,11 @@ use crate::{
         decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
         DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
     },
+    io::{EndpointRead, EndpointWrite},
     platform,
     transfer::{
         Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
-        EndpointType, TransferError,
+        EndpointType, In, Out, TransferError,
     },
     ActiveConfigurationError, DeviceInfo, Error, ErrorKind, GetDescriptorError, MaybeFuture, Speed,
 };
@@ -544,9 +545,9 @@ impl Debug for Interface {
 /// a non-blocking operation that adds the operation to the queue. Completed
 /// transfers can be popped from the queue synchronously or asynchronously.
 ///
-/// This separation of submission and completion makes the API cancel-safe,
-/// and makes it easy to submit multiple transfers at once, regardless of
-/// whether you are using asynchronous or blocking waits.
+/// This separation of submission and completion makes the API cancel-safe, and
+/// makes it easy to submit multiple transfers at once, regardless of whether
+/// you are using asynchronous or blocking waits.
 ///
 /// To maximize throughput and minimize latency when streaming data, the host
 /// controller needs to attempt a transfer in every possible frame. That
@@ -555,6 +556,11 @@ impl Debug for Interface {
 /// complete.
 ///
 /// When the `Endpoint` is dropped, any pending transfers are cancelled.
+///
+/// This type provides a low-level API letting you manage transfers directly.
+/// For a higher-level buffered API implementing [`std::io::Read`] and
+/// [`std::io::Write`], use the adapters from [`nusb::io`][`crate::io`]. See
+/// [`Self::reader`] and [`Self::writer`].
 pub struct Endpoint<EpType, Dir> {
     backend: platform::Endpoint,
     ep_type: PhantomData<EpType>,
@@ -589,6 +595,28 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// completed, partially-completed, or cancelled.
     pub fn cancel_all(&mut self) {
         self.backend.cancel_all()
+    }
+}
+
+impl<EpType: BulkOrInterrupt> Endpoint<EpType, Out> {
+    /// Create an [`EndpointWrite`] wrapping the given endpoint to provide a
+    /// high-level buffered API implementing [`std::io::Write`] and async
+    /// equivalents.
+    ///
+    /// See [`EndpointWrite::new`][`crate::io::EndpointWrite::new`] for details.
+    pub fn writer(self, buffer_size: usize) -> EndpointWrite<EpType> {
+        EndpointWrite::new(self, buffer_size)
+    }
+}
+
+impl<EpType: BulkOrInterrupt> Endpoint<EpType, In> {
+    /// Create an [`EndpointRead`] wrapping the given endpoint to provide a
+    /// high-level buffered API implementing [`std::io::Read`] and  async
+    /// equivalents.
+    ///
+    /// See [`EndpointRead::new`][`crate::io::EndpointRead::new`] for details.
+    pub fn reader(self, buffer_size: usize) -> EndpointRead<EpType> {
+        EndpointRead::new(self, buffer_size)
     }
 }
 
