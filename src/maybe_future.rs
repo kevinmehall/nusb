@@ -107,13 +107,7 @@ pub mod blocking {
 
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
         fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
-            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
-            if ONCE.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                log::warn!("Awaiting blocking syscall without an async runtime: enable the `smol` or `tokio` feature of `nusb` to avoid blocking the thread.")
-            }
-
-            Self(Some(f()))
+            panic!("Awaiting blocking syscall without an async runtime: enable the `smol` or `tokio` feature of nusb.");
         }
     }
 
