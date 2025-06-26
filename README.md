@@ -14,10 +14,11 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
 * No context object. You just open a device. There is a global event loop thread
   that is started when opening the first device.
 * Thinner layer over OS APIs, with less internal state.
+* Introduced Android support.
 
 ### Current status
 
-* Support for Linux, Windows, and macOS
+* Support for Linux, Windows, macOS and Android
 * Device listing and descriptor parsing
 * Transfers on control, bulk and interrupt endpoints
 * Used in production by [probe-rs](https://github.com/probe-rs/probe-rs) and others, but still relatively new. Please test with your device and report issues.

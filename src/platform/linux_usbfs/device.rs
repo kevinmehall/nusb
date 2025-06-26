@@ -71,6 +71,7 @@ pub(crate) struct LinuxDevice {
 }
 
 impl LinuxDevice {
+    #[cfg(not(target_os = "android"))]
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {

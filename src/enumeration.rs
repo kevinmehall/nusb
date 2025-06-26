@@ -16,13 +16,15 @@ pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 ///
 /// ### Platform-specific notes
 ///
-/// * Some fields are platform-specific
+/// * Some fields are platform-specific:
 ///     * Linux: `sysfs_path`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
 ///     * macOS: `registry_id`, `location_id`
+///     * Android: `port_chain`, `device_version`, `max_packet_size_0` are unavailable;
+///       `speed` is always `None`
 #[derive(Clone)]
 pub struct DeviceInfo {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -40,7 +42,7 @@ pub struct DeviceInfo {
     #[cfg(target_os = "windows")]
     pub(crate) port_number: u32,
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     pub(crate) devinst: crate::platform::DevInst,
 
     #[cfg(target_os = "windows")]
@@ -54,10 +56,14 @@ pub struct DeviceInfo {
 
     pub(crate) bus_id: String,
     pub(crate) device_address: u8,
+
+    #[cfg(not(target_os = "android"))]
     pub(crate) port_chain: Vec<u8>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
+
+    #[cfg(not(target_os = "android"))]
     pub(crate) device_version: u16,
 
     pub(crate) usb_version: u16,
@@ -65,6 +71,7 @@ pub struct DeviceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
 
+    #[cfg(not(target_os = "android"))]
     pub(crate) max_packet_size_0: u8,
 
     pub(crate) speed: Option<Speed>,
@@ -144,13 +151,14 @@ impl DeviceInfo {
         self.port_number
     }
 
-    /// Path of port numbers identifying the port where the device is connected.
+    /// *(non-Android)* Path of port numbers identifying the port where the device is connected.
     ///
     /// Together with the bus ID, it identifies a physical port. The path is
     ///  expected to remain stable across device insertions or reboots.
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
+    #[cfg(not(target_os = "android"))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
@@ -195,7 +203,8 @@ impl DeviceInfo {
         self.product_id
     }
 
-    /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
+    /// *(non-Android)* The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
+    #[cfg(not(target_os = "android"))]
     #[doc(alias = "bcdDevice")]
     pub fn device_version(&self) -> u16 {
         self.device_version
@@ -228,13 +237,17 @@ impl DeviceInfo {
         self.protocol
     }
 
-    /// Maximum packet size for endpoint zero.
+    /// *(non-Android)* Maximum packet size for endpoint zero.
+    #[cfg(not(target_os = "android"))]
     #[doc(alias = "bMaxPacketSize0")]
     pub fn max_packet_size_0(&self) -> u8 {
         self.max_packet_size_0
     }
 
-    /// Connection speed
+    /// Connection speed.
+    ///
+    /// ### Platform-specific notes
+    /// * Android: Always return `None`.
     pub fn speed(&self) -> Option<Speed> {
         self.speed
     }
@@ -283,7 +296,11 @@ impl DeviceInfo {
         self.interfaces.iter()
     }
 
-    /// Open the device
+    /// Opens the device.
+    ///
+    /// ### Platform-specific notes
+    /// * On Android, please check `DeviceInfo::has_permission`, and call
+    ///   `DeviceInfo::request_permission` if it has not been granted.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
     }
@@ -295,21 +312,36 @@ impl std::fmt::Debug for DeviceInfo {
         let mut s = f.debug_struct("DeviceInfo");
 
         s.field("bus_id", &self.bus_id)
-            .field("device_address", &self.device_address)
-            .field("port_chain", &format_args!("{:?}", self.port_chain))
-            .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
-            .field("product_id", &format_args!("0x{:04X}", self.product_id))
-            .field(
+            .field("device_address", &self.device_address);
+
+        #[cfg(not(target_os = "android"))]
+        {
+            s.field("port_chain", &format_args!("{:?}", self.port_chain));
+        }
+
+        s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
+            .field("product_id", &format_args!("0x{:04X}", self.product_id));
+
+        #[cfg(not(target_os = "android"))]
+        {
+            s.field(
                 "device_version",
                 &format_args!("0x{:04X}", self.device_version),
-            )
-            .field("usb_version", &format_args!("0x{:04X}", self.usb_version))
+            );
+        }
+
+        s.field("usb_version", &format_args!("0x{:04X}", self.usb_version))
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
-            .field("max_packet_size_0", &self.max_packet_size_0)
-            .field("speed", &self.speed)
-            .field("manufacturer_string", &self.manufacturer_string)
+            .field("speed", &self.speed);
+
+        #[cfg(not(target_os = "android"))]
+        {
+            s.field("max_packet_size_0", &self.max_packet_size_0);
+        }
+
+        s.field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
             .field("serial_number", &self.serial_number);
 

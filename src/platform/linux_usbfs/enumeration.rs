@@ -125,6 +125,7 @@ fn sysfs_list_usb() -> Result<fs::ReadDir, Error> {
     })
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
     Ready((|| {
@@ -153,6 +154,7 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
     })())
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     Ok(sysfs_list_usb()?.filter_map(|entry| {
         let path = entry.ok()?.path();
@@ -171,6 +173,7 @@ pub fn list_root_hubs() -> Result<impl Iterator<Item = DeviceInfo>, Error> {
     }))
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     Ready((|| {
         Ok(list_root_hubs()?.filter_map(|rh| {
@@ -191,6 +194,7 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
     })())
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
     debug!("Probing device {:?}", path.0);
 

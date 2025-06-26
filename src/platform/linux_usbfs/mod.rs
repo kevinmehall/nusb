@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 mod transfer;
 use std::io;
 use std::num::NonZeroU32;
@@ -7,16 +10,26 @@ pub(crate) use transfer::TransferData;
 mod usbfs;
 
 mod enumeration;
+pub use enumeration::SysfsPath;
+#[cfg(not(target_os = "android"))]
+pub use enumeration::{list_buses, list_devices};
+
+#[cfg(not(target_os = "android"))]
+mod hotplug;
+#[cfg(not(target_os = "android"))]
+pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
+
+#[cfg(target_os = "android")]
+mod android;
+#[cfg(target_os = "android")]
+pub use android::{check_startup_intent, list_devices, DevInst, HotplugWatch, PermissionRequest};
+
 mod events;
-pub use enumeration::{list_buses, list_devices, SysfsPath};
 
 mod device;
 pub(crate) use device::LinuxDevice as Device;
 pub(crate) use device::LinuxEndpoint as Endpoint;
 pub(crate) use device::LinuxInterface as Interface;
-
-mod hotplug;
-pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
 
 use crate::transfer::TransferError;
 use crate::ErrorKind;
