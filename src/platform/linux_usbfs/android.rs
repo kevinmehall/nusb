@@ -455,7 +455,7 @@ impl super::Device {
                 if conn.is_null() {
                     return Ok(Err(Error::new(
                         ErrorKind::NotFound,
-                        "`UsbDevice.openDevice()` failed`",
+                        "`UsbManager.openDevice()` failed`",
                     )));
                 }
                 env.call_method(&conn, "getFileDescriptor", "()I", &[])
