@@ -440,11 +440,15 @@ impl super::Device {
                     "please call `DeviceInfo::request_permission` for Android",
                 ));
             }
-            let raw_fd = jni_with_env(|env| {
+            jni_with_env(|env| {
                 let usb_man = match usb_manager() {
                     Ok(man) => man,
                     Err(e) => return Ok(Err(e)),
                 };
+                // Another thread executing `from_device_info` will block here, until the guard
+                // for the current thread is dropped after `LinuxDevice::create_inner`.
+                let _guard = env.lock_obj(&usb_man).unwrap();
+
                 let conn = env.call_method(
                     usb_man,
                     "openDevice",
@@ -458,16 +462,17 @@ impl super::Device {
                         "`UsbManager.openDevice()` failed`",
                     )));
                 }
-                env.call_method(&conn, "getFileDescriptor", "()I", &[])
-                    .get_int()
-                    .map(|i| Ok(i))
-            })??;
-            // Safety: `close()` is not called automatically when the JNI `AutoLocal` of `conn`
-            // and the corresponding Java object is destroyed. (check `UsbDeviceConnection` source)
-            use std::os::fd::*;
-            debug!("Wrapping fd {} as usbfs device", raw_fd);
-            let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd as RawFd) };
-            LinuxDevice::create_inner(owned_fd, None)
+                let raw_fd = env
+                    .call_method(&conn, "getFileDescriptor", "()I", &[])
+                    .get_int()?;
+
+                // Safety: `close()` is not called automatically when the JNI `AutoLocal` of `conn`
+                // and the corresponding Java object is destroyed. (check `UsbDeviceConnection` source)
+                use std::os::fd::*;
+                debug!("Wrapping fd {} as usbfs device", raw_fd);
+                let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd as RawFd) };
+                Ok(LinuxDevice::create_inner(owned_fd, None))
+            })?
         })())
     }
 }
