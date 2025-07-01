@@ -370,7 +370,7 @@ impl PermissionRequest {
 
     /// Checks the boolean result if the request has completed.
     pub fn responsed(&self) -> Option<bool> {
-        self.inner.result.lock().unwrap().clone()
+        *self.inner.result.lock().unwrap()
     }
 
     fn on_receive<'a>(
@@ -384,7 +384,7 @@ impl PermissionRequest {
             let extra_name = EXTRA_PERMISSION_GRANTED.new_jobject(env)?;
             let granted = env
                 .call_method(
-                    &intent,
+                    intent,
                     "getBooleanExtra",
                     "(Ljava/lang/String;Z)Z",
                     &[(&extra_name).into(), false.into()],
@@ -447,7 +447,7 @@ impl super::Device {
                 };
                 // Another thread executing `from_device_info` will block here, until the guard
                 // for the current thread is dropped after `LinuxDevice::create_inner`.
-                let _guard = env.lock_obj(&usb_man).unwrap();
+                let _guard = env.lock_obj(usb_man).unwrap();
 
                 let conn = env.call_method(
                     usb_man,
@@ -530,7 +530,7 @@ impl HotplugWatch {
         let Some(inner) = inner_weak.upgrade() else {
             return Ok(());
         };
-        let Ok(action) = BroadcastReceiver::get_intent_action(&intent, env) else {
+        let Ok(action) = BroadcastReceiver::get_intent_action(intent, env) else {
             return Ok(()); // almost impossible
         };
         use HotplugEvent::*;
