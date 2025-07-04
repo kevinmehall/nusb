@@ -187,16 +187,7 @@ fn build_device_info(
         speed: None,
         manufacturer_string: get_string_val(env, dev, "getManufacturerName").ok(),
         product_string: get_string_val(env, dev, "getProductName").ok(),
-        serial_number: if android_api_level() < 29 {
-            get_string_val(env, dev, "getSerialNumber").ok()
-        } else {
-            // Avoid printing `java.lang.SecurityException: User has not given permission...` in logcat
-            env.call_method(dev, "getSerialNumber", "()Ljava/lang/String;", &[])
-                .map_err(jni_clear_ex_silent)
-                .get_object(env)
-                .and_then(|o| o.get_string(env))
-                .ok()
-        },
+        serial_number: Arc::new(OnceLock::new()),
         interfaces: {
             let num_interfaces = get_int_val(env, dev, "getInterfaceCount")? as u8;
             let mut interfaces = Vec::new();
@@ -237,9 +228,7 @@ impl DeviceInfo {
     fn looks_equal(&self, other: &Self) -> bool {
         // Check `android.hardware.usb.UsbDevice.equals()` source code:
         // it may compare both `UsbDevice` only by name (`path_name`).
-        if let (Some(self_ser), Some(other_ser)) =
-            (self.serial_number.as_ref(), other.serial_number.as_ref())
-        {
+        if let (Some(self_ser), Some(other_ser)) = (self.serial_number(), other.serial_number()) {
             if self_ser != other_ser {
                 return false;
             }
@@ -247,6 +236,28 @@ impl DeviceInfo {
         self.vendor_id == other.vendor_id
             && self.product_id == other.product_id
             && self.id() == other.id()
+    }
+
+    pub(crate) fn get_serial_number(&self) -> Option<&str> {
+        if self.serial_number.get().is_none() {
+            let _ = jni_with_env(|env| {
+                let dev = self.devinst.as_obj();
+                let clear_ex = if android_api_level() < 29 {
+                    jni_clear_ex
+                } else {
+                    // Avoid printing `java.lang.SecurityException: User has not given permission...` in logcat
+                    jni_clear_ex_silent
+                };
+                let serial_num = env
+                    .call_method(dev, "getSerialNumber", "()Ljava/lang/String;", &[])
+                    .map_err(clear_ex)
+                    .get_object(env)
+                    .and_then(|o| o.get_string(env))?;
+                let _ = self.serial_number.set(serial_num);
+                Ok(())
+            });
+        };
+        self.serial_number.get().map(|s| s.as_str())
     }
 
     /// Android-specific: Checks if the caller has permission to access the device.

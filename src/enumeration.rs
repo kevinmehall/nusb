@@ -4,6 +4,9 @@ use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::platform::SysfsPath;
 
+#[cfg(target_os = "android")]
+use std::sync::{Arc, OnceLock};
+
 use crate::{Device, Error, MaybeFuture};
 
 /// Opaque device identifier
@@ -78,7 +81,12 @@ pub struct DeviceInfo {
 
     pub(crate) manufacturer_string: Option<String>,
     pub(crate) product_string: Option<String>,
+
+    #[cfg(not(target_os = "android"))]
     pub(crate) serial_number: Option<String>,
+
+    #[cfg(target_os = "android")]
+    pub(crate) serial_number: Arc<OnceLock<String>>,
 
     pub(crate) interfaces: Vec<InterfaceInfo>,
 }
@@ -269,9 +277,20 @@ impl DeviceInfo {
     }
 
     /// Serial number string, if available without device IO.
+    ///
+    /// ### Platform-specific notes
+    ///  * Android: Starting from Android 10, it can not be read without permission of opening the device.
+    ///    See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
-        self.serial_number.as_deref()
+        #[cfg(not(target_os = "android"))]
+        {
+            self.serial_number.as_deref()
+        }
+        #[cfg(target_os = "android")]
+        {
+            self.get_serial_number()
+        }
     }
 
     /// Iterator over the device's interfaces.
@@ -343,7 +362,7 @@ impl std::fmt::Debug for DeviceInfo {
 
         s.field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
-            .field("serial_number", &self.serial_number);
+            .field("serial_number", &self.serial_number());
 
         #[cfg(target_os = "linux")]
         {
