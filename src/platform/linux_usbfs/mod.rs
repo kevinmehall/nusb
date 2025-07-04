@@ -1,5 +1,4 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
+#![cfg_attr(target_os = "android", allow(unused_imports, dead_code))]
 
 mod transfer;
 use std::io;
