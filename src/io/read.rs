@@ -1,4 +1,5 @@
 use std::{
+    error::Error,
     io::{BufRead, Read},
     time::Duration,
 };
@@ -384,6 +385,19 @@ pub struct EndpointReadUntilShortPacket<'a, EpType: BulkOrInterrupt> {
     reader: &'a mut EndpointRead<EpType>,
 }
 
+/// Error returned by [`EndpointReadUntilShortPacket::consume_end()`]
+/// when the reader is not at the end of a short packet.
+#[derive(Debug)]
+pub struct ExpectedShortPacket;
+
+impl std::fmt::Display for ExpectedShortPacket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "expected short packet")
+    }
+}
+
+impl Error for ExpectedShortPacket {}
+
 impl<EpType: BulkOrInterrupt> EndpointReadUntilShortPacket<'_, EpType> {
     /// Check if the underlying endpoint has reached the end of a short packet.
     ///
@@ -402,12 +416,12 @@ impl<EpType: BulkOrInterrupt> EndpointReadUntilShortPacket<'_, EpType> {
     /// to read the next message.
     ///
     /// Returns an error and does nothing if the reader [is not at the end of a short packet](Self::is_end).
-    pub fn consume_end(&mut self) -> Result<(), ()> {
+    pub fn consume_end(&mut self) -> Result<(), ExpectedShortPacket> {
         if self.is_end() {
             self.reader.reading.as_mut().unwrap().clear_short_packet();
             Ok(())
         } else {
-            Err(())
+            Err(ExpectedShortPacket)
         }
     }
 }
