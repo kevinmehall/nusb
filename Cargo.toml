@@ -19,6 +19,7 @@ slab = "0.4.9"
 [dev-dependencies]
 env_logger = "0.11"
 futures-lite = "2.0"
+tokio = { version = "1", features = ["rt", "macros", "io-util", "rt-multi-thread"] }
 
 [target.'cfg(any(target_os="linux", target_os="android"))'.dependencies]
 rustix = { version = "1.0.1", features = ["fs", "event", "net", "time", "mm"] }
@@ -49,3 +50,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[example]]
+name = "bulk_io_smol"
+required-features = ["smol"]
+
+[[example]]
+name = "bulk_io_tokio"
+required-features = ["tokio"]
+

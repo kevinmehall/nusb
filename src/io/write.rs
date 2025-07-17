@@ -49,7 +49,10 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
     /// If more than `num_transfers` transfers are pending, calls to `write`
     /// will block or async methods will return `Pending` until a transfer
     /// completes.
+    ///
+    /// Panics if `num_transfers` is zero.
     pub fn set_num_transfers(&mut self, num_transfers: usize) {
+        assert!(num_transfers > 0, "num_transfers must be greater than zero");
         self.num_transfers = num_transfers;
     }
 
