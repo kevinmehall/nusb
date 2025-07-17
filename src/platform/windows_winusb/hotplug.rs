@@ -13,7 +13,7 @@ use windows_sys::Win32::{
         DeviceAndDriverInstallation::{
             CM_Register_Notification, CM_Unregister_Notification, CM_NOTIFY_ACTION,
             CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL,
-            CM_NOTIFY_EVENT_DATA, CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_2,
+            CM_NOTIFY_EVENT_DATA, CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0,
             CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CR_SUCCESS, HCMNOTIFICATION,
         },
         Properties::DEVPKEY_Device_InstanceId,
@@ -62,7 +62,7 @@ impl WindowsHotplugWatch {
             FilterType: CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
             Reserved: 0,
             u: CM_NOTIFY_FILTER_0 {
-                DeviceInterface: CM_NOTIFY_FILTER_0_2 {
+                DeviceInterface: CM_NOTIFY_FILTER_0_0 {
                     ClassGuid: GUID_DEVINTERFACE_USB_DEVICE,
                 },
             },

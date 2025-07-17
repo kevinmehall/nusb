@@ -13,11 +13,11 @@ use windows_sys::{
                 CM_LOCATE_DEVNODE_PHANTOM, CM_REGISTRY_HARDWARE, CR_BUFFER_SMALL, CR_SUCCESS,
             },
             Properties::{
-                DEVPKEY_Device_InstanceId, DEVPROPKEY, DEVPROPTYPE, DEVPROP_TYPE_STRING,
+                DEVPKEY_Device_InstanceId, DEVPROPTYPE, DEVPROP_TYPE_STRING,
                 DEVPROP_TYPE_STRING_LIST, DEVPROP_TYPE_UINT32,
             },
         },
-        Foundation::INVALID_HANDLE_VALUE,
+        Foundation::{DEVPROPKEY, INVALID_HANDLE_VALUE},
         System::Registry::KEY_READ,
     },
 };
