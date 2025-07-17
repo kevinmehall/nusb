@@ -89,33 +89,28 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
 
     let driver = get_driver_name(devinst);
 
-    let mut interfaces = if driver.eq_ignore_ascii_case("usbccgp") {
+    let mut interfaces =
+        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default();
+
+    if driver.eq_ignore_ascii_case("usbccgp") {
+        // Populate interface descriptor strings when available from child device nodes.
         devinst
             .children()
             .flat_map(|intf| {
                 let interface_number = get_interface_number(intf)?;
-                let (class, subclass, protocol) = intf
-                    .get_property::<Vec<OsString>>(DEVPKEY_Device_CompatibleIds)?
-                    .iter()
-                    .find_map(|s| parse_compatible_id(s))?;
-                let interface_string = intf
-                    .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
-                    .and_then(|s| s.into_string().ok());
-
-                Some(InterfaceInfo {
-                    interface_number,
-                    class,
-                    subclass,
-                    protocol,
-                    interface_string,
-                })
+                let interface_string =
+                    intf.get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)?;
+                Some((interface_number, interface_string))
             })
-            .collect()
-    } else {
-        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default()
-    };
-
-    interfaces.sort_unstable_by_key(|i| i.interface_number);
+            .for_each(|(intf_num, interface_string)| {
+                if let Some(interface_info) = interfaces
+                    .iter_mut()
+                    .find(|i| i.interface_number == intf_num)
+                {
+                    interface_info.interface_string = interface_string.into_string().ok();
+                }
+            });
+    }
 
     let location_paths = devinst
         .get_property::<Vec<OsString>>(DEVPKEY_Device_LocationPaths)
@@ -339,28 +334,6 @@ fn test_parse_hardware_id() {
     assert_eq!(
         parse_hardware_id(OsStr::new("USB\\VID_9999&PID_AAAA&REV_0101&MI_01")),
         Some(1)
-    );
-}
-
-/// Parse class, subclass, protocol from a Compatible ID value
-fn parse_compatible_id(s: &OsStr) -> Option<(u8, u8, u8)> {
-    let s = s.to_str()?;
-    let s = s.strip_prefix("USB\\Class_")?;
-    let class = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
-    let s = s.get(2..)?.strip_prefix("&SubClass_")?;
-    let subclass = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
-    let s = s.get(2..)?.strip_prefix("&Prot_")?;
-    let protocol = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
-    Some((class, subclass, protocol))
-}
-
-#[test]
-fn test_parse_compatible_id() {
-    assert_eq!(parse_compatible_id(OsStr::new("")), None);
-    assert_eq!(parse_compatible_id(OsStr::new("USB\\Class_03")), None);
-    assert_eq!(
-        parse_compatible_id(OsStr::new("USB\\Class_03&SubClass_11&Prot_22")),
-        Some((3, 17, 34))
     );
 }
 
