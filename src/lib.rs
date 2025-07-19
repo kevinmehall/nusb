@@ -113,6 +113,22 @@
 //! Users have access to USB devices by default, with no permission
 //! configuration needed. Devices with a kernel driver are not accessible.
 //!
+//! ### Android
+//!
+//! `nusb` uses the Android SDK API for device listing and runtime permission
+//! request; the rest operations are the same as Linux.
+//!
+//! The Android application must have the `android.hardware.usb.host` feature;
+//! for permission issues, see [DeviceInfo::open] and `check_startup_intent`.
+//!
+//! Please make sure the [ndk-context] is configured correctly, unless you have a
+//! native activity application based on [android-activity] or a similar glue crate.
+//!
+//! Note that a few fields are missing in [DeviceInfo].
+//!
+//! [android-activity]: https://docs.rs/android-activity
+//! [ndk-context]: https://docs.rs/ndk-context
+//!
 //! ## Async support
 //!
 //! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
@@ -158,6 +174,9 @@ pub mod io;
 mod error;
 pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 
+#[cfg(target_os = "android")]
+pub use platform::{check_startup_intent, PermissionRequest};
+
 /// Get an iterator listing the connected devices.
 ///
 /// ### Example
@@ -194,7 +213,8 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 ///
 /// ### Platform-specific notes
 /// * On Linux, the abstraction of the "bus" is a phony device known as the root hub. This device is available at bus.root_hub()
-/// * On Android, this will only work on rooted devices due to sysfs path usage
+/// * On Android, this is currently unavailable, however it may be supported on rooted devices in the future
+#[cfg(not(target_os = "android"))]
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     platform::list_buses()
 }
