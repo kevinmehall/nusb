@@ -123,12 +123,18 @@ pub mod blocking {
 
         #[cfg(all(feature = "tokio", not(feature = "smol")))]
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Pin::new(&mut self.0).poll(cx).map(|r| r.unwrap())
+            match Pin::new(&mut self.0).poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Ok(r)) => Poll::Ready(r),
+                Poll::Ready(Err(e)) if e.is_cancelled() => Poll::Pending, // Can happen during runtime shutdown
+                Poll::Ready(Err(e)) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+                Poll::Ready(Err(e)) => panic!("Error from tokio blocking task: {e}"),
+            }
         }
 
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
         fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(self.0.take().expect("polled after completion"))
+            unreachable!()
         }
     }
 }
