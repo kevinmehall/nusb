@@ -133,7 +133,7 @@ pub mod blocking {
         }
 
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
-        fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
             unreachable!()
         }
     }

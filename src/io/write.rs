@@ -13,7 +13,22 @@ use std::{
 use std::{pin::Pin, task::ready};
 
 /// Wrapper for a Bulk or Interrupt OUT [`Endpoint`](crate::Endpoint) that
-/// implements [`Write`](std::io::Write) and its `tokio` and `smol` async equivalents.
+/// manages transfers to provide a higher-level buffered API.
+///
+/// Most of the functionality of this type is provided through standard IO
+/// traits; you'll want to use one of the following:
+///
+/// * [`std::io::Write`](std::io::Write) for blocking IO.
+/// * With the `tokio` cargo feature,
+///   [`tokio::io::AsyncWrite`](tokio::io::AsyncWrite). Tokio also provides
+///   `AsyncWriteExt` with additional methods.
+/// * With the `smol` cargo feature,
+///   [`futures_io::AsyncWrite`](futures_io::AsyncWrite) for async IO.
+///   `futures_lite` provides `AsyncWriteExt` with additional methods.
+///
+/// Written data is buffered and may not be sent until the buffer is full or
+/// [`submit`](Self::submit) / [`submit_end`](Self::submit_end) or
+/// [`flush`](Self::flush) / [`flush_end`](Self::flush_end) are called.
 pub struct EndpointWrite<EpType: BulkOrInterrupt> {
     endpoint: Endpoint<EpType, Out>,
     writing: Option<Buffer>,

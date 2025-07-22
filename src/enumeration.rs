@@ -12,12 +12,12 @@ pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 
 /// Information about a device that can be obtained without opening it.
 ///
-/// Found in the results of [`crate::list_devices`].
+/// `DeviceInfo` is returned by [`list_devices`][crate::list_devices].
 ///
 /// ### Platform-specific notes
 ///
 /// * Some fields are platform-specific
-///     * Linux: `sysfs_path`
+///     * Linux: `sysfs_path`, `busnum`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
@@ -149,7 +149,7 @@ impl DeviceInfo {
     /// Path of port numbers identifying the port where the device is connected.
     ///
     /// Together with the bus ID, it identifies a physical port. The path is
-    ///  expected to remain stable across device insertions or reboots.
+    /// expected to remain stable across device insertions or reboots.
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
@@ -213,10 +213,9 @@ impl DeviceInfo {
         self.usb_version
     }
 
-    /// Code identifying the standard device class, from the `bDeviceClass` device descriptor field.
-    ///
-    /// `0x00`: specified at the interface level.\
-    /// `0xFF`: vendor-defined.
+    /// Code identifying the [standard device
+    /// class](https://www.usb.org/defined-class-codes), from the `bDeviceClass`
+    /// device descriptor field.
     #[doc(alias = "bDeviceClass")]
     pub fn class(&self) -> u8 {
         self.class
@@ -473,7 +472,7 @@ impl UsbControllerType {
 /// Information about a system USB bus.
 ///
 /// Platform-specific fields:
-/// * Linux: `path`, `parent_path`, `busnum`, `root_hub`
+/// * Linux: `path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -616,12 +615,6 @@ impl BusInfo {
     /// Detected USB controller type
     ///
     /// None means the controller type could not be determined.
-    ///
-    /// ### Platform-specific notes
-    ///
-    /// * Linux: Parsed from driver in use.
-    /// * macOS: The IOService entry matched.
-    /// * Windows: Parsed from the numbers following ROOT_HUB in the instance_id.
     pub fn controller_type(&self) -> Option<UsbControllerType> {
         self.controller_type
     }

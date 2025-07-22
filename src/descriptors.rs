@@ -657,7 +657,7 @@ descriptor_fields! {
 
         /// Get the raw value of the `bmAttributes` descriptor field.
         ///
-        /// See [`transfer_type``][Self::transfer_type] for the transfer type field.
+        /// See [`transfer_type`][Self::transfer_type] for the transfer type field.
         #[doc(alias = "bmAttributes")]
         pub fn attributes at 3 -> u8;
 

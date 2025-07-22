@@ -56,7 +56,15 @@ impl Device {
         platform::Device::from_device_info(d).map(|d| d.map(Device::wrap))
     }
 
-    /// Wraps a device that is already open.
+    /// Wrap a usbdevfs file descriptor that is already open.
+    ///
+    /// This opens a device from a file descriptor for a `/dev/bus/usb/*` device
+    /// provided externally, such as from
+    /// [Android](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection#getFileDescriptor()),
+    /// [xdg-desktop-portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Usb.html),
+    /// etc.
+    ///
+    /// *Supported on Linux and Android only.*
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
         platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
@@ -75,7 +83,7 @@ impl Device {
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
     ///
-    /// ### Platform notes
+    /// ### Platform-specific details
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// the same effect as [`claim_interface`][`Device::claim_interface`].
     pub fn detach_and_claim_interface(
@@ -90,7 +98,7 @@ impl Device {
 
     /// Detach kernel drivers for the specified interface.
     ///
-    /// ### Platform notes
+    /// ### Platform-specific details
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
@@ -103,7 +111,7 @@ impl Device {
 
     /// Attach kernel drivers for the specified interface.
     ///
-    /// ### Platform notes
+    /// ### Platform-specific details
     /// This function can only attach kernel drivers on Linux. Calling on other platforms has
     /// no effect.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
@@ -121,7 +129,7 @@ impl Device {
         self.backend.device_descriptor()
     }
 
-    /// Get device speed.
+    /// Get the device's connection speed.
     pub fn speed(&self) -> Option<Speed> {
         self.backend.speed()
     }
@@ -156,7 +164,7 @@ impl Device {
     /// descriptor field from [`ConfigurationDescriptor::configuration_value`] or `0` to
     /// unconfigure the device.
     ///
-    /// ### Platform-specific notes
+    /// ### Platform-specific details
     /// * Not supported on Windows
     pub fn set_configuration(
         &self,
@@ -267,7 +275,7 @@ impl Device {
     /// This `Device` will no longer be usable, and you should drop it and call
     /// [`list_devices`][`super::list_devices`] to find and re-open it again.
     ///
-    /// ### Platform-specific notes
+    /// ### Platform-specific details
     /// * Not supported on Windows
     pub fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().reset()
@@ -297,7 +305,7 @@ impl Device {
     /// # Ok(()) }
     /// ```
     ///
-    /// ### Platform-specific notes
+    /// ### Platform-specific details
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
@@ -334,7 +342,7 @@ impl Device {
     /// # Ok(()) }
     /// ```
     ///
-    /// ### Platform-specific notes
+    /// ### Platform-specific details
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
@@ -376,6 +384,9 @@ impl Interface {
     /// An alternate setting is a mode of the interface that makes particular endpoints available
     /// and may enable or disable functionality of the device. The OS resets the device to the default
     /// alternate setting when the interface is released or the program exits.
+    ///
+    /// You must not have any pending transfers or open `Endpoints` on this interface when changing
+    /// the alternate setting.
     pub fn set_alt_setting(&self, alt_setting: u8) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_alt_setting(alt_setting)
     }
@@ -410,14 +421,13 @@ impl Interface {
     /// # Ok(()) }
     /// ```
     ///
-    /// ### Platform-specific notes
-    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
-    ///   the interface number in the least significant byte of `index`,
-    ///   overriding any value passed. A warning is logged if the passed `index`
-    ///   least significant byte differs from the interface number, and this may
-    ///   become an error in the future.
-    /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
-    ///   argument is ignored.
+    /// ### Platform-specific details
+    /// * On Windows, if the `recipient` is `Interface`, the least significant
+    ///   byte of `index` must match the interface number, or
+    ///   `TransferError::InvalidArgument` will be returned. This is a WinUSB
+    ///   limitation.
+    /// * On Windows, the timeout is currently fixed to 5 seconds and the
+    ///   timeout argument is ignored.
     pub fn control_in(
         &self,
         data: ControlIn,
@@ -452,14 +462,13 @@ impl Interface {
     /// # Ok(()) }
     /// ```
     ///
-    /// ### Platform-specific notes
-    /// * On Windows, if the `recipient` is `Interface`, the WinUSB driver sends
-    ///   the interface number in the least significant byte of `index`,
-    ///   overriding any value passed. A warning is logged if the passed `index`
-    ///   least significant byte differs from the interface number, and this may
-    ///   become an error in the future.
-    /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
-    ///   argument is ignored.
+    /// ### Platform-specific details
+    /// * On Windows, if the `recipient` is `Interface`, the least significant
+    ///   byte of `index` must match the interface number, or
+    ///   `TransferError::InvalidArgument` will be returned. This is a WinUSB
+    ///   limitation.
+    /// * On Windows, the timeout is currently fixed to 5 seconds and the
+    ///   timeout argument is ignored.
     pub fn control_out(
         &self,
         data: ControlOut,
@@ -498,6 +507,11 @@ impl Interface {
     }
 
     /// Open an endpoint.
+    ///
+    /// This claims exclusive access to the endpoint and returns an [`Endpoint`]
+    /// that can be used to submit transfers. The type-level `EndpointType` and
+    /// `EndpointDirection` parameters must match the endpoint type and
+    /// direction.
     pub fn endpoint<EpType: EndpointType, Dir: EndpointDirection>(
         &self,
         address: u8,
@@ -628,6 +642,10 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// buffer for improved performance. However, because it is not allocated
     /// with the system allocator, it cannot be converted to a [`Vec`] without
     /// copying.
+    ///
+    /// This is a somewhat expensive operation, requiring a `mmap` system call,
+    /// so is likely only beneficial for buffers that will be used repeatedly.
+    /// Consider using [`Buffer::new`] for one-off transfers.
     ///
     /// This is currently only supported on Linux, falling back to [`Buffer::new`]
     /// on other platforms, or if the memory allocation fails.

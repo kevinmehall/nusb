@@ -16,8 +16,28 @@ use crate::{
 };
 
 /// Wrapper for a Bulk or Interrupt IN [`Endpoint`](crate::Endpoint) that
-/// implements [`Read`](std::io::Read) and [`BufRead`](std::io::BufRead) and
-/// their `tokio` and `smol` async equivalents.
+/// manages transfers to provide a higher-level buffered API.
+///
+/// Most of the functionality of this type is provided through standard IO
+/// traits; you'll want to use one of the following:
+///
+/// * [`std::io::Read`](std::io::Read) and [`BufRead`](std::io::BufRead) for
+///   blocking IO.
+/// * With the `tokio` cargo feature,
+///   [`tokio::io::AsyncRead`](tokio::io::AsyncRead) and
+///   [`AsyncBufRead`](tokio::io::AsyncBufRead) for async IO. Tokio also
+///   provides `AsyncReadExt` and `AsyncBufReadExt` with additional methods.
+/// * With the `smol` cargo feature,
+///   [`futures_io::AsyncRead`](futures_io::AsyncRead) and
+///   [`AsyncBufRead`](futures_io::AsyncBufRead) for async IO.
+///   `futures_lite` provides `AsyncReadExt` and `AsyncBufReadExt` with
+///   additional methods.
+///
+/// By default, this type ignores USB packet lengths and boundaries. For protocols
+/// that use short or zero-length packets as delimiters, you can use the
+/// [`until_short_packet()`](Self::until_short_packet) method to get an
+/// [`EndpointReadUntilShortPacket`](EndpointReadUntilShortPacket) adapter
+/// that observes these delimiters.
 pub struct EndpointRead<EpType: BulkOrInterrupt> {
     endpoint: Endpoint<EpType, In>,
     reading: Option<ReadBuffer>,
@@ -381,6 +401,9 @@ impl<EpType: BulkOrInterrupt> futures_io::AsyncBufRead for EndpointRead<EpType> 
 /// have any state other than that of the underlying [`EndpointRead`], so
 /// dropping and re-creating with another call to
 /// [`EndpointRead::until_short_packet()`] has no effect.
+///
+/// This implements the same traits as `EndpointRead` but observes packet
+/// boundaries instead of ignoring them.
 pub struct EndpointReadUntilShortPacket<'a, EpType: BulkOrInterrupt> {
     reader: &'a mut EndpointRead<EpType>,
 }
@@ -399,10 +422,11 @@ impl std::fmt::Display for ExpectedShortPacket {
 impl Error for ExpectedShortPacket {}
 
 impl<EpType: BulkOrInterrupt> EndpointReadUntilShortPacket<'_, EpType> {
-    /// Check if the underlying endpoint has reached the end of a short packet.
+    /// Check if the endpoint has reached the end of a short packet.
     ///
-    /// Upon reading the end of a short packet, the next `read()` or `fill_buf()`
-    /// will return 0 bytes (EOF). To read the next message, call `consume_end()`.
+    /// Upon reading the end of a short packet, the next `read()` or
+    /// `fill_buf()` will return 0 bytes (EOF) and this method will return
+    /// `true`. To begin reading the next message, call `consume_end()`.
     pub fn is_end(&self) -> bool {
         self.reader
             .reading

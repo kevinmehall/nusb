@@ -1,9 +1,13 @@
 #![warn(missing_docs)]
 //! A new library for cross-platform low-level access to USB devices.
 //!
+//! `nusb` supports Windows, macOS, and Linux, and provides both async and
+//!  blocking APIs for listing and watching USB devices, reading descriptor
+//!  details, opening and managing devices and interfaces, and performing
+//!  transfers on control, bulk, and interrupt endpoints.
+//!
 //! `nusb` is comparable to the C library [libusb] and its Rust bindings [rusb],
-//! but written in pure Rust. It supports usage from both async and
-//! blocking contexts, and transfers are natively async.
+//! but written in pure Rust.
 //!
 //! [libusb]: https://libusb.info
 //! [rusb]: https://docs.rs/rusb/
@@ -15,6 +19,41 @@
 //! existing kernel driver instead. (On some platforms you could detach or
 //! replace the kernel driver and program the device from user-space using this
 //! library, but you'd have to re-implement the class functionality yourself.)
+//!
+//! ## Example usage
+//!
+//! ```no_run
+//! use nusb::{list_devices, MaybeFuture};
+//! use nusb::transfer::{Bulk, In, Out, ControlOut, ControlType, Recipient};
+//! use std::io::{Read, Write, Error, ErrorKind};
+//! use std::time::Duration;
+//!
+//! # fn main() -> Result<(), std::io::Error> {
+//! let device = list_devices().wait()?
+//!     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
+//!     .ok_or(Error::new(ErrorKind::NotFound, "device not found"))?;
+//!
+//! let device = device.open().wait()?;
+//! let interface = device.claim_interface(0).wait()?;
+//!
+//! interface.control_out(ControlOut {
+//!     control_type: ControlType::Vendor,
+//!     recipient: Recipient::Device,
+//!     request: 0x10,
+//!     value: 0x0,
+//!     index: 0x0,
+//!     data: &[0x01, 0x02, 0x03, 0x04],
+//! }, Duration::from_millis(100)).wait()?;
+//!
+//! let mut writer = interface.endpoint::<Bulk, Out>(0x01)?.writer(4096);
+//! writer.write_all(&[0x00, 0xff])?;
+//! writer.flush()?;
+//!
+//! let mut reader = interface.endpoint::<Bulk, In>(0x81)?.reader(4096);
+//! let mut buf = [0; 64];
+//! reader.read_exact(&mut buf)?;
+//! # Ok(()) }
+//! ```
 //!
 //! ## USB and usage overview
 //!
@@ -29,16 +68,21 @@
 //! Additional information about the device can be queried with
 //! [`device.active_configuration()`](`Device::active_configuration`).
 //!
-//! USB devices consist of one or more interfaces exposing a group of
-//! functionality. A device with multiple interfaces is known as a composite
-//! device. To open an interface, call [`Device::claim_interface`]. Only one
-//! program (or kernel driver) may claim an interface at a time.
+//! USB devices consist of one or more interfaces. A device with multiple
+//! interfaces is known as a composite device. To open an interface, call
+//! [`Device::claim_interface`]. Only one program (or kernel driver) may claim
+//! an interface at a time.
 //!
 //! Use the resulting [`Interface`] to perform control transfers or open
 //! an [`Endpoint`] to perform bulk or interrupt transfers. Submitting a
 //! transfer is a non-blocking operation that adds the transfer to an
 //! internal queue for the endpoint. Completed transfers can be popped
 //! from the queue synchronously or asynchronously.
+//!
+//! The [`EndpointRead`][io::EndpointRead] and
+//! [`EndpointWrite`][io::EndpointWrite] types wrap the endpoint and
+//! manage transfers and buffers to implement the standard `Read` and
+//! `Write` traits and their async equivalents.
 //!
 //! *For more details on how USB works, [USB in a
 //! Nutshell](https://beyondlogic.org/usbnutshell/usb1.shtml) is a good
@@ -188,10 +232,11 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 /// use nusb::MaybeFuture;
 ///
 /// let devices = nusb::list_devices().wait().unwrap().collect::<Vec<_>>();
-/// let buses: HashMap<String, (nusb::BusInfo, Vec::<nusb::DeviceInfo>)> = nusb::list_buses().wait().unwrap()
+/// let buses: HashMap<_, _> = nusb::list_buses().wait().unwrap()
 ///     .map(|bus| {
 ///         let bus_id = bus.bus_id().to_owned();
-///         (bus.bus_id().to_owned(), (bus, devices.clone().into_iter().filter(|dev| dev.bus_id() == bus_id).collect()))
+///         let devs: Vec<_> = devices.iter().filter(|dev| dev.bus_id() == bus_id).cloned().collect();
+///         (bus_id, (bus, devs))
 ///     })
 ///     .collect();
 /// ```

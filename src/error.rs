@@ -97,7 +97,7 @@ pub enum ErrorKind {
     Other,
 }
 
-/// Error from [`crate::Device::active_configuration`]
+/// Error from [`Device::active_configuration`][crate::Device::active_configuration].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ActiveConfigurationError {
     pub(crate) configuration_value: u8,

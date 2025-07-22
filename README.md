@@ -3,24 +3,24 @@ nusb
 
 A new pure-Rust library for cross-platform low-level access to USB devices.
 
-[Documentation](https://docs.rs/nusb)
+* [Documentation](https://docs.rs/nusb)
+* [Changelog](https://github.com/kevinmehall/nusb/releases)
+* [Issues](https://github.com/kevinmehall/nusb/issues)
+* [Discussions](https://github.com/kevinmehall/nusb/discussions)
+
+`nusb` supports Windows, macOS, and Linux, and provides both async and
+blocking APIs for listing and watching USB devices, reading descriptor
+details, opening and managing devices and interfaces, and performing
+transfers on control, bulk, and interrupt endpoints.
 
 ### Compared to [rusb](https://docs.rs/rusb/latest/rusb/) and [libusb](https://libusb.info/)
 
 * Pure Rust, no dependency on libusb or any other C library.
-* Async-first, while not requiring an async runtime like `tokio` or
-  `async-std`. Still easily supports blocking with
-  `futures_lite::block_on`.
+* Async-first, while not requiring an async runtime.
 * No context object. You just open a device. There is a global event loop thread
   that is started when opening the first device.
 * Thinner layer over OS APIs, with less internal state.
 
-### Current status
-
-* Support for Linux, Windows, and macOS
-* Device listing and descriptor parsing
-* Transfers on control, bulk and interrupt endpoints
-* Used in production by [probe-rs](https://github.com/probe-rs/probe-rs) and others, but still relatively new. Please test with your device and report issues.
-
 ### License
+
 MIT or Apache 2.0, at your option
