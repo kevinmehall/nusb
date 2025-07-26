@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
 use std::ffi::{OsStr, OsString};
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux"))]
 use crate::platform::SysfsPath;
 
 use crate::{Device, Error, MaybeFuture};
@@ -22,7 +22,7 @@ pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 ///     * macOS: `registry_id`, `location_id`
 #[derive(Clone)]
 pub struct DeviceInfo {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -52,20 +52,30 @@ pub struct DeviceInfo {
     #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) bus_id: String,
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android"
+    ))]
     pub(crate) device_address: u8,
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) port_chain: Vec<u8>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) device_version: u16,
 
     pub(crate) usb_version: u16,
     pub(crate) class: u8,
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
-
-    pub(crate) max_packet_size_0: u8,
 
     pub(crate) speed: Option<Speed>,
 
@@ -99,14 +109,6 @@ impl DeviceInfo {
     }
 
     /// *(Linux-only)* Sysfs path for the device.
-    #[doc(hidden)]
-    #[deprecated = "use `sysfs_path()` instead"]
-    #[cfg(target_os = "linux")]
-    pub fn path(&self) -> &SysfsPath {
-        &self.path
-    }
-
-    /// *(Linux-only)* Sysfs path for the device.
     #[cfg(target_os = "linux")]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
@@ -115,7 +117,7 @@ impl DeviceInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
@@ -151,6 +153,7 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
@@ -174,11 +177,13 @@ impl DeviceInfo {
     }
 
     /// Identifier for the bus / host controller where the device is connected.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
     /// Number identifying the device within the bus.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_address(&self) -> u8 {
         self.device_address
     }
@@ -197,6 +202,7 @@ impl DeviceInfo {
 
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_version(&self) -> u16 {
         self.device_version
     }
@@ -228,13 +234,8 @@ impl DeviceInfo {
         self.protocol
     }
 
-    /// Maximum packet size for endpoint zero.
-    #[doc(alias = "bMaxPacketSize0")]
-    pub fn max_packet_size_0(&self) -> u8 {
-        self.max_packet_size_0
-    }
-
     /// Connection speed
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn speed(&self) -> Option<Speed> {
         self.speed
     }
@@ -294,20 +295,24 @@ impl std::fmt::Debug for DeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("DeviceInfo");
 
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         s.field("bus_id", &self.bus_id)
             .field("device_address", &self.device_address)
-            .field("port_chain", &format_args!("{:?}", self.port_chain))
-            .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
-            .field("product_id", &format_args!("0x{:04X}", self.product_id))
-            .field(
-                "device_version",
-                &format_args!("0x{:04X}", self.device_version),
-            )
-            .field("usb_version", &format_args!("0x{:04X}", self.usb_version))
+            .field("port_chain", &format_args!("{:?}", self.port_chain));
+
+        s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
+            .field("product_id", &format_args!("0x{:04X}", self.product_id));
+
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        s.field(
+            "device_version",
+            &format_args!("0x{:04X}", self.device_version),
+        );
+
+        s.field("usb_version", &format_args!("0x{:04X}", self.usb_version))
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
-            .field("max_packet_size_0", &self.max_packet_size_0)
             .field("speed", &self.speed)
             .field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
@@ -316,10 +321,6 @@ impl std::fmt::Debug for DeviceInfo {
         #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
-        }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        {
-            s.field("busnum", &self.busnum);
         }
 
         #[cfg(target_os = "windows")]
@@ -475,15 +476,16 @@ impl UsbControllerType {
 /// * Linux: `path`, `parent_path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub struct BusInfo {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub(crate) path: SysfsPath,
 
     /// The phony root hub device
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub(crate) root_hub: DeviceInfo,
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub(crate) busnum: u8,
 
     #[cfg(target_os = "windows")]
@@ -525,9 +527,10 @@ pub struct BusInfo {
     pub(crate) controller_type: Option<UsbControllerType>,
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
     }
@@ -535,13 +538,13 @@ impl BusInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
 
     /// *(Linux-only)* The root hub [`DeviceInfo`] representing the bus.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux"))]
     pub fn root_hub(&self) -> &DeviceInfo {
         &self.root_hub
     }
@@ -631,7 +634,7 @@ impl BusInfo {
     /// * macOS: The [IONameMatched](https://developer.apple.com/documentation/bundleresources/information_property_list/ionamematch) key of the IOService entry.
     /// * Windows: Description field of the root hub device. How the bus will appear in Device Manager.
     pub fn system_name(&self) -> Option<&str> {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux"))]
         {
             self.root_hub.product_string()
         }
@@ -648,11 +651,12 @@ impl BusInfo {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl std::fmt::Debug for BusInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("BusInfo");
 
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux"))]
         {
             s.field("sysfs_path", &self.path);
             s.field("busnum", &self.busnum);
