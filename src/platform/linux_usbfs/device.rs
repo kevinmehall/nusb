@@ -4,7 +4,6 @@ use std::{
     fs::File,
     io::{Read, Seek},
     mem::ManuallyDrop,
-    path::PathBuf,
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc, Mutex, MutexGuard, Weak,
@@ -17,7 +16,7 @@ use log::{debug, error, warn};
 use rustix::{
     event::epoll::EventFlags,
     fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
-    fs::{Mode, OFlags, Timespec},
+    fs::Timespec,
     io::Errno,
     time::{timerfd_create, timerfd_settime, Itimerspec, TimerfdFlags, TimerfdTimerFlags},
 };
@@ -26,8 +25,12 @@ use slab::Slab;
 use super::{
     errno_to_transfer_error, events,
     usbfs::{self, Urb},
-    SysfsPath, TransferData,
+    TransferData,
 };
+
+#[cfg(not(target_os = "android"))]
+use super::SysfsPath;
+
 use crate::{
     bitset::EndpointBitSet,
     descriptors::{
@@ -63,7 +66,9 @@ pub(crate) struct LinuxDevice {
     /// Read from the fd, consists of device descriptor followed by configuration descriptors
     descriptors: Vec<u8>,
 
+    #[cfg(not(target_os = "android"))]
     sysfs: Option<SysfsPath>,
+
     active_config: AtomicU8,
 
     timerfd: OwnedFd,
@@ -71,15 +76,18 @@ pub(crate) struct LinuxDevice {
 }
 
 impl LinuxDevice {
+    #[cfg(not(target_os = "android"))]
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
+        use rustix::fs::{Mode, OFlags};
+
         let busnum = d.busnum();
         let devnum = d.device_address();
         let sysfs_path = d.path.clone();
 
         Blocking::new(move || {
-            let path = PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
+            let path = std::path::PathBuf::from(format!("/dev/bus/usb/{busnum:03}/{devnum:03}"));
             let fd = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
                 .map_err(|e| {
                     match e {
@@ -98,18 +106,29 @@ impl LinuxDevice {
         })
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn from_device_info(
+        _d: &DeviceInfo,
+    ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
+        Blocking::new(move || unimplemented!())
+    }
+
     pub(crate) fn from_fd(
         fd: OwnedFd,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
         Blocking::new(move || {
             debug!("Wrapping fd {} as usbfs device", fd.as_raw_fd());
-            Self::create_inner(fd, None)
+            Self::create_inner(
+                fd,
+                #[cfg(not(target_os = "android"))]
+                None,
+            )
         })
     }
 
     pub(crate) fn create_inner(
         fd: OwnedFd,
-        sysfs: Option<SysfsPath>,
+        #[cfg(not(target_os = "android"))] sysfs: Option<SysfsPath>,
     ) -> Result<Arc<LinuxDevice>, Error> {
         let descriptors = read_all_from_fd(&fd).map_err(|e| {
             Error::new_io(ErrorKind::Other, "failed to read descriptors", e).log_error()
@@ -119,25 +138,18 @@ impl LinuxDevice {
             return Err(Error::new(ErrorKind::Other, "invalid device descriptor"));
         };
 
+        #[cfg(not(target_os = "android"))]
         let active_config: u8 = if let Some(sysfs) = sysfs.as_ref() {
             sysfs.read_attr("bConfigurationValue").map_err(|e| {
                 warn!("failed to read sysfs bConfigurationValue: {e}");
                 Error::new(ErrorKind::Other, "failed to read sysfs bConfigurationValue")
             })?
         } else {
-            request_configuration(&fd).unwrap_or_else(|()| {
-                let mut config_descriptors = parse_concatenated_config_descriptors(
-                    &descriptors[DESCRIPTOR_LEN_DEVICE as usize..],
-                );
-
-                if let Some(config) = config_descriptors.next() {
-                    config.configuration_value()
-                } else {
-                    error!("no configurations for device fd {}", fd.as_raw_fd());
-                    0
-                }
-            })
+            guess_active_configuration(&fd, &descriptors)
         };
+
+        #[cfg(target_os = "android")]
+        let active_config = guess_active_configuration(&fd, &descriptors);
 
         let timerfd = timerfd_create(
             rustix::time::TimerfdClockId::Monotonic,
@@ -151,6 +163,7 @@ impl LinuxDevice {
                 fd,
                 events_id,
                 descriptors,
+                #[cfg(not(target_os = "android"))]
                 sysfs,
                 active_config: AtomicU8::new(active_config),
                 timerfd,
@@ -305,6 +318,7 @@ impl LinuxDevice {
     }
 
     pub(crate) fn active_configuration_value(&self) -> u8 {
+        #[cfg(not(target_os = "android"))]
         if let Some(sysfs) = self.sysfs.as_ref() {
             match sysfs.read_attr("bConfigurationValue") {
                 Ok(v) => {
@@ -527,6 +541,21 @@ fn read_all_from_fd(fd: &OwnedFd) -> Result<Vec<u8>, std::io::Error> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// Try a request to get the active configuration or fall back to a guess.
+fn guess_active_configuration(fd: &OwnedFd, descriptors: &[u8]) -> u8 {
+    request_configuration(fd).unwrap_or_else(|()| {
+        let mut config_descriptors =
+            parse_concatenated_config_descriptors(&descriptors[DESCRIPTOR_LEN_DEVICE as usize..]);
+
+        if let Some(config) = config_descriptors.next() {
+            config.configuration_value()
+        } else {
+            error!("no configurations for device fd {}", fd.as_raw_fd());
+            0
+        }
+    })
 }
 
 /// Get the active configuration with a blocking request to the device.

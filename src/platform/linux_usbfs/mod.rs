@@ -6,17 +6,24 @@ use rustix::io::Errno;
 pub(crate) use transfer::TransferData;
 mod usbfs;
 
+#[cfg(not(target_os = "android"))]
 mod enumeration;
-mod events;
+
+#[cfg(not(target_os = "android"))]
 pub use enumeration::{list_buses, list_devices, SysfsPath};
+
+#[cfg(not(target_os = "android"))]
+mod hotplug;
+
+#[cfg(not(target_os = "android"))]
+pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
+
+mod events;
 
 mod device;
 pub(crate) use device::LinuxDevice as Device;
 pub(crate) use device::LinuxEndpoint as Endpoint;
 pub(crate) use device::LinuxInterface as Interface;
-
-mod hotplug;
-pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
 
 use crate::transfer::TransferError;
 use crate::ErrorKind;
