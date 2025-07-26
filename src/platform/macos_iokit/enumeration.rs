@@ -134,7 +134,6 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
         class: get_integer_property(&device, "bDeviceClass")? as u8,
         subclass: get_integer_property(&device, "bDeviceSubClass")? as u8,
         protocol: get_integer_property(&device, "bDeviceProtocol")? as u8,
-        max_packet_size_0: get_integer_property(&device, "bMaxPacketSize0")? as u8,
         speed: get_integer_property(&device, "Device Speed").and_then(map_speed),
         manufacturer_string: get_string_property(&device, "kUSBVendorString")
             .or_else(|| get_string_property(&device, "USB Vendor Name")),
