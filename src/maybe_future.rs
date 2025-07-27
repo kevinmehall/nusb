@@ -8,6 +8,7 @@ use std::{
 ///
 /// A `MaybeFuture` can be run asynchronously with `.await`, or
 /// run synchronously (blocking the current thread) with `.wait()`.
+#[must_use = "must `.wait()` or `.await` to perform the action"]
 pub trait MaybeFuture: IntoFuture<IntoFuture: NonWasmSend> + NonWasmSend {
     /// Block waiting for the action to complete
     #[cfg(not(target_arch = "wasm32"))]
