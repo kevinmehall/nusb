@@ -1,6 +1,6 @@
 [package]
 name = "nusb"
-version = "0.2.0-beta.2"
+version = "0.2.0"
 description = "Cross-platform low-level access to USB devices in pure Rust"
 categories = ["hardware-support"]
 keywords = ["usb", "hardware"]
