@@ -242,7 +242,7 @@ impl BitSet256 {
         1u64 << (bit % 64)
     }
 
-    fn is_set(&mut self, bit: u8) -> bool {
+    fn is_set(&self, bit: u8) -> bool {
         self.0[Self::idx(bit)] & Self::mask(bit) != 0
     }
 
@@ -308,7 +308,7 @@ impl WinusbFileHandle {
         assert!(interface_number >= self.first_interface);
 
         if self.claimed_interfaces.is_set(interface_number) {
-            Error::new(ErrorKind::Busy, "interface is already claimed");
+            return Err(Error::new(ErrorKind::Busy, "interface is already claimed"));
         }
 
         let winusb_handle = if self.first_interface == interface_number {
@@ -320,8 +320,8 @@ impl WinusbFileHandle {
                 if WinUsb_GetAssociatedInterface(self.winusb_handle, idx, &mut out_handle) == FALSE
                 {
                     let err = GetLastError();
-                    error!(
-                        "WinUsb_GetAssociatedInterface for {} on {} failed: {:?}",
+                    debug!(
+                        "WinUsb_GetAssociatedInterface for interface {} using handle for {} failed: {:?}",
                         interface_number, self.first_interface, err
                     );
 
