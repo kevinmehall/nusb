@@ -108,9 +108,9 @@ impl LinuxDevice {
 
     #[cfg(target_os = "android")]
     pub(crate) fn from_device_info(
-        _d: &DeviceInfo,
+        d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
-        Blocking::new(move || unimplemented!())
+        crate::platform::open_device(d)
     }
 
     pub(crate) fn from_fd(
