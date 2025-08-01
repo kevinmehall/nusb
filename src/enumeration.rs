@@ -315,10 +315,8 @@ impl DeviceInfo {
     ///
     /// ### Platform-specific notes
     ///
-    /// * On Android, `DeviceInfo::request_permission` will be called if the permission
-    ///   has not been granted; blocking on such a request in the UI thread or the native
-    ///   activity's main event thread may block forever. Please avoid blocking in such
-    ///   a thread if `DeviceInfo::has_permission` returns `false`.
+    /// * On Android, `DeviceInfo::request_permission` must be called if the permission
+    ///   has not been granted.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
     }
