@@ -770,7 +770,14 @@ impl WindowsEndpoint {
 
 impl Drop for WindowsEndpoint {
     fn drop(&mut self) {
-        self.cancel_all();
+        if !self.pending.is_empty() {
+            debug!(
+                "Dropping endpoint {:02x} with {} pending transfers",
+                self.inner.address,
+                self.pending.len()
+            );
+            self.cancel_all();
+        }
     }
 }
 
