@@ -738,6 +738,36 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
         self.backend.wait_next_complete(timeout)
     }
 
+    /// Submit a single transfer and wait for it to complete.
+    ///
+    /// This is a convenience method that combines `submit` and
+    /// `wait_next_complete` for the common case where you submit a single
+    /// transfer and wait for it to complete with a timeout, cancelling it if
+    /// the timeout is reached. This assumes that no transfer is already
+    /// pending, and always consumes the transfer it submits such that it never
+    /// leaves a transfer pending.
+    ///
+    /// In the case of a timeout, the returned `Completion` will have a status
+    /// of `TransferError::Cancelled`.
+    ///
+    /// ## Panics
+    ///  * if any transfer is already pending.
+    pub fn transfer_blocking(&mut self, buf: Buffer, timeout: Duration) -> Completion {
+        assert!(self.pending() == 0, "a transfer is already pending");
+        self.submit(buf);
+        if let Some(completion) = self.wait_next_complete(timeout) {
+            return completion;
+        }
+
+        self.cancel_all();
+        loop {
+            if let Some(completion) = self.wait_next_complete(Duration::from_secs(1)) {
+                return completion;
+            }
+            log::warn!("cancelled transfer due to timeout, but it has not yet returned");
+        }
+    }
+
     /// Clear the endpoint's halt / stall condition.
     ///
     /// Sends a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer to tell the
