@@ -141,7 +141,7 @@ impl Device {
     /// the configuration reported as active by the OS.
     pub fn active_configuration(
         &self,
-    ) -> Result<ConfigurationDescriptor, ActiveConfigurationError> {
+    ) -> Result<ConfigurationDescriptor<'_>, ActiveConfigurationError> {
         let active = self.backend.active_configuration_value();
 
         self.configurations()
@@ -154,7 +154,7 @@ impl Device {
     /// Get an iterator returning information about each configuration of the device.
     ///
     /// This returns cached data and does not perform IO.
-    pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor> {
+    pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.backend.configuration_descriptors()
     }
 
@@ -485,7 +485,7 @@ impl Interface {
     /// Get the interface descriptors for the alternate settings of this interface.
     ///
     /// This returns cached data and does not perform IO.
-    pub fn descriptors(&self) -> impl Iterator<Item = InterfaceDescriptor> {
+    pub fn descriptors(&self) -> impl Iterator<Item = InterfaceDescriptor<'_>> {
         let active = self.backend.device.active_configuration_value();
 
         let configuration = self
@@ -501,7 +501,7 @@ impl Interface {
     }
 
     /// Get the interface descriptor for the current alternate setting.
-    pub fn descriptor(&self) -> Option<InterfaceDescriptor> {
+    pub fn descriptor(&self) -> Option<InterfaceDescriptor<'_>> {
         self.descriptors()
             .find(|i| i.alternate_setting() == self.get_alt_setting())
     }

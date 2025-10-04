@@ -195,7 +195,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
     /// as a delimiter marking the end of a message. By default, [`EndpointRead`]
     /// ignores packet boundaries, but this adapter allows you to observe these
     /// delimiters.
-    pub fn until_short_packet(&mut self) -> EndpointReadUntilShortPacket<EpType> {
+    pub fn until_short_packet(&mut self) -> EndpointReadUntilShortPacket<'_, EpType> {
         EndpointReadUntilShortPacket { reader: self }
     }
 
