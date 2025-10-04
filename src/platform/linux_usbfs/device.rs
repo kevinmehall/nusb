@@ -515,6 +515,8 @@ impl LinuxDevice {
         unsafe {
             if let Err(e) = usbfs::discard_urb(&self.fd, urb) {
                 debug!("Failed to cancel URB {urb:?}: {e}");
+            } else {
+                debug!("Requested cancellation of URB {urb:?}");
             }
         }
     }
@@ -822,7 +824,14 @@ impl LinuxEndpoint {
 
 impl Drop for LinuxEndpoint {
     fn drop(&mut self) {
-        self.cancel_all();
+        if !self.pending.is_empty() {
+            debug!(
+                "Dropping endpoint {:02x} with {} pending transfers",
+                self.inner.address,
+                self.pending.len()
+            );
+            self.cancel_all();
+        }
     }
 }
 

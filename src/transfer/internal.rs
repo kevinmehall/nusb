@@ -26,6 +26,20 @@ pub enum NotifyState {
     Thread(Thread),
 }
 
+impl NotifyState {
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, NotifyState::None)
+    }
+
+    fn notify(self) {
+        match self {
+            NotifyState::None => {}
+            NotifyState::Waker(waker) => waker.wake(),
+            NotifyState::Thread(thread) => thread.unpark(),
+        }
+    }
+}
+
 impl AsRef<Notify> for Notify {
     fn as_ref(&self) -> &Notify {
         self
@@ -69,12 +83,8 @@ impl Notify {
         }
     }
 
-    pub fn notify(&self) {
-        match &mut *self.state.lock().unwrap() {
-            NotifyState::None => {}
-            NotifyState::Waker(waker) => waker.wake_by_ref(),
-            NotifyState::Thread(thread) => thread.unpark(),
-        }
+    fn take_notify_state(&self) -> NotifyState {
+        self.state.lock().unwrap().take()
     }
 }
 
@@ -222,9 +232,9 @@ impl<P> Drop for Pending<P> {
 pub(crate) unsafe fn notify_completion<P>(transfer: *mut P) {
     unsafe {
         let transfer = transfer as *mut TransferInner<P>;
-        let notify = (*transfer).notify.clone();
+        let wake = (*transfer).notify.deref().as_ref().take_notify_state();
         match (*transfer).state.swap(STATE_IDLE, Ordering::AcqRel) {
-            STATE_PENDING => (*notify).as_ref().notify(),
+            STATE_PENDING => wake.notify(),
             STATE_ABANDONED => {
                 drop(Box::from_raw(transfer));
             }
