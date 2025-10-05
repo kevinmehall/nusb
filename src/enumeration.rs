@@ -1,12 +1,15 @@
 #[cfg(target_os = "windows")]
 use std::ffi::{OsStr, OsString};
 
+#[cfg(target_os = "android")]
+use std::sync::{Arc, OnceLock};
+
 #[cfg(any(target_os = "linux"))]
 use crate::platform::SysfsPath;
 
 use crate::{Device, Error, MaybeFuture};
 
-/// Opaque device identifier
+/// Opaque device identifier.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 
@@ -20,12 +23,13 @@ pub struct DeviceId(pub(crate) crate::platform::DeviceId);
 ///     * Linux: `sysfs_path`, `busnum`
 ///     * Windows: `instance_id`, `parent_instance_id`, `port_number`, `driver`
 ///     * macOS: `registry_id`, `location_id`
+///     * Android: `port_chain`, `device_version`, `bus_id`, `device_address`, `speed` are unavailable
 #[derive(Clone)]
 pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     pub(crate) busnum: u8,
 
     #[cfg(target_os = "windows")]
@@ -46,6 +50,9 @@ pub struct DeviceInfo {
     #[cfg(target_os = "windows")]
     pub(crate) driver: Option<String>,
 
+    #[cfg(target_os = "android")]
+    pub(crate) jni_global_ref: crate::platform::JniGlobalRef,
+
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,
 
@@ -55,13 +62,11 @@ pub struct DeviceInfo {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) bus_id: String,
 
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "android"
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
     pub(crate) device_address: u8,
+
+    #[cfg(target_os = "android")]
+    pub(crate) device_id: i32,
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) port_chain: Vec<u8>,
@@ -81,7 +86,12 @@ pub struct DeviceInfo {
 
     pub(crate) manufacturer_string: Option<String>,
     pub(crate) product_string: Option<String>,
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) serial_number: Option<String>,
+
+    #[cfg(target_os = "android")]
+    pub(crate) serial_number: Arc<OnceLock<String>>,
 
     pub(crate) interfaces: Vec<InterfaceInfo>,
 }
@@ -94,7 +104,7 @@ impl DeviceInfo {
             DeviceId(self.devinst)
         }
 
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(target_os = "linux")]
         {
             DeviceId(crate::platform::DeviceId {
                 bus: self.busnum,
@@ -105,6 +115,11 @@ impl DeviceInfo {
         #[cfg(target_os = "macos")]
         {
             DeviceId(self.registry_id)
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            DeviceId(self.device_id)
         }
     }
 
@@ -146,7 +161,8 @@ impl DeviceInfo {
         self.port_number
     }
 
-    /// Path of port numbers identifying the port where the device is connected.
+    /// *(Not available on Android)* Path of port numbers identifying the port where
+    /// the device is connected.
     ///
     /// Together with the bus ID, it identifies a physical port. The path is
     /// expected to remain stable across device insertions or reboots.
@@ -176,13 +192,13 @@ impl DeviceInfo {
         self.registry_id
     }
 
-    /// Identifier for the bus / host controller where the device is connected.
+    /// *(Not available on Android)* Identifier for the bus / host controller where the device is connected.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
-    /// Number identifying the device within the bus.
+    /// *(Not available on Android)* Number identifying the device within the bus.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_address(&self) -> u8 {
         self.device_address
@@ -200,7 +216,8 @@ impl DeviceInfo {
         self.product_id
     }
 
-    /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
+    /// *(Not available on Android)* The device version, normally encoded as BCD, from the `bcdDevice`
+    /// device descriptor field.
     #[doc(alias = "bcdDevice")]
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_version(&self) -> u16 {
@@ -233,7 +250,7 @@ impl DeviceInfo {
         self.protocol
     }
 
-    /// Connection speed
+    /// *(Not available on Android)* Connection speed.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn speed(&self) -> Option<Speed> {
         self.speed
@@ -256,9 +273,20 @@ impl DeviceInfo {
     }
 
     /// Serial number string, if available without device IO.
+    ///
+    /// ### Platform-specific notes
+    ///  * Android: Starting from Android 10, this can not be read without permission of opening the device.
+    ///    See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
-        self.serial_number.as_deref()
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        {
+            self.serial_number.as_deref()
+        }
+        #[cfg(target_os = "android")]
+        {
+            self.get_serial_number()
+        }
     }
 
     /// Iterator over the device's interfaces.
@@ -283,9 +311,37 @@ impl DeviceInfo {
         self.interfaces.iter()
     }
 
-    /// Open the device
+    /// Opens the device.
+    ///
+    /// ### Platform-specific notes
+    ///
+    /// * On Android, `DeviceInfo::request_permission` must be called if the permission
+    ///   has not been granted.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
+    }
+
+    /// *(Android-only)* Checks if the caller has permission to access the device.
+    #[cfg(target_os = "android")]
+    pub fn has_permission(&self) -> Result<bool, Error> {
+        crate::platform::has_permission(self)
+    }
+
+    /// *(Android-only)* Performs a permission request for the device.
+    ///
+    /// Returns `Ok(None)` if the permission is already granted; otherwise it returns
+    /// a `PermissionRequest`.
+    ///
+    /// The current Android activity may be paused by `UsbManager.requestPermission()`
+    /// called here, and resumed on receving result.
+    ///
+    /// Blocking on such a request in the UI thread or the native activity's main
+    /// event thread may block forever. Please avoid blocking in such a thread if
+    /// `DeviceInfo::has_permission` returns `false`. Status of the `PermissionRequest`
+    /// can be checked on the activity resume event.
+    #[cfg(target_os = "android")]
+    pub fn request_permission(&self) -> Result<Option<crate::PermissionRequest>, Error> {
+        crate::platform::request_permission(self)
     }
 }
 
@@ -298,6 +354,11 @@ impl std::fmt::Debug for DeviceInfo {
         s.field("bus_id", &self.bus_id)
             .field("device_address", &self.device_address)
             .field("port_chain", &format_args!("{:?}", self.port_chain));
+
+        #[cfg(target_os = "android")]
+        {
+            s.field("device_id", &self.device_id);
+        }
 
         s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
             .field("product_id", &format_args!("0x{:04X}", self.product_id));
@@ -315,7 +376,7 @@ impl std::fmt::Debug for DeviceInfo {
             .field("speed", &self.speed)
             .field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
-            .field("serial_number", &self.serial_number);
+            .field("serial_number", &self.serial_number());
 
         #[cfg(target_os = "linux")]
         {
