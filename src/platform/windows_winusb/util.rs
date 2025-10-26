@@ -152,7 +152,7 @@ impl Display for WCStr {
 pub struct NulSepList(pub Vec<u16>);
 
 impl NulSepList {
-    pub fn iter(&self) -> NulSepListIter {
+    pub fn iter(&self) -> NulSepListIter<'_> {
         NulSepListIter(&self.0)
     }
 }
