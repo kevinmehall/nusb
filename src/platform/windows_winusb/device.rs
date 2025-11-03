@@ -26,7 +26,13 @@ use windows_sys::Win32::{
         ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVICE, FALSE,
         HANDLE, TRUE,
     },
-    System::IO::{CancelIoEx, OVERLAPPED},
+    System::{
+        Threading::{
+            CancelThreadpoolIo, CloseThreadpoolIo, CreateThreadpoolIo, StartThreadpoolIo,
+            PTP_CALLBACK_INSTANCE, PTP_IO,
+        },
+        IO::{CancelIoEx, OVERLAPPED},
+    },
 };
 
 use crate::{
@@ -263,6 +269,7 @@ impl BitSet256 {
 pub(crate) struct WinusbFileHandle {
     first_interface: u8,
     handle: OwnedHandle,
+    threadpool_io: PTP_IO,
     winusb_handle: WINUSB_INTERFACE_HANDLE,
     claimed_interfaces: BitSet256,
 }
@@ -275,11 +282,27 @@ impl WinusbFileHandle {
     fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
         let handle = create_file(path)
             .map_err(|e| Error::new_os(ErrorKind::Other, "failed to open device", e).log_debug())?;
-        super::events::register(&handle)?;
+
+        let threadpool_io = unsafe {
+            CreateThreadpoolIo(
+                raw_handle(&handle),
+                Some(io_callback),
+                null_mut(),
+                null_mut(),
+            )
+        };
+
+        if threadpool_io == 0 {
+            let err = unsafe { GetLastError() };
+            return Err(
+                Error::new_os(ErrorKind::Other, "CreateThreadpoolIo failed", err).log_error(),
+            );
+        }
 
         let winusb_handle = unsafe {
             let mut h = ptr::null_mut();
             if WinUsb_Initialize(raw_handle(&handle), &mut h) == FALSE {
+                CloseThreadpoolIo(threadpool_io);
                 return Err(Error::new_os(
                     ErrorKind::Other,
                     "failed to initialize WinUSB",
@@ -295,6 +318,7 @@ impl WinusbFileHandle {
         Ok(WinusbFileHandle {
             first_interface,
             handle,
+            threadpool_io,
             winusb_handle,
             claimed_interfaces: BitSet256::new(),
         })
@@ -349,6 +373,7 @@ impl WinusbFileHandle {
 
         Ok(Arc::new(WindowsInterface {
             handle: self.handle.as_raw_handle(),
+            threadpool_io: self.threadpool_io,
             device: device.clone(),
             interface_number,
             first_interface_number: self.first_interface,
@@ -365,16 +390,44 @@ impl Drop for WinusbFileHandle {
             self.first_interface
         );
         unsafe {
+            CloseThreadpoolIo(self.threadpool_io);
             WinUsb_Free(self.winusb_handle);
         }
     }
 }
 
+unsafe extern "system" fn io_callback(
+    instance: PTP_CALLBACK_INSTANCE,
+    context: *mut c_void,
+    overlapped: *mut c_void,
+    result: u32,
+    bytes_transferred: usize,
+    io: PTP_IO,
+) {
+    let t = overlapped as *mut TransferData;
+    {
+        let transfer = unsafe { &mut *t };
+
+        debug!(
+            "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
+            transfer.endpoint, result, bytes_transferred,
+        );
+    }
+    unsafe { notify_completion::<TransferData>(t) }
+}
+
 pub(crate) struct WindowsInterface {
+    /// Owned by the `WinUSBFileHandle`
     pub(crate) handle: RawHandle,
+
+    /// Owned by the `WinUSBFileHandle`
+    pub(crate) threadpool_io: PTP_IO,
+
     pub(crate) device: Arc<WindowsDevice>,
     pub(crate) first_interface_number: u8,
     pub(crate) interface_number: u8,
+
+    /// Owned by this object if `first_interface_number != interface_number`, otherwise owned by the `WinUSBFileHandle`
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
     state: Mutex<InterfaceState>,
 }
@@ -568,6 +621,10 @@ impl WindowsInterface {
 
         debug!("Submit transfer {ptr:?} on endpoint {endpoint:02X} for {len} bytes {dir:?}");
 
+        unsafe {
+            StartThreadpoolIo(self.threadpool_io);
+        }
+
         let r = unsafe {
             match dir {
                 Direction::Out => WinUsb_WritePipe(
@@ -617,6 +674,10 @@ impl WindowsInterface {
 
         debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
 
+        unsafe {
+            StartThreadpoolIo(self.threadpool_io);
+        }
+
         let r = unsafe {
             WinUsb_ControlTransfer(
                 self.winusb_handle,
@@ -640,6 +701,10 @@ impl WindowsInterface {
 
         if err != ERROR_IO_PENDING {
             error!("submit failed: {}", io::Error::from_raw_os_error(err as _));
+
+            unsafe {
+                CancelThreadpoolIo(self.threadpool_io);
+            }
 
             // Safety: Transfer was not submitted, so we still own it
             // and must complete it in place of the event thread.

@@ -3,8 +3,6 @@ use std::num::NonZeroU32;
 
 pub use enumeration::{list_buses, list_devices};
 
-mod events;
-
 mod device;
 pub(crate) use device::WindowsDevice as Device;
 pub(crate) use device::WindowsEndpoint as Endpoint;

@@ -112,18 +112,3 @@ impl Drop for TransferData {
         }
     }
 }
-
-pub(super) fn handle_event(completion: *mut OVERLAPPED) {
-    let t = completion as *mut TransferData;
-    {
-        let transfer = unsafe { &mut *t };
-
-        debug!(
-            "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
-            transfer.endpoint,
-            transfer.overlapped.Internal,
-            transfer.actual_len(),
-        );
-    }
-    unsafe { notify_completion::<TransferData>(t) }
-}
