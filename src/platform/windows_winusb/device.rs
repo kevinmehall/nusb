@@ -2,11 +2,8 @@ use std::{
     collections::{btree_map::Entry, BTreeMap, VecDeque},
     ffi::c_void,
     io,
-    mem::{size_of_val, transmute},
-    os::windows::{
-        io::{AsRawHandle, RawHandle},
-        prelude::OwnedHandle,
-    },
+    mem::{self, size_of_val, transmute},
+    os::windows::io::{AsRawHandle, OwnedHandle, RawHandle},
     ptr::{self, null_mut},
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -24,12 +21,13 @@ use windows_sys::Win32::{
     Foundation::{
         GetLastError, ERROR_BAD_COMMAND, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND,
         ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVICE, FALSE,
-        HANDLE, TRUE,
+        FILETIME, HANDLE, TRUE,
     },
     System::{
         Threading::{
-            CancelThreadpoolIo, CloseThreadpoolIo, CreateThreadpoolIo, StartThreadpoolIo,
-            PTP_CALLBACK_INSTANCE, PTP_IO,
+            CancelThreadpoolIo, CloseThreadpoolIo, CreateThreadpoolIo, CreateThreadpoolTimer,
+            SetThreadpoolTimer, StartThreadpoolIo, WaitForThreadpoolTimerCallbacks,
+            PTP_CALLBACK_INSTANCE, PTP_IO, PTP_TIMER,
         },
         IO::{CancelIoEx, OVERLAPPED},
     },
@@ -315,6 +313,23 @@ impl WinusbFileHandle {
 
         debug!("Opened WinUSB handle for {path} (interface {first_interface})");
 
+        unsafe {
+            // Disable WinUSB's default control transfer timeout so we can do our own
+            // per-request timeout handling by cancelling the transfer with a timer.
+            let timeout: u32 = 0;
+            let r = WinUsb_SetPipePolicy(
+                winusb_handle,
+                0x00,
+                Usb::PIPE_TRANSFER_TIMEOUT,
+                size_of_val(&timeout) as u32,
+                &timeout as *const _ as *const c_void,
+            );
+            if r != TRUE {
+                let err = GetLastError();
+                warn!("Failed to disable default timeout on control endpoint, error {err}");
+            }
+        }
+
         Ok(WinusbFileHandle {
             first_interface,
             handle,
@@ -397,23 +412,57 @@ impl Drop for WinusbFileHandle {
 }
 
 unsafe extern "system" fn io_callback(
-    instance: PTP_CALLBACK_INSTANCE,
-    context: *mut c_void,
+    _instance: PTP_CALLBACK_INSTANCE,
+    _context: *mut c_void,
     overlapped: *mut c_void,
     result: u32,
     bytes_transferred: usize,
-    io: PTP_IO,
+    _io: PTP_IO,
 ) {
     let t = overlapped as *mut TransferData;
     {
-        let transfer = unsafe { &mut *t };
+        let transfer = unsafe { &*t };
 
         debug!(
             "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
             transfer.endpoint, result, bytes_transferred,
         );
+
+        if let Some(timer) = transfer.timeout {
+            // Cancel the timeout and wait for any callback to complete that may be concurrently
+            // accessing `transfer`.
+            unsafe {
+                SetThreadpoolTimer(timer, ptr::null_mut(), 0, 0);
+                WaitForThreadpoolTimerCallbacks(timer, 1);
+            }
+        }
     }
     unsafe { notify_completion::<TransferData>(t) }
+}
+
+unsafe extern "system" fn timer_callback(
+    _instance: PTP_CALLBACK_INSTANCE,
+    context: *mut c_void,
+    _timer: PTP_TIMER,
+) {
+    let transfer_data = &*(context as *const TransferData);
+    debug!(
+        "Transfer {context:?} timeout on endpoint 0x{:02X}",
+        transfer_data.endpoint
+    );
+    unsafe {
+        CancelIoEx(transfer_data.handle, &transfer_data.overlapped);
+    }
+}
+
+fn duration_to_filetime(duration: Duration) -> FILETIME {
+    let time = i64::try_from(duration.as_micros())
+        .unwrap_or(i64::MAX)
+        .saturating_mul(-10); // in 100-nanosecond intervals, negative for relative time
+    FILETIME {
+        dwLowDateTime: (time & 0xFFFFFFFF) as u32,
+        dwHighDateTime: (time >> 32) as u32,
+    }
 }
 
 pub(crate) struct WindowsInterface {
@@ -483,7 +532,7 @@ impl WindowsInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        let mut t = TransferData::new(0x80);
+        let mut t = TransferData::new(self.handle, 0x80);
         t.set_buffer(Buffer::new(data.length as usize));
 
         let pkt = WINUSB_SETUP_PACKET {
@@ -496,7 +545,7 @@ impl WindowsInterface {
 
         let intf = self.clone();
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
             let c = t.take_completion(&intf);
             c.status?;
             Ok(c.buffer.into_vec())
@@ -508,7 +557,7 @@ impl WindowsInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        let mut t = TransferData::new(0x00);
+        let mut t = TransferData::new(self.handle, 0x00);
         t.set_buffer(Buffer::from(data.data.to_vec()));
 
         let pkt = WINUSB_SETUP_PACKET {
@@ -521,7 +570,7 @@ impl WindowsInterface {
 
         let intf = self.clone();
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
             let c = t.take_completion(&intf);
             c.status
         })
@@ -613,7 +662,7 @@ impl WindowsInterface {
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped.InternalHigh = 0;
+        t.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
@@ -653,12 +702,13 @@ impl WindowsInterface {
         &self,
         mut t: Idle<TransferData>,
         pkt: WINUSB_SETUP_PACKET,
+        timeout: Duration,
     ) -> Pending<TransferData> {
         let endpoint = t.endpoint;
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped.InternalHigh = 0;
+        t.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         if pkt.RequestType & 0x1f == Recipient::Interface as u8
@@ -669,8 +719,28 @@ impl WindowsInterface {
             return t.simulate_complete();
         }
 
-        let t = t.pre_submit();
         let ptr = t.as_ptr();
+        let timer = unsafe {
+            CreateThreadpoolTimer(
+                Some(timer_callback),
+                ptr as *mut core::ffi::c_void,
+                ptr::null_mut(),
+            )
+        };
+        if timer == 0 {
+            let e = unsafe { GetLastError() };
+            log::error!("CreateThreadpoolTimer failed with error {e}");
+        } else {
+            t.timeout = Some(timer);
+        }
+
+        let t = t.pre_submit();
+
+        // Start the timeout, now that we're no longer borrowing the transfer, but also before submitting the transfer:
+        // this guarantees that the IO callback trying to clear the timer can't occur before `SetThreadpoolTimer`
+        // enables it.
+        let tm = duration_to_filetime(timeout);
+        unsafe { SetThreadpoolTimer(timer, &tm, 0, 0) };
 
         debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
 
@@ -776,7 +846,10 @@ impl WindowsEndpoint {
 
     fn make_transfer(&mut self, buffer: Buffer) -> Idle<TransferData> {
         let mut t = self.idle_transfer.take().unwrap_or_else(|| {
-            Idle::new(self.inner.clone(), TransferData::new(self.inner.address))
+            Idle::new(
+                self.inner.clone(),
+                TransferData::new(self.inner.interface.handle, self.inner.address),
+            )
         });
         t.set_buffer(buffer);
         t
