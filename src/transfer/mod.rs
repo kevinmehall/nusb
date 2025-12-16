@@ -132,6 +132,13 @@ impl EndpointType for Interrupt {
 }
 impl BulkOrInterrupt for Interrupt {}
 
+/// Type-level endpoint type: Isochronous
+pub enum Isochronous {}
+impl private::Sealed for Isochronous {}
+impl EndpointType for Isochronous {
+    const TYPE: TransferType = TransferType::Isochronous;
+}
+
 /// A completed transfer returned from [`Endpoint::next_complete`][`crate::Endpoint::next_complete`].
 ///
 /// A transfer can partially complete even in the case of failure or
@@ -155,5 +162,47 @@ impl Completion {
     /// `TransferError`.
     pub fn into_result(self) -> Result<Buffer, TransferError> {
         self.status.map(|()| self.buffer)
+    }
+}
+
+/// A completed isochronous packet with its status and data range.
+#[derive(Debug, Clone)]
+pub struct IsoPacketResult {
+    /// Offset into the buffer where this packet's data starts.
+    pub offset: usize,
+    /// Expected packet length.
+    pub length: usize,
+    /// Actual number of bytes transferred.
+    pub actual_length: usize,
+    /// Per-packet status (0 = success).
+    pub status: i32,
+}
+
+/// Completion result for an isochronous transfer.
+///
+/// Unlike bulk/interrupt transfers, isochronous transfers consist of multiple
+/// packets, each with its own status and length. The overall transfer may
+/// succeed even if individual packets fail (with `error_count > 0`).
+#[derive(Debug)]
+pub struct IsoCompletion {
+    /// The transfer buffer containing all packet data.
+    pub buffer: Buffer,
+    /// Per-packet results, in order.
+    pub packets: Vec<IsoPacketResult>,
+    /// Number of packets with errors.
+    pub error_count: usize,
+    /// Overall transfer status.
+    pub status: Result<(), TransferError>,
+}
+
+impl IsoCompletion {
+    /// Get an iterator over the packets that completed successfully.
+    pub fn successful_packets(&self) -> impl Iterator<Item = &IsoPacketResult> {
+        self.packets.iter().filter(|p| p.status == 0)
+    }
+
+    /// Get the total number of bytes actually transferred across all packets.
+    pub fn total_actual_length(&self) -> usize {
+        self.packets.iter().map(|p| p.actual_length).sum()
     }
 }
