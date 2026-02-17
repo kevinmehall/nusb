@@ -188,6 +188,8 @@ pub use enumeration::BusInfo;
 pub use enumeration::{DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use device::IsoEndpoint;
 pub use device::{Device, Endpoint, Interface};
 
 pub mod transfer;

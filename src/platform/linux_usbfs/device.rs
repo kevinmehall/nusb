@@ -25,8 +25,10 @@ use slab::Slab;
 use super::{
     errno_to_transfer_error, events,
     usbfs::{self, Urb},
-    TransferData,
+    IsoTransferData, TransferData,
 };
+
+use crate::transfer::IsoCompletion;
 
 #[cfg(not(target_os = "android"))]
 use super::{
@@ -216,28 +218,47 @@ impl LinuxDevice {
         debug!("Handling events for device {}", self.events_id);
         match usbfs::reap_urb_ndelay(&self.fd) {
             Ok(urb) => {
-                let transfer_data: *mut TransferData = unsafe { &(*urb) }.usercontext.cast();
+                let ep_type = unsafe { (*urb).ep_type };
 
-                {
-                    let transfer = unsafe { &*transfer_data };
-                    debug_assert!(transfer.urb_ptr() == urb);
+                // Check if this is an isochronous transfer
+                if ep_type == usbfs::USBDEVFS_URB_TYPE_ISO {
+                    // SAFETY: For isochronous transfers, usercontext points to IsoTransferData
+                    let transfer_data: *mut IsoTransferData = unsafe { &(*urb) }.usercontext.cast();
+
                     debug!(
-                        "URB {:?} for ep {:x} completed, status={} actual_length={}",
-                        transfer.urb_ptr(),
-                        transfer.urb().endpoint,
-                        transfer.urb().status,
-                        transfer.urb().actual_length
+                        "ISO URB {:?} for ep {:x} completed, status={} actual_length={}",
+                        urb,
+                        unsafe { (*urb).endpoint },
+                        unsafe { (*urb).status },
+                        unsafe { (*urb).actual_length }
                     );
 
-                    if let Some(deadline) = transfer.deadline {
-                        let mut timeouts = self.timeouts.lock().unwrap();
-                        timeouts.remove(&TimeoutEntry { deadline, urb });
-                        self.update_timeouts(timeouts, Instant::now());
-                    }
-                };
+                    // SAFETY: pointer came from submit via kernel and we're now done with it
+                    unsafe { notify_completion::<IsoTransferData>(transfer_data) }
+                } else {
+                    let transfer_data: *mut TransferData = unsafe { &(*urb) }.usercontext.cast();
 
-                // SAFETY: pointer came from submit via kernel and we're now done with it
-                unsafe { notify_completion::<super::TransferData>(transfer_data) }
+                    {
+                        let transfer = unsafe { &*transfer_data };
+                        debug_assert!(transfer.urb_ptr() == urb);
+                        debug!(
+                            "URB {:?} for ep {:x} completed, status={} actual_length={}",
+                            transfer.urb_ptr(),
+                            transfer.urb().endpoint,
+                            transfer.urb().status,
+                            transfer.urb().actual_length
+                        );
+
+                        if let Some(deadline) = transfer.deadline {
+                            let mut timeouts = self.timeouts.lock().unwrap();
+                            timeouts.remove(&TimeoutEntry { deadline, urb });
+                            self.update_timeouts(timeouts, Instant::now());
+                        }
+                    };
+
+                    // SAFETY: pointer came from submit via kernel and we're now done with it
+                    unsafe { notify_completion::<super::TransferData>(transfer_data) }
+                }
             }
             Err(Errno::AGAIN) => {}
             Err(Errno::NODEV) => {
@@ -540,6 +561,50 @@ impl LinuxDevice {
         }
     }
 
+    /// Submit an isochronous transfer.
+    pub(crate) fn submit_iso(&self, transfer: Idle<IsoTransferData>) -> Pending<IsoTransferData> {
+        let len = transfer.urb().buffer_length;
+        let num_packets = transfer.num_packets();
+        let pending = transfer.pre_submit();
+        let urb = pending.urb_ptr();
+
+        // SAFETY: We got the urb from `Idle<IsoTransferData>`, which always points to
+        // a valid URB with valid buffers, which is not already pending
+        unsafe {
+            let ep = (*urb).endpoint;
+            (*urb).usercontext = pending.as_ptr().cast();
+            if let Err(e) = usbfs::submit_urb(&self.fd, urb) {
+                // SAFETY: Transfer was not submitted. We still own the transfer
+                // and can write to the URB and complete it in place of the handler.
+                let u = &mut *urb;
+                debug!(
+                    "Failed to submit ISO URB {urb:?}: {len} bytes, {num_packets} packets on ep {ep:x}: {e} {u:?}"
+                );
+                u.actual_length = 0;
+                u.status = e.raw_os_error();
+                notify_completion::<IsoTransferData>(pending.as_ptr().cast());
+            } else {
+                debug!(
+                    "Submitted ISO URB {urb:?}: {len} bytes, {num_packets} packets on ep {ep:x}"
+                );
+            }
+        };
+
+        pending
+    }
+
+    /// Cancel an isochronous transfer.
+    pub(crate) fn cancel_iso(&self, transfer: &mut Pending<IsoTransferData>) {
+        let urb = transfer.urb_ptr();
+        unsafe {
+            if let Err(e) = usbfs::discard_urb(&self.fd, urb) {
+                debug!("Failed to cancel ISO URB {urb:?}: {e}");
+            } else {
+                debug!("Requested cancellation of ISO URB {urb:?}");
+            }
+        }
+    }
+
     pub(crate) fn speed(&self) -> Option<Speed> {
         usbfs::get_speed(&self.fd)
             .inspect_err(|e| log::error!("USBDEVFS_GET_SPEED failed: {e}"))
@@ -719,6 +784,51 @@ impl LinuxInterface {
             idle_transfer: None,
         })
     }
+
+    /// Open an isochronous endpoint.
+    ///
+    /// `num_packets` specifies the number of packets per transfer. This affects
+    /// how the buffer is divided among packets.
+    pub fn iso_endpoint(
+        self: &Arc<Self>,
+        descriptor: EndpointDescriptor,
+        num_packets: usize,
+    ) -> Result<LinuxIsoEndpoint, Error> {
+        let address = descriptor.address();
+        let ep_type = descriptor.transfer_type();
+        let max_packet_size = descriptor.max_packet_size();
+
+        if ep_type != TransferType::Isochronous {
+            return Err(Error::new(ErrorKind::Other, "endpoint is not isochronous"));
+        }
+
+        if num_packets == 0 {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "num_packets must be greater than 0",
+            ));
+        }
+
+        let mut state = self.state.lock().unwrap();
+
+        if state.endpoints.is_set(address) {
+            return Err(Error::new(ErrorKind::Busy, "endpoint already in use"));
+        }
+        state.endpoints.set(address);
+
+        Ok(LinuxIsoEndpoint {
+            inner: Arc::new(EndpointInner {
+                address,
+                ep_type,
+                interface: self.clone(),
+                notify: Notify::new(),
+            }),
+            max_packet_size,
+            num_packets,
+            pending: VecDeque::new(),
+            idle_transfer: None,
+        })
+    }
 }
 
 impl Drop for LinuxInterface {
@@ -864,5 +974,110 @@ impl Drop for EndpointInner {
     fn drop(&mut self) {
         let mut state = self.interface.state.lock().unwrap();
         state.endpoints.clear(self.address);
+    }
+}
+
+/// Linux-specific isochronous endpoint.
+///
+/// Isochronous transfers are handled differently from bulk/interrupt:
+/// - Each transfer consists of multiple packets
+/// - Packets have individual status and length
+/// - The `ISO_ASAP` flag is used for scheduling
+pub(crate) struct LinuxIsoEndpoint {
+    inner: Arc<EndpointInner>,
+
+    pub(crate) max_packet_size: usize,
+
+    /// Number of packets per transfer
+    num_packets: usize,
+
+    /// A queue of pending transfers
+    pending: VecDeque<Pending<IsoTransferData>>,
+
+    /// Cached idle transfer for reuse
+    idle_transfer: Option<Idle<IsoTransferData>>,
+}
+
+impl LinuxIsoEndpoint {
+    pub(crate) fn endpoint_address(&self) -> u8 {
+        self.inner.address
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Get the number of packets per transfer.
+    pub(crate) fn num_packets(&self) -> usize {
+        self.num_packets
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        // Cancel transfers in reverse order
+        for transfer in self.pending.iter_mut().rev() {
+            self.inner.interface.device.cancel_iso(transfer);
+        }
+    }
+
+    fn get_transfer(&mut self) -> Idle<IsoTransferData> {
+        self.idle_transfer.take().unwrap_or_else(|| {
+            Idle::new(
+                self.inner.clone(),
+                IsoTransferData::new(self.inner.address, self.num_packets),
+            )
+        })
+    }
+
+    /// Submit a buffer for isochronous transfer.
+    ///
+    /// The buffer should be large enough to hold `num_packets * packet_size` bytes.
+    pub(crate) fn submit(&mut self, data: Buffer, packet_size: usize) {
+        let mut transfer = self.get_transfer();
+        transfer.set_buffer(data, packet_size);
+        self.pending
+            .push_back(self.inner.interface.device.submit_iso(transfer));
+    }
+
+    pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<IsoCompletion> {
+        self.inner.notify.subscribe(cx);
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let completion = transfer.take_completion();
+            self.idle_transfer = Some(transfer);
+            Poll::Ready(completion)
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<IsoCompletion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let completion = transfer.take_completion();
+                self.idle_transfer = Some(transfer);
+                completion
+            })
+        })
+    }
+
+    pub(crate) fn allocate(&self, len: usize) -> Result<Buffer, Errno> {
+        Buffer::mmap(&self.inner.interface.device.fd, len).inspect_err(|e| {
+            warn!(
+                "Failed to allocate zero-copy buffer of length {len} for endpoint {}: {e}",
+                self.inner.address
+            );
+        })
+    }
+}
+
+impl Drop for LinuxIsoEndpoint {
+    fn drop(&mut self) {
+        if !self.pending.is_empty() {
+            debug!(
+                "Dropping iso endpoint {:02x} with {} pending transfers",
+                self.inner.address,
+                self.pending.len()
+            );
+            self.cancel_all();
+        }
     }
 }

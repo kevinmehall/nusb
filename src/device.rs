@@ -1,13 +1,13 @@
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
-        DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
+        DeviceDescriptor, InterfaceDescriptor, TransferType, DESCRIPTOR_TYPE_STRING,
     },
     io::{EndpointRead, EndpointWrite},
     platform,
     transfer::{
         Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
-        EndpointType, In, Out, TransferError,
+        EndpointType, In, IsoCompletion, Out, TransferError,
     },
     ActiveConfigurationError, DeviceInfo, Error, ErrorKind, GetDescriptorError, MaybeFuture, Speed,
 };
@@ -541,6 +541,48 @@ impl Interface {
             ep_dir: PhantomData,
         })
     }
+
+    /// Open an isochronous endpoint.
+    ///
+    /// This claims exclusive access to the endpoint and returns an [`IsoEndpoint`]
+    /// that can be used to submit isochronous transfers.
+    ///
+    /// `num_packets` specifies the number of packets per transfer. The buffer
+    /// submitted to each transfer should be large enough to hold
+    /// `num_packets * max_packet_size` bytes.
+    ///
+    /// ### Platform-specific details
+    /// * Only supported on Linux
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn iso_endpoint<Dir: EndpointDirection>(
+        &self,
+        address: u8,
+        num_packets: usize,
+    ) -> Result<IsoEndpoint<Dir>, Error> {
+        let intf_desc = self.descriptor();
+        let ep_desc =
+            intf_desc.and_then(|desc| desc.endpoints().find(|ep| ep.address() == address));
+        let Some(ep_desc) = ep_desc else {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "specified endpoint does not exist on this interface",
+            ));
+        };
+
+        if address & Direction::MASK != Dir::DIR as u8 {
+            return Err(Error::new(ErrorKind::Other, "incorrect endpoint direction"));
+        }
+
+        if ep_desc.transfer_type() != TransferType::Isochronous {
+            return Err(Error::new(ErrorKind::Other, "endpoint is not isochronous"));
+        }
+
+        let backend = self.backend.iso_endpoint(ep_desc, num_packets)?;
+        Ok(IsoEndpoint {
+            backend,
+            ep_dir: PhantomData,
+        })
+    }
 }
 
 impl Debug for Interface {
@@ -808,4 +850,121 @@ fn assert_send_sync() {
     require_send_sync::<Endpoint<Bulk, Out>>();
     require_send_sync::<Endpoint<Interrupt, In>>();
     require_send_sync::<Endpoint<Interrupt, Out>>();
+}
+
+/// Exclusive access to an isochronous endpoint of a USB device.
+///
+/// Obtain an `IsoEndpoint` with the [`Interface::iso_endpoint`] method.
+///
+/// Isochronous endpoints are used for real-time streaming data like audio
+/// and video. Unlike bulk/interrupt endpoints, isochronous transfers:
+/// - Have guaranteed bandwidth
+/// - Do not retry on error (data is time-sensitive)
+/// - Transfer multiple packets per URB
+/// - Have per-packet status information
+///
+/// When the `IsoEndpoint` is dropped, any pending transfers are cancelled.
+///
+/// ### Platform-specific details
+/// * Only supported on Linux
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub struct IsoEndpoint<Dir> {
+    backend: platform::IsoEndpoint,
+    ep_dir: PhantomData<Dir>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl<Dir: EndpointDirection> IsoEndpoint<Dir> {
+    /// Get the endpoint address.
+    pub fn endpoint_address(&self) -> u8 {
+        self.backend.endpoint_address()
+    }
+
+    /// Get the maximum packet size for this endpoint.
+    pub fn max_packet_size(&self) -> usize {
+        self.backend.max_packet_size
+    }
+
+    /// Get the number of packets per transfer.
+    pub fn num_packets(&self) -> usize {
+        self.backend.num_packets()
+    }
+
+    /// Get the number of transfers that have been submitted with `submit` that
+    /// have not yet been returned from `next_complete`.
+    pub fn pending(&self) -> usize {
+        self.backend.pending()
+    }
+
+    /// Request cancellation of all pending transfers.
+    pub fn cancel_all(&mut self) {
+        self.backend.cancel_all()
+    }
+
+    /// Allocate a buffer for use on this endpoint, zero-copy if possible.
+    ///
+    /// See [`Endpoint::allocate`] for details.
+    pub fn allocate(&self, len: usize) -> Buffer {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            if let Ok(b) = self.backend.allocate(len) {
+                return b;
+            }
+        }
+
+        Buffer::new(len)
+    }
+
+    /// Begin an isochronous transfer on the endpoint.
+    ///
+    /// `packet_size` is the size of each isochronous packet. The buffer should
+    /// be large enough to hold `num_packets * packet_size` bytes.
+    ///
+    /// Submitted transfers are queued and completed in order.
+    pub fn submit(&mut self, buf: Buffer, packet_size: usize) {
+        self.backend.submit(buf, packet_size)
+    }
+
+    /// Return a `Future` that waits for the next pending transfer to complete.
+    ///
+    /// This future is cancel-safe.
+    ///
+    /// ## Panics
+    /// * if there are no transfers pending
+    pub fn next_complete(&mut self) -> impl Future<Output = IsoCompletion> + Send + Sync + '_ {
+        poll_fn(|cx| self.poll_next_complete(cx))
+    }
+
+    /// Poll for a pending transfer completion.
+    ///
+    /// ## Panics
+    /// * if there are no transfers pending
+    pub fn poll_next_complete(&mut self, cx: &mut Context<'_>) -> Poll<IsoCompletion> {
+        self.backend.poll_next_complete(cx)
+    }
+
+    /// Wait for a pending transfer completion.
+    ///
+    /// Blocks for up to `timeout` waiting for a transfer to complete.
+    ///
+    /// ## Panics
+    /// * if there are no transfers pending
+    pub fn wait_next_complete(&mut self, timeout: Duration) -> Option<IsoCompletion> {
+        self.backend.wait_next_complete(timeout)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl<Dir: EndpointDirection> Debug for IsoEndpoint<Dir> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IsoEndpoint")
+            .field(
+                "address",
+                &format_args!("0x{:02x}", self.endpoint_address()),
+            )
+            .field("type", &"Isochronous")
+            .field("direction", &Dir::DIR)
+            .field("num_packets", &self.num_packets())
+            .finish()
+    }
 }
