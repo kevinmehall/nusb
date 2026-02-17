@@ -410,7 +410,9 @@ impl LinuxDevice {
     ) -> Result<Arc<LinuxInterface>, Error> {
         result.map_err(|e| {
             match e {
-                Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+                Errno::INVAL | Errno::NOENT => {
+                    Error::new_os(ErrorKind::NotFound, "interface not found", e)
+                }
                 Errno::BUSY => Error::new_os(ErrorKind::Busy, "interface is busy", e),
                 Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
                 _ => Error::new_os(ErrorKind::Other, "failed to claim interface", e),
