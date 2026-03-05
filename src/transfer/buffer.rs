@@ -220,6 +220,22 @@ impl From<Vec<u8>> for Buffer {
     }
 }
 
+/// Convenience implementation for copying contents of
+/// array into a `Vec`, then creating a `Buffer` from that.
+impl From<&[u8]> for Buffer {
+    fn from(slice: &[u8]) -> Self {
+        Self::from(slice.to_vec())
+    }
+}
+
+/// Convenience implementation for copying contents of
+/// slice into a `Vec`, then creating a `Buffer` from that.
+impl<const N: usize> From<[u8; N]> for Buffer {
+    fn from(array: [u8; N]) -> Self {
+        Self::from(array.to_vec())
+    }
+}
+
 /// A `Vec<MaybeUninit<u8>>` can be converted to a `Buffer` cheaply.
 ///
 /// The Vec's `len` will be used for the `requested_len`, and the `len` will be 0.
