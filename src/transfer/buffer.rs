@@ -221,7 +221,7 @@ impl From<Vec<u8>> for Buffer {
 }
 
 /// Convenience implementation for copying contents of
-/// array into a `Vec`, then creating a `Buffer` from that.
+/// slice into a `Vec`, then creating a `Buffer` from that.
 impl From<&[u8]> for Buffer {
     fn from(slice: &[u8]) -> Self {
         Self::from(slice.to_vec())
@@ -229,7 +229,7 @@ impl From<&[u8]> for Buffer {
 }
 
 /// Convenience implementation for copying contents of
-/// slice into a `Vec`, then creating a `Buffer` from that.
+/// array into a `Vec`, then creating a `Buffer` from that.
 impl<const N: usize> From<[u8; N]> for Buffer {
     fn from(array: [u8; N]) -> Self {
         Self::from(array.to_vec())
