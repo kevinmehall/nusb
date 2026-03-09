@@ -51,7 +51,7 @@ pub struct DeviceInfo {
     pub(crate) driver: Option<String>,
 
     #[cfg(target_os = "android")]
-    pub(crate) jni_global_ref: crate::platform::JniGlobalRef,
+    pub(crate) jni_global_ref: crate::platform::JniGlobal,
 
     #[cfg(target_os = "macos")]
     pub(crate) registry_id: u64,

@@ -13,45 +13,182 @@ use std::{
     task::{self, Poll, Waker},
 };
 
-use log::debug;
+use log::{debug, error};
 
 use jni::{
-    objects::{GlobalRef, JObject},
+    jni_sig, jni_str,
+    objects::{Global, JMap, JObject, JString},
     sys::jint,
-    JNIEnv,
+    Env,
 };
-use jni_min_helper::*;
+use jni_min_helper::{android_api_level, android_context, jni_with_env, BroadcastReceiver, Intent};
 
 pub type DeviceId = i32;
-pub type JniGlobalRef = Arc<GlobalRef>;
+pub type JniGlobal = Arc<Global<AndroidUsbDevice<'static>>>;
 
-const USB_SERVICE: &str = "usb";
-const ACTION_USB_DEVICE_ATTACHED: &str = "android.hardware.usb.action.USB_DEVICE_ATTACHED";
-const ACTION_USB_DEVICE_DETACHED: &str = "android.hardware.usb.action.USB_DEVICE_DETACHED";
-const EXTRA_DEVICE: &str = "device";
+jni::bind_java_type! {
+    AndroidContext => "android.content.Context",
+    fields {
+        #[allow(non_snake_case)]
+        static USB_SERVICE { sig = JString, get = USB_SERVICE },
+    },
+    methods {
+        fn get_system_service(name: JString) -> JObject,
+    }
+}
+
+jni::bind_java_type! {
+    AndroidActivity => "android.app.Activity",
+    type_map = {
+        AndroidContext => "android.content.Context",
+        Intent => "android.content.Intent",
+    },
+    methods {
+        fn get_intent() -> Intent,
+    },
+    is_instance_of = {
+        AndroidContext,
+    }
+}
+
+jni::bind_java_type! {
+    AndroidUsbManager => "android.hardware.usb.UsbManager",
+    type_map = {
+        JHashMap => "java.util.HashMap",
+        AndroidUsbDevice => "android.hardware.usb.UsbDevice",
+        AndroidUsbDeviceConnection => "android.hardware.usb.UsbDeviceConnection",
+        PendingIntent => "android.app.PendingIntent",
+    },
+    fields {
+        #[allow(non_snake_case)]
+        static ACTION_USB_DEVICE_ATTACHED { sig = JString, get = ACTION_USB_DEVICE_ATTACHED },
+        #[allow(non_snake_case)]
+        static ACTION_USB_DEVICE_DETACHED { sig = JString, get = ACTION_USB_DEVICE_DETACHED },
+        #[allow(non_snake_case)]
+        static EXTRA_DEVICE { sig = JString, get = EXTRA_DEVICE },
+        #[allow(non_snake_case)]
+        static EXTRA_PERMISSION_GRANTED { sig = JString, get = EXTRA_PERMISSION_GRANTED },
+    },
+    methods {
+        fn get_device_list() -> JHashMap,
+        fn has_permission {
+            name = "hasPermission", sig = (device: AndroidUsbDevice) -> jboolean,
+        },
+        fn request_permission {
+            name = "requestPermission", sig = (device: AndroidUsbDevice, pi: PendingIntent),
+        },
+        fn open_device(device: AndroidUsbDevice) -> AndroidUsbDeviceConnection,
+    }
+}
+
+jni::bind_java_type! {
+    JHashMap => "java.util.HashMap",
+    is_instance_of = {
+        JMap,
+    }
+}
+
+jni::bind_java_type! {
+    pub AndroidUsbDevice => "android.hardware.usb.UsbDevice",
+    type_map = {
+        AndroidUsbInterface => "android.hardware.usb.UsbInterface",
+    },
+    methods {
+        fn get_device_id {
+            name = "getDeviceId",
+            sig = () -> jint,
+        },
+        fn get_vendor_id() -> jint,
+        fn get_product_id() -> jint,
+        fn get_device_class() -> jint,
+        fn get_device_subclass() -> jint,
+        fn get_device_protocol() -> jint,
+        fn get_manufacturer_name() -> JString,
+        fn get_product_name() -> JString,
+        fn get_serial_number() -> JString,
+        fn get_version() -> JString,
+        fn get_interface_count() -> jint,
+        fn get_interface(index: jint) -> AndroidUsbInterface,
+
+    }
+}
+
+jni::bind_java_type! {
+    AndroidUsbInterface => "android.hardware.usb.UsbInterface",
+    methods {
+        fn get_id() -> jint,
+        fn get_interface_class() -> jint,
+        fn get_interface_protocol() -> jint,
+        fn get_interface_subclass() -> jint,
+        fn get_name() -> JString,
+    }
+}
+
+jni::bind_java_type! {
+    AndroidUsbDeviceConnection => "android.hardware.usb.UsbDeviceConnection",
+    methods {
+        fn get_file_descriptor() -> jint,
+    }
+}
+
+jni::bind_java_type! {
+    PendingIntent => "android.app.PendingIntent",
+    type_map = {
+        AndroidContext => "android.content.Context",
+        Intent => "android.content.Intent",
+    },
+    methods {
+        static fn get_broadcast(ctx: AndroidContext, req_code: jint, intent: Intent, flags: jint) -> PendingIntent,
+    }
+}
+
+// NOTE: this is a workaround for <github.com/jni-rs/jni-rs/issues/764>.
+impl<'local> PendingIntent<'local> {
+    const FLAG_MUTABLE: i32 = 0x02000000;
+}
+
 const ACTION_USB_PERMISSION: &str = "rust.android_usbser.USB_PERMISSION"; // custom
-const EXTRA_PERMISSION_GRANTED: &str = "permission";
 
 /// Maps *unexpected* JNI errors to `nusb::Error` of `ErrorKind::Other`.
 /// Do not use this convenient conversion if error sorting is needed.
 impl From<jni::errors::Error> for Error {
     fn from(err: jni::errors::Error) -> Self {
         use jni::errors::Error::*;
-        if let JavaException = err {
-            let _ = jni_clear_ex(err); // double ensurance
+        match &err {
+            CaughtJavaException { .. } => {
+                error!("{err:#?}");
+                Error::new(
+                    ErrorKind::Other,
+                    "unexpected Java error, please check logcat",
+                )
+            }
+            JavaException => {
+                if let Some(err) = jni_with_env(|env| env.exception_catch()).err() {
+                    error!("{err:#?}");
+                    Error::new(
+                        ErrorKind::Other,
+                        "unexpected pending Java error, please check logcat",
+                    )
+                } else {
+                    Error::new(ErrorKind::Other, "unexpected pending Java error")
+                }
+            }
+            _ => {
+                error!("{err:#?}");
+                Error::new(
+                    ErrorKind::Other,
+                    "unexpected JNI error, please check logcat",
+                )
+            }
         }
-        Error::new(
-            ErrorKind::Other,
-            "unexpected Java/JNI error, please check logcat",
-        )
     }
 }
 
 /// Gets a global reference of `android.hardware.usb.UsbManager`.
-fn usb_manager() -> Result<&'static jni::objects::JObject<'static>, Error> {
-    static USB_MAN: OnceLock<GlobalRef> = OnceLock::new();
+fn usb_manager() -> Result<&'static AndroidUsbManager<'static>, Error> {
+    static USB_MAN: OnceLock<Global<AndroidUsbManager<'static>>> = OnceLock::new();
 
-    if android_api_level() < 21 {
+    if android_api_level() < 23 {
         return Err(Error::new(
             ErrorKind::Unsupported,
             "nusb requires Android API level 23 (6.0) or newer versions",
@@ -59,22 +196,15 @@ fn usb_manager() -> Result<&'static jni::objects::JObject<'static>, Error> {
     }
 
     if let Some(ref_man) = USB_MAN.get() {
-        return Ok(ref_man.as_obj());
+        return Ok(ref_man.as_ref());
     }
 
     let usb_man = jni_with_env(|env| {
-        let context = android_context();
-        let usb_service_id = USB_SERVICE.new_jobject(env)?;
-        let usb_man = env
-            .call_method(
-                context,
-                "getSystemService",
-                "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[(&usb_service_id).into()],
-            )
-            .get_object(env)?;
-
+        let context = env.as_cast::<AndroidContext>(android_context())?;
+        let usb_service_id = AndroidContext::USB_SERVICE(env)?;
+        let usb_man = context.get_system_service(env, usb_service_id)?;
         let result = if !usb_man.is_null() {
+            let usb_man = AndroidUsbManager::cast_local(env, usb_man)?;
             Ok(env.new_global_ref(&usb_man)?)
         } else {
             Err(Error::new(
@@ -85,8 +215,8 @@ fn usb_manager() -> Result<&'static jni::objects::JObject<'static>, Error> {
         Ok(result)
     })??;
 
-    let _ = USB_MAN.set(usb_man.clone());
-    Ok(USB_MAN.get().unwrap().as_obj())
+    let _ = USB_MAN.set(usb_man);
+    Ok(USB_MAN.get().unwrap().as_ref())
 }
 
 /// *(Android-only)* Checks if the Android context is an activity opened by an intent of
@@ -99,15 +229,15 @@ pub fn check_startup_intent() -> Option<DeviceInfo> {
 
     // Note: `getIntent()` and `setIntent()` are functions of `Activity` (not `Context`)
     let dev_info = jni_with_env(|env| {
-        let activity = android_context();
-
-        // the Intent instance is taken from Activity by getIntent()
-        let intent_startup = env
-            .call_method(activity, "getIntent", "()Landroid/content/Intent;", &[])
-            .get_object(env)?;
+        let activity = env.as_cast::<AndroidActivity>(android_context())?;
+        let intent_startup = activity.get_intent(env)?;
         // checks if the action of current intent is ACTION_USB_DEVICE_ATTACHED
-        let action_startup = BroadcastReceiver::get_intent_action(&intent_startup, env)?;
-        if action_startup.trim() != ACTION_USB_DEVICE_ATTACHED {
+        let action_startup = intent_startup.get_action(env)?.to_string();
+        if action_startup.trim()
+            != AndroidUsbManager::ACTION_USB_DEVICE_ATTACHED(env)?
+                .to_string()
+                .trim()
+        {
             return Ok(None);
         }
         Ok(get_extra_device(env, &intent_startup).ok())
@@ -126,14 +256,13 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
         let usb_man = usb_manager()?;
         let mut devices = Vec::new();
         jni_with_env(|env| {
-            let ref_dev_list = env
-                .call_method(usb_man, "getDeviceList", "()Ljava/util/HashMap;", &[])
-                .get_object(env)?;
-            let map_dev = env.get_map(&ref_dev_list)?;
-            let mut iter_dev = map_dev.iter(env)?;
-            while let Some((name, dev)) = iter_dev.next(env)? {
+            let hashmap_dev_list = usb_man.get_device_list(env)?;
+            let jmap_dev_list: &JMap<'_> = hashmap_dev_list.as_ref();
+            let mut iter_dev = jmap_dev_list.iter(env)?;
+            while let Some(dev_entry) = iter_dev.next(env)? {
+                let val = dev_entry.value(env)?;
+                let dev = AndroidUsbDevice::cast_local(env, val)?;
                 devices.push(build_device_info(env, &dev)?);
-                drop((env.auto_local(name), env.auto_local(dev)));
             }
             Ok(())
         })?;
@@ -142,29 +271,10 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 }
 
 fn build_device_info(
-    env: &mut JNIEnv,
-    dev: &JObject<'_>,
+    env: &mut Env,
+    dev: &AndroidUsbDevice<'_>,
 ) -> Result<DeviceInfo, jni::errors::Error> {
-    // These functions call java methods without any parameter.
-    fn get_int_val(
-        env: &mut JNIEnv,
-        dev: &JObject<'_>,
-        method: &str,
-    ) -> Result<jint, jni::errors::Error> {
-        env.call_method(dev, method, "()I", &[]).get_int()
-    }
-    fn get_string_val(
-        env: &mut JNIEnv,
-        dev: &JObject<'_>,
-        method: &str,
-    ) -> Result<String, jni::errors::Error> {
-        env.call_method(dev, method, "()Ljava/lang/String;", &[])
-            .get_object(env)
-            .and_then(|o| o.get_string(env))
-    }
-
-    // XXX: this call returns an error on old Android versions (API Level < 23)
-    let version = get_string_val(env, dev, "getVersion")?;
+    let version = dev.get_version(env)?.to_string();
     // Note: on PC, `bcdUSB 1.10` shown in `lsusb` corresponds to raw value `usb_version: 0x0110`,
     // but here `getVersion` returns `1.16`; is the "buggy" code below dealing with an Android bug?
     let ver_parser = |version: &str| {
@@ -177,42 +287,43 @@ fn build_device_info(
     });
 
     Ok(DeviceInfo {
-        device_id: get_int_val(env, dev, "getDeviceId")? as i32,
+        device_id: dev.get_device_id(env)?,
         jni_global_ref: Arc::new(env.new_global_ref(dev)?),
-        vendor_id: get_int_val(env, dev, "getVendorId")? as u16,
-        product_id: get_int_val(env, dev, "getProductId")? as u16,
+        vendor_id: dev.get_vendor_id(env)? as u16,
+        product_id: dev.get_product_id(env)? as u16,
         usb_version: (ver_major << 8) | ver_minor,
-        class: get_int_val(env, dev, "getDeviceClass")? as u8,
-        subclass: get_int_val(env, dev, "getDeviceSubclass")? as u8,
-        protocol: get_int_val(env, dev, "getDeviceProtocol")? as u8,
+        class: dev.get_device_class(env)? as u8,
+        subclass: dev.get_device_subclass(env)? as u8,
+        protocol: dev.get_device_protocol(env)? as u8,
         speed: None,
-        manufacturer_string: get_string_val(env, dev, "getManufacturerName").ok(),
-        product_string: get_string_val(env, dev, "getProductName").ok(),
+        manufacturer_string: non_null_string(dev.get_manufacturer_name(env)?),
+        product_string: non_null_string(dev.get_product_name(env)?),
         serial_number: Arc::new(OnceLock::new()),
         interfaces: {
-            let num_interfaces = get_int_val(env, dev, "getInterfaceCount")? as u8;
+            let num_interfaces = dev.get_interface_count(env)? as u8;
             let mut interfaces = Vec::new();
             for i in 0..num_interfaces {
-                let interface = env
-                    .call_method(
-                        dev,
-                        "getInterface",
-                        "(I)Landroid/hardware/usb/UsbInterface;",
-                        &[(i as jint).into()],
-                    )
-                    .get_object(env)?;
+                let interface = dev.get_interface(env, i as i32)?;
                 interfaces.push(InterfaceInfo {
-                    interface_number: get_int_val(env, &interface, "getId")? as u8,
-                    class: get_int_val(env, &interface, "getInterfaceClass")? as u8,
-                    subclass: get_int_val(env, &interface, "getInterfaceSubclass")? as u8,
-                    protocol: get_int_val(env, &interface, "getInterfaceProtocol")? as u8,
-                    interface_string: get_string_val(env, &interface, "getName").ok(),
+                    interface_number: interface.get_id(env)? as u8,
+                    class: interface.get_interface_class(env)? as u8,
+                    subclass: interface.get_interface_subclass(env)? as u8,
+                    protocol: interface.get_interface_protocol(env)? as u8,
+                    interface_string: non_null_string(interface.get_name(env)?),
                 });
             }
             interfaces.sort_unstable_by_key(|i| i.interface_number);
             interfaces
         },
     })
+}
+
+fn non_null_string(s: JString<'_>) -> Option<String> {
+    if !s.is_null() {
+        Some(s.to_string())
+    } else {
+        None
+    }
 }
 
 impl DeviceInfo {
@@ -222,15 +333,13 @@ impl DeviceInfo {
             return false;
         };
         jni_with_env(|env| {
-            let ref_dev_list = env
-                .call_method(usb_man, "getDeviceList", "()Ljava/util/HashMap;", &[])
-                .get_object(env)?;
-            let map_dev = env.get_map(&ref_dev_list)?;
-            let mut iter_dev = map_dev.iter(env)?;
-            while let Some((name, dev)) = iter_dev.next(env)? {
-                let dev_id = env.call_method(&dev, "getDeviceId", "()I", &[]).get_int()?;
-                drop((env.auto_local(name), env.auto_local(dev)));
-                if dev_id == self.device_id {
+            let hashmap_dev_list = usb_man.get_device_list(env)?;
+            let jmap_dev_list: &JMap<'_> = hashmap_dev_list.as_ref();
+            let mut iter_dev = jmap_dev_list.iter(env)?;
+            while let Some(dev_entry) = iter_dev.next(env)? {
+                let val = dev_entry.value(env)?;
+                let dev = AndroidUsbDevice::cast_local(env, val)?;
+                if dev.get_device_id(env)? == self.device_id {
                     return Ok(true);
                 }
             }
@@ -242,19 +351,11 @@ impl DeviceInfo {
     pub(crate) fn get_serial_number(&self) -> Option<&str> {
         if self.serial_number.get().is_none() {
             let _ = jni_with_env(|env| {
-                let dev = self.jni_global_ref.as_obj();
-                let clear_ex = if android_api_level() < 29 {
-                    jni_clear_ex
-                } else {
-                    // Avoid printing `java.lang.SecurityException: User has not given permission...` in logcat
-                    jni_clear_ex_silent
-                };
-                let serial_num = env
-                    .call_method(dev, "getSerialNumber", "()Ljava/lang/String;", &[])
-                    .map_err(clear_ex)
-                    .get_object(env)
-                    .and_then(|o| o.get_string(env))?;
-                let _ = self.serial_number.set(serial_num);
+                if let Some(serial_no) =
+                    non_null_string(self.jni_global_ref.get_serial_number(env)?)
+                {
+                    let _ = self.serial_number.set(serial_no);
+                }
                 Ok(())
             });
         };
@@ -265,13 +366,7 @@ impl DeviceInfo {
 pub fn has_permission(dev_info: &DeviceInfo) -> Result<bool, Error> {
     let usb_man = usb_manager()?;
     Ok(jni_with_env(|env| {
-        env.call_method(
-            usb_man,
-            "hasPermission",
-            "(Landroid/hardware/usb/UsbDevice;)Z",
-            &[dev_info.jni_global_ref.as_obj().into()],
-        )
-        .get_boolean()
+        usb_man.has_permission(env, dev_info.jni_global_ref.as_ref())
     })?)
 }
 
@@ -288,39 +383,18 @@ pub fn request_permission(dev_info: &DeviceInfo) -> Result<Option<PermissionRequ
 
     let usb_man = usb_manager()?;
     jni_with_env(|env| {
-        let context = android_context();
+        let context = env.as_cast::<AndroidContext>(android_context())?;
 
-        let str_perm = ACTION_USB_PERMISSION.new_jobject(env)?;
-        let intent = env
-            .new_object(
-                "android/content/Intent",
-                "(Ljava/lang/String;)V",
-                &[(&str_perm).into()],
-            )
-            .auto_local(env)?;
+        let str_perm = JString::new(env, ACTION_USB_PERMISSION)?;
+        let intent = Intent::new_with_action(env, str_perm)?;
 
         let flags = if android_api_level() < 31 {
-            0 // should it be FLAG_IMMUTABLE since API 23?
+            0
         } else {
-            0x02000000 // FLAG_MUTABLE (since API 31, Android 12)
+            PendingIntent::FLAG_MUTABLE
         };
-        let pending = env
-            .call_static_method(
-                "android/app/PendingIntent",
-                "getBroadcast",
-                "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
-                &[context.into(), 0_i32.into(), (&intent).into(), flags.into()],
-            )
-            .get_object(env)?;
-
-        env.call_method(
-            usb_man,
-            "requestPermission",
-            "(Landroid/hardware/usb/UsbDevice;Landroid/app/PendingIntent;)V",
-            &[dev_info.jni_global_ref.as_obj().into(), (&pending).into()],
-        )
-        .clear_ex()?;
-
+        let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
+        usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)?;
         Ok(())
     })?;
 
@@ -376,20 +450,14 @@ impl PermissionRequest {
     fn on_receive<'a>(
         inner_weak: &Weak<PermissionRequestInner>,
         dev_expected: &DeviceInfo,
-        env: &mut JNIEnv<'a>,
-        intent: &JObject<'a>,
+        env: &mut Env<'a>,
+        intent: Intent<'a>,
     ) -> Result<(), jni::errors::Error> {
-        let dev = get_extra_device(env, intent)?;
+        let dev = get_extra_device(env, &intent)?;
         if dev.id() == dev_expected.id() {
-            let extra_name = EXTRA_PERMISSION_GRANTED.new_jobject(env)?;
-            let granted = env
-                .call_method(
-                    intent,
-                    "getBooleanExtra",
-                    "(Ljava/lang/String;Z)Z",
-                    &[(&extra_name).into(), false.into()],
-                )
-                .get_boolean()
+            let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
+            let granted = intent
+                .get_boolean_extra(env, extra_name, false)
                 .unwrap_or(false);
             let Some(inner) = inner_weak.upgrade() else {
                 return Ok(());
@@ -445,24 +513,14 @@ pub fn open_device(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Linux
             // Another thread executing `from_device_info` will block here, until the guard
             // for the current thread is dropped after `LinuxDevice::create_inner`.
             let _guard = env.lock_obj(usb_man).unwrap();
-
-            let conn = env
-                .call_method(
-                    usb_man,
-                    "openDevice",
-                    "(Landroid/hardware/usb/UsbDevice;)Landroid/hardware/usb/UsbDeviceConnection;",
-                    &[(&*d.jni_global_ref).into()],
-                )
-                .get_object(env)?;
+            let conn = usb_man.open_device(env, d.jni_global_ref.as_ref())?;
             if conn.is_null() {
                 return Ok(Err(Error::new(
                     ErrorKind::NotFound,
                     "`UsbManager.openDevice()` failed`",
                 )));
             }
-            let raw_fd = env
-                .call_method(&conn, "getFileDescriptor", "()I", &[])
-                .get_int()?;
+            let raw_fd = conn.get_file_descriptor(env)?;
 
             // Safety: `close()` is not called automatically when the JNI `AutoLocal` of `conn`
             // and the corresponding Java object is destroyed. (check `UsbDeviceConnection` source)
@@ -493,11 +551,22 @@ impl HotplugWatch {
             events: Mutex::new(VecDeque::new()),
         });
         let inner_weak = Arc::downgrade(&inner);
-        let receiver = BroadcastReceiver::build(move |env, _, intent| {
-            Self::on_receive(&inner_weak, env, intent)
+        let receiver = jni_with_env(|env| {
+            let receiver = BroadcastReceiver::build(move |env, _, intent| {
+                Self::on_receive(&inner_weak, env, intent)
+            })?;
+            receiver.register_for_action(
+                AndroidUsbManager::ACTION_USB_DEVICE_ATTACHED(env)?
+                    .to_string()
+                    .trim(),
+            )?;
+            receiver.register_for_action(
+                AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env)?
+                    .to_string()
+                    .trim(),
+            )?;
+            Ok(receiver)
         })?;
-        receiver.register_for_action(ACTION_USB_DEVICE_ATTACHED)?;
-        receiver.register_for_action(ACTION_USB_DEVICE_DETACHED)?;
         Ok(Self {
             _receiver: receiver,
             inner,
@@ -518,8 +587,8 @@ impl HotplugWatch {
     // this is merely designed for JNI calls made inside the closure to get rid of `unwrap()` calls.
     fn on_receive<'a>(
         inner_weak: &Weak<HotplugWatchInner>,
-        env: &mut JNIEnv<'a>,
-        intent: &JObject<'a>,
+        env: &mut Env<'a>,
+        intent: Intent<'a>,
     ) -> Result<(), jni::errors::Error> {
         if intent.is_null() {
             return Ok(()); // almost impossible
@@ -527,20 +596,19 @@ impl HotplugWatch {
         let Some(inner) = inner_weak.upgrade() else {
             return Ok(());
         };
-        let Ok(action) = BroadcastReceiver::get_intent_action(intent, env) else {
+        let Ok(action) = intent.get_action(env).map(|act| act.to_string()) else {
             return Ok(()); // almost impossible
         };
+        let action = action.trim();
         use HotplugEvent::*;
-        match action.trim() {
-            ACTION_USB_DEVICE_ATTACHED => {
-                let dev = get_extra_device(env, intent)?;
-                inner.events.lock().unwrap().push_back(Connected(dev));
-            }
-            ACTION_USB_DEVICE_DETACHED => {
-                let id = get_extra_device(env, intent)?.id();
-                inner.events.lock().unwrap().push_back(Disconnected(id));
-            }
-            _ => (),
+        let action_attached = AndroidUsbManager::ACTION_USB_DEVICE_ATTACHED(env)?.to_string();
+        let action_detached = AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env)?.to_string();
+        if action == action_attached.trim() {
+            let dev = get_extra_device(env, &intent)?;
+            inner.events.lock().unwrap().push_back(Connected(dev));
+        } else if action == action_detached.trim() {
+            let id = get_extra_device(env, &intent)?.id();
+            inner.events.lock().unwrap().push_back(Disconnected(id));
         }
         if let Some(w) = inner.waker.lock().unwrap().take() {
             w.wake()
@@ -550,21 +618,21 @@ impl HotplugWatch {
 }
 
 fn get_extra_device(
-    env: &mut JNIEnv<'_>,
-    intent: &JObject<'_>,
+    env: &mut Env<'_>,
+    intent: &Intent<'_>,
 ) -> Result<DeviceInfo, jni::errors::Error> {
-    let extra_device = EXTRA_DEVICE.new_jobject(env)?;
+    let extra_device = AndroidUsbManager::EXTRA_DEVICE(env)?;
     let java_dev = env
         .call_method(
             intent,
-            "getParcelableExtra",
+            jni_str!("getParcelableExtra"),
             // XXX: this is deprecated in API 33 and above without the class parameter.
-            "(Ljava/lang/String;)Landroid/os/Parcelable;",
+            jni_sig!((JString) -> android.os.Parcelable),
             &[(&extra_device).into()],
-        )
-        .get_object(env)?;
-
+        )?
+        .l()?;
     if !java_dev.is_null() {
+        let java_dev = AndroidUsbDevice::cast_local(env, java_dev)?;
         build_device_info(env, &java_dev)
     } else {
         Err(jni::errors::Error::NullPtr(

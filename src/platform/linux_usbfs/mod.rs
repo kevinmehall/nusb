@@ -29,7 +29,7 @@ pub use android::{check_startup_intent, PermissionRequest};
 #[cfg(target_os = "android")]
 pub(crate) use android::{
     has_permission, list_devices, open_device, request_permission, DeviceId, HotplugWatch,
-    JniGlobalRef,
+    JniGlobal,
 };
 
 mod events;
