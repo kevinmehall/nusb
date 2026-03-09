@@ -11,7 +11,7 @@ use io_kit_sys::{
     ret::{kIOReturnNoResources, kIOReturnSuccess, IOReturn},
     types::io_iterator_t,
 };
-use log::error;
+use log::{debug, error};
 
 use crate::{
     platform::macos_iokit::{
@@ -57,11 +57,12 @@ impl IoKitDevice {
             // macOS is preventing us from touching the relevant device due to its security
             // model. This happens when the device has a kernel-mode driver bound to the
             // whole device -- the kernel owns it, and it's unwilling to give it to us.
+            let mut rc: IOReturn = 0;
+            let mut raw_device_plugin: *mut *mut IOCFPlugInInterface = std::ptr::null_mut();
             for _ in 0..5 {
                 let mut _score: i32 = 0;
-                let mut raw_device_plugin: *mut *mut IOCFPlugInInterface = std::ptr::null_mut();
 
-                let rc = IOCreatePlugInInterfaceForService(
+                rc = IOCreatePlugInInterfaceForService(
                     service.get(),
                     kIOUsbDeviceUserClientTypeID(),
                     kIOCFPlugInInterfaceID(),
@@ -70,49 +71,49 @@ impl IoKitDevice {
                 );
 
                 if rc == kIOReturnNoResources {
+                    debug!("IOCreatePlugInInterfaceForService failed with `kIOReturnNoResources`, retrying");
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
+                } else {
+                    break;
                 }
-
-                if rc != kIOReturnSuccess {
-                    return Err(Error::new_os(ErrorKind::Other, "failed to open device", rc));
-                }
-
-                if raw_device_plugin.is_null() {
-                    error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        "could not create PlugInInterface",
-                    ));
-                }
-
-                let device_plugin = PluginInterface::new(raw_device_plugin);
-
-                let mut raw_device: *mut *mut iokit::UsbDevice = std::ptr::null_mut();
-
-                call_iokit_function!(
-                    device_plugin.get(),
-                    QueryInterface(
-                        usb_device_type_id(),
-                        &mut raw_device as *mut *mut *mut _ as *mut *mut c_void
-                    )
-                );
-
-                // macOS claims that call will never fail, and will always produce a valid pointer.
-                // We don't trust it, so we're going to panic if it's lied to us.
-                if raw_device.is_null() {
-                    panic!(
-                        "query_interface returned a null pointer, which Apple says is impossible"
-                    );
-                }
-
-                return Ok(IoKitDevice { raw: raw_device });
             }
 
-            Err(Error::new(
-                ErrorKind::NotFound,
-                "Couldn't create device after retries",
-            ))
+            if rc != kIOReturnSuccess {
+                return Err(Error::new_os(
+                    ErrorKind::Other,
+                    "failed to create IOKit PlugInInterface for device",
+                    rc,
+                )
+                .log_error());
+            }
+
+            if raw_device_plugin.is_null() {
+                error!("IOKit indicated it successfully created a PlugInInterface, but the pointer was NULL");
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "could not create PlugInInterface",
+                ));
+            }
+
+            let device_plugin = PluginInterface::new(raw_device_plugin);
+            let mut raw_device: *mut *mut iokit::UsbDevice = std::ptr::null_mut();
+
+            call_iokit_function!(
+                device_plugin.get(),
+                QueryInterface(
+                    usb_device_type_id(),
+                    &mut raw_device as *mut *mut *mut _ as *mut *mut c_void
+                )
+            );
+
+            // macOS claims that call will never fail, and will always produce a valid pointer.
+            // We don't trust it, so we're going to panic if it's lied to us.
+            if raw_device.is_null() {
+                panic!("query_interface returned a null pointer, which Apple says is impossible");
+            }
+
+            Ok(IoKitDevice { raw: raw_device })
         }
     }
 
@@ -228,11 +229,9 @@ impl IoKitInterface {
             );
 
             if rc != kIOReturnSuccess {
-                return Err(Error::new_os(
-                    ErrorKind::Other,
-                    "failed to open interface",
-                    rc,
-                ));
+                return Err(
+                    Error::new_os(ErrorKind::Other, "failed to open interface", rc).log_error(),
+                );
             }
 
             if raw_interface_plugin.is_null() {

@@ -154,7 +154,7 @@ fn register_notification(
         let mut iter = 0;
         let r = IOServiceAddMatchingNotification(
             port.0,
-            event as *mut c_char,
+            event as *const c_char,
             ManuallyDrop::new(dictionary.clone()).as_concrete_TypeRef(),
             callback,
             waker.0 as *mut c_void,

@@ -1,6 +1,6 @@
 [package]
 name = "nusb"
-version = "0.2.1"
+version = "0.2.2"
 description = "Cross-platform low-level access to USB devices in pure Rust"
 categories = ["hardware-support"]
 keywords = ["usb", "hardware"]
@@ -19,19 +19,19 @@ slab = "0.4.9"
 [dev-dependencies]
 env_logger = "0.11"
 futures-lite = "2.0"
-tokio = { version = "1", features = ["rt", "macros", "io-util", "rt-multi-thread"] }
+tokio = { version = "1.11", features = ["rt", "macros", "io-util", "rt-multi-thread"] }
 
 [target.'cfg(any(target_os="linux", target_os="android"))'.dependencies]
 rustix = { version = "1.0.1", features = ["fs", "event", "net", "time", "mm"] }
-linux-raw-sys = { version = "0.9.2", features = ["ioctl"] }
+linux-raw-sys = { version = ">= 0.11, <= 0.12", features = ["ioctl"] }
 
 [target.'cfg(target_os="windows")'.dependencies]
-windows-sys = { version = "0.60.2", features = ["Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Com"] }
+windows-sys = { version = ">= 0.60, <= 0.61", features = ["Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Com"] }
 
 [target.'cfg(target_os="macos")'.dependencies]
 core-foundation = "0.10.1"
 core-foundation-sys = "0.8.4"
-io-kit-sys = "0.4.0"
+io-kit-sys = "0.5.0"
 
 [target.'cfg(target_os="android")'.dependencies]
 jni-min-helper = "0.3.1"

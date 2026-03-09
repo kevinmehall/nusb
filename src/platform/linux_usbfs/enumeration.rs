@@ -15,10 +15,10 @@ use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
 pub struct SysfsPath(pub(crate) PathBuf);
 
 #[derive(Debug)]
-pub struct SysfsError(PathBuf, SysfsErrorKind);
+pub struct SysfsError(pub(crate) PathBuf, pub(crate) SysfsErrorKind);
 
 #[derive(Debug)]
-enum SysfsErrorKind {
+pub(crate) enum SysfsErrorKind {
     Io(io::Error),
     Parse(String),
 }

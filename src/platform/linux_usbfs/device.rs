@@ -29,7 +29,10 @@ use super::{
 };
 
 #[cfg(not(target_os = "android"))]
-use super::SysfsPath;
+use super::{
+    enumeration::{SysfsError, SysfsErrorKind},
+    SysfsPath,
+};
 
 use crate::{
     bitset::EndpointBitSet,
@@ -140,10 +143,20 @@ impl LinuxDevice {
 
         #[cfg(not(target_os = "android"))]
         let active_config: u8 = if let Some(sysfs) = sysfs.as_ref() {
-            sysfs.read_attr("bConfigurationValue").map_err(|e| {
-                warn!("failed to read sysfs bConfigurationValue: {e}");
-                Error::new(ErrorKind::Other, "failed to read sysfs bConfigurationValue")
-            })?
+            match sysfs.read_attr("bConfigurationValue") {
+                Ok(v) => v,
+                // Linux returns an empty string when the device is unconfigured.
+                // We'll assume all parse errors are the empty string.
+                Err(SysfsError(_, SysfsErrorKind::Parse(_))) => 0,
+
+                Err(e) => {
+                    warn!("failed to read sysfs bConfigurationValue: {e}");
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        "failed to read sysfs bConfigurationValue",
+                    ));
+                }
+            }
         } else {
             guess_active_configuration(&fd, &descriptors)
         };
@@ -325,6 +338,10 @@ impl LinuxDevice {
                     self.active_config.store(v, Ordering::SeqCst);
                     return v;
                 }
+                Err(SysfsError(_, SysfsErrorKind::Parse(_))) => {
+                    self.active_config.store(0, Ordering::SeqCst);
+                    return 0;
+                }
                 Err(e) => {
                     error!("Failed to read sysfs bConfigurationValue: {e}, using cached value");
                 }
@@ -393,7 +410,9 @@ impl LinuxDevice {
     ) -> Result<Arc<LinuxInterface>, Error> {
         result.map_err(|e| {
             match e {
-                Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+                Errno::INVAL | Errno::NOENT => {
+                    Error::new_os(ErrorKind::NotFound, "interface not found", e)
+                }
                 Errno::BUSY => Error::new_os(ErrorKind::Busy, "interface is busy", e),
                 Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
                 _ => Error::new_os(ErrorKind::Other, "failed to claim interface", e),

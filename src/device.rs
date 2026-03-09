@@ -563,18 +563,92 @@ impl Debug for Interface {
 /// makes it easy to submit multiple transfers at once, regardless of whether
 /// you are using asynchronous or blocking waits.
 ///
-/// To maximize throughput and minimize latency when streaming data, the host
-/// controller needs to attempt a transfer in every possible frame. That
-/// requires always having a transfer request pending with the kernel by
-/// submitting multiple transfer requests and re-submitting them as they
-/// complete.
-///
 /// When the `Endpoint` is dropped, any pending transfers are cancelled.
 ///
 /// This type provides a low-level API letting you manage transfers directly.
 /// For a higher-level buffered API implementing [`std::io::Read`] and
 /// [`std::io::Write`], use the adapters from [`nusb::io`][`crate::io`]. See
 /// [`Self::reader`] and [`Self::writer`].
+///
+/// ## Examples
+///
+/// ### Async
+/// ```no_run
+/// # use nusb::{MaybeFuture, transfer::{ Buffer, Bulk, Out, In }};
+/// # use std::time::Duration;
+/// # fn main() -> Result<(), std::io::Error> {
+/// # futures_lite::future::block_on(async{
+/// # let di = nusb::list_devices().await.unwrap().next().unwrap();
+/// # let device = di.open().await.unwrap();
+/// # let interface = device.claim_interface(0).await.unwrap();
+/// # let mut ep_out = interface.endpoint::<Bulk, Out>(0x02).unwrap();
+/// # let mut ep_in = interface.endpoint::<Bulk, In>(0x82).unwrap();
+/// ep_out.submit(vec![1, 2, 3].into());
+/// ep_out.next_complete().await.into_result()?;
+///
+/// ep_in.submit(Buffer::new(64));
+/// let response = ep_in.next_complete().await.into_result()?;
+/// # Ok(())
+/// # })}
+/// ```
+///
+/// ### Single transfer (blocking)
+///
+/// For simple use cases with blocking waits, the
+/// [`transfer_blocking`](Endpoint::transfer_blocking) convenience method wraps
+/// `submit` and `wait_next_complete` to handle cancelling the transfer after
+/// the specified timeout.
+///
+/// ```no_run
+/// # use nusb::{MaybeFuture, transfer::{ Buffer, Bulk, Out, In }};
+/// # use std::time::Duration;
+/// # fn main() -> Result<(), std::io::Error> {
+/// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+/// # let device = di.open().wait().unwrap();
+/// # let interface = device.claim_interface(0).wait().unwrap();
+/// # let mut ep_out = interface.endpoint::<Bulk, Out>(0x02).unwrap();
+/// # let mut ep_in = interface.endpoint::<Bulk, In>(0x82).unwrap();
+/// let timeout = Duration::from_secs(1);
+/// ep_out.transfer_blocking(vec![0x00, 0x01, 0x02].into(), timeout).into_result()?;
+/// let response = ep_in.transfer_blocking(Buffer::new(64), timeout).into_result()?;
+/// # Ok(()) }
+/// ```
+///
+/// ### Optimized Streaming
+///
+/// To maximize throughput and minimize latency when streaming data, the host
+/// controller needs to attempt a transfer in every possible frame. That
+/// requires always having a transfer request pending with the kernel by
+/// submitting multiple transfer requests and re-submitting them as they
+/// complete.
+///
+/// The transfer size can be tuned to balance latency and overhead.
+///
+/// ```no_run
+/// # use nusb::{MaybeFuture, transfer::{ Buffer, Bulk, Out, In }};
+/// # use std::time::Duration;
+/// # fn main() -> Result<(), std::io::Error> {
+/// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+/// # let device = di.open().wait().unwrap();
+/// # let interface = device.claim_interface(0).wait().unwrap();
+/// # let mut ep_in = interface.endpoint::<Bulk, In>(0x82).unwrap();
+/// # fn handle_transfer(p: &[u8]) {}
+/// while ep_in.pending() < 8 {
+///     let buffer = ep_in.allocate(16384);
+///     ep_in.submit(buffer);
+/// }
+///
+/// loop {
+///     let completion = ep_in.wait_next_complete(Duration::MAX).unwrap();
+///
+///     handle_transfer(&completion.buffer[..]);
+///     completion.status?;
+///
+///     ep_in.submit(completion.buffer);
+/// }
+///
+/// # Ok(()) }
+/// ```
 pub struct Endpoint<EpType, Dir> {
     backend: platform::Endpoint,
     ep_type: PhantomData<EpType>,

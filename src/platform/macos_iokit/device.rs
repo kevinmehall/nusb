@@ -147,7 +147,7 @@ impl MacDevice {
 
     pub(crate) fn configuration_descriptors(
         &self,
-    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
@@ -343,7 +343,7 @@ impl MacDevice {
         let res = unsafe {
             call_iokit_function!(
                 self.device.raw,
-                DeviceRequestAsyncTO(&mut req, transfer_callback, ptr as *mut c_void)
+                DeviceRequestAsyncTO(&mut req, Some(transfer_callback), ptr as *mut c_void)
             )
         };
 
@@ -564,7 +564,7 @@ impl MacEndpoint {
                         self.inner.pipe_ref,
                         buf_ptr as *mut c_void,
                         req_len,
-                        transfer_callback,
+                        Some(transfer_callback),
                         ptr as *mut c_void
                     )
                 ),
@@ -574,7 +574,7 @@ impl MacEndpoint {
                         self.inner.pipe_ref,
                         buf_ptr as *mut c_void,
                         req_len,
-                        transfer_callback,
+                        Some(transfer_callback),
                         ptr as *mut c_void
                     )
                 ),
