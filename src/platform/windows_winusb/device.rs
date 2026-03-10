@@ -130,7 +130,7 @@ impl WindowsDevice {
 
     pub(crate) fn configuration_descriptors(
         &self,
-    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
