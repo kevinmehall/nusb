@@ -126,7 +126,7 @@ impl WindowsDevice {
 
     pub(crate) fn configuration_descriptors(
         &self,
-    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
@@ -430,6 +430,21 @@ impl WindowsInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
+        unsafe {
+            let timeout_ms = timeout.as_millis() as u32;
+            let r = WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                0x00,
+                Usb::PIPE_TRANSFER_TIMEOUT,
+                size_of_val(&timeout_ms) as u32,
+                &timeout_ms as *const _ as *const c_void,
+            );
+            if r != TRUE {
+                let err = GetLastError();
+                warn!("Failed to set timeout {timeout_ms} ms on control endpoint: error {err:x}",);
+            }
+        }
+
         let mut t = TransferData::new(0x80);
         t.set_buffer(Buffer::new(data.length as usize));
 
@@ -455,6 +470,21 @@ impl WindowsInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
+        unsafe {
+            let timeout_ms = timeout.as_millis() as u32;
+            let r = WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                0x00,
+                Usb::PIPE_TRANSFER_TIMEOUT,
+                size_of_val(&timeout_ms) as u32,
+                &timeout_ms as *const _ as *const c_void,
+            );
+            if r != TRUE {
+                let err = GetLastError();
+                warn!("Failed to set timeout {timeout_ms} ms on control endpoint: error {err:x}",);
+            }
+        }
+
         let mut t = TransferData::new(0x00);
         t.set_buffer(Buffer::from(data.data.to_vec()));
 
