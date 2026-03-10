@@ -1,6 +1,6 @@
 use std::{
     mem::{self, ManuallyDrop},
-    os::windows::io::RawHandle,
+    sync::Arc,
 };
 
 use windows_sys::Win32::{
@@ -9,15 +9,11 @@ use windows_sys::Win32::{
         ERROR_NO_SUCH_DEVICE, ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT,
         ERROR_SUCCESS, ERROR_TIMEOUT,
     },
-    System::{
-        Threading::{CloseThreadpoolTimer, PTP_TIMER},
-        IO::{GetOverlappedResult, OVERLAPPED},
-    },
+    System::IO::{GetOverlappedResult, OVERLAPPED},
 };
 
+use super::{threadpool::Timer, Interface};
 use crate::transfer::{Buffer, Completion, Direction, TransferError};
-
-use super::Interface;
 
 #[repr(C)]
 pub struct TransferData {
@@ -26,29 +22,30 @@ pub struct TransferData {
     // overlapped.InternalHigh contains the number of bytes transferred
     pub(crate) overlapped: OVERLAPPED,
 
-    // Owned by the `WinusbFileHandle`
-    pub(crate) handle: RawHandle,
     pub(crate) buf: *mut u8,
     pub(crate) capacity: u32,
     pub(crate) request_len: u32,
+
+    pub(crate) intf: Arc<Interface>,
     pub(crate) endpoint: u8,
     pub(crate) error_from_submit: Result<(), TransferError>,
-    pub(crate) timeout: Option<PTP_TIMER>,
+
+    pub(crate) timeout: Option<Timer>,
 }
 
 unsafe impl Send for TransferData {}
 unsafe impl Sync for TransferData {}
 
 impl TransferData {
-    pub(crate) fn new(handle: RawHandle, endpoint: u8) -> TransferData {
+    pub(crate) fn new(intf: Arc<Interface>, endpoint: u8) -> TransferData {
         let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
 
         TransferData {
             overlapped: unsafe { mem::zeroed() },
-            handle,
             buf: empty.as_mut_ptr(),
             capacity: 0,
             request_len: 0,
+            intf,
             endpoint,
             timeout: None,
             error_from_submit: Ok(()),
@@ -115,10 +112,6 @@ impl Drop for TransferData {
     fn drop(&mut self) {
         unsafe {
             drop(Vec::from_raw_parts(self.buf, 0, self.capacity as usize));
-
-            if let Some(timer) = self.timeout {
-                CloseThreadpoolTimer(timer);
-            }
         }
     }
 }

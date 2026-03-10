@@ -17,6 +17,7 @@ pub(crate) use cfgmgr32::DevInst;
 use windows_sys::Win32::Foundation::WIN32_ERROR;
 pub(crate) use DevInst as DeviceId;
 mod hotplug;
+mod threadpool;
 mod util;
 pub(crate) use hotplug::WindowsHotplugWatch as HotplugWatch;
 
