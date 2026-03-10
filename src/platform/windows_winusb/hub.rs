@@ -20,8 +20,12 @@ use windows_sys::Win32::{
             USB_NODE_CONNECTION_INFORMATION_EX, USB_NODE_CONNECTION_INFORMATION_EX_V2,
         },
     },
-    Foundation::{GetLastError, ERROR_GEN_FAILURE, TRUE},
-    System::IO::DeviceIoControl,
+    Foundation::{
+        CloseHandle, GetLastError, ERROR_GEN_FAILURE, ERROR_IO_PENDING, FALSE, TRUE, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
+    },
+    System::Threading::*,
+    System::IO::{CancelIo, DeviceIoControl, GetOverlappedResult, OVERLAPPED},
 };
 
 use crate::{descriptors::DESCRIPTOR_TYPE_DEVICE, Error, ErrorKind, Speed};
@@ -41,6 +45,32 @@ const DEVICE_IS_OPERATING_AT_SUPER_SPEED_OR_HIGHER: u32 = 0x01;
 const DEVICE_IS_SUPER_SPEED_CAPABLE_OR_HIGHER: u32 = 0x02;
 const DEVICE_IS_OPERATING_AT_SUPER_SPEED_PLUS_OR_HIGHER: u32 = 0x04;
 const DEVICE_IS_SUPER_SPEED_PLUS_CAPABLE_OR_HIGHER: u32 = 0x08;
+
+struct Overlapped(OVERLAPPED);
+
+impl Overlapped {
+    #[inline]
+    fn new() -> Self {
+        let event =
+            unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
+        assert!(!event.is_null());
+        Self(OVERLAPPED {
+            Internal: 0,
+            InternalHigh: 0,
+            Anonymous: unsafe { std::mem::zeroed() },
+            hEvent: event,
+        })
+    }
+}
+
+impl Drop for Overlapped {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0.hEvent);
+        }
+    }
+}
 
 /// Safe wrapper around hub ioctls used to get descriptors for child devices.
 pub struct HubHandle(OwnedHandle);
@@ -145,6 +175,7 @@ impl HubHandle {
         descriptor_type: u8,
         descriptor_index: u8,
         language_id: u16,
+        timeout: std::time::Duration,
     ) -> Result<Vec<u8>, Error> {
         // Experimentally determined on Windows 10 19045.3803 that this fails
         // with ERROR_INVALID_PARAMETER for non-cached descriptors when
@@ -160,6 +191,10 @@ impl HubHandle {
 
             let req = alloc::alloc(layout).cast::<USB_DESCRIPTOR_REQUEST>();
 
+            let _guard = scopeguard::guard((), |_| {
+                alloc::dealloc(req as *mut _, layout);
+            });
+
             req.write(USB_DESCRIPTOR_REQUEST {
                 ConnectionIndex: port_number,
                 SetupPacket: USB_DESCRIPTOR_REQUEST_0 {
@@ -173,6 +208,7 @@ impl HubHandle {
             });
 
             let mut bytes_returned: u32 = 0;
+            let mut overlapped = Overlapped::new();
             let r = DeviceIoControl(
                 raw_handle(&self.0),
                 IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
@@ -181,31 +217,61 @@ impl HubHandle {
                 req as *mut c_void,
                 layout.size() as u32,
                 &mut bytes_returned,
-                null_mut(),
+                &mut overlapped.0,
             );
 
-            let res = if r == TRUE {
-                let start = addr_of!((*req).Data[0]);
-                let end = (req as *mut u8).offset(bytes_returned as isize);
-                let len = end.offset_from(start) as usize;
-                let vec = slice::from_raw_parts(start, len).to_owned();
-                Ok(vec)
-            } else {
-                let err = GetLastError();
-                debug!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
-                Err(match err {
-                    ERROR_GEN_FAILURE => Error::new_os(
-                        ErrorKind::Other,
-                        "descriptor request failed: device might be suspended.",
-                        err,
-                    ),
-                    _ => Error::new_os(ErrorKind::Other, "descriptor request failed", err),
-                })
-            };
+            assert_eq!(r, FALSE);
 
-            alloc::dealloc(req as *mut _, layout);
+            if GetLastError() == ERROR_IO_PENDING {
+                let wait_result =
+                    WaitForSingleObject(overlapped.0.hEvent, timeout.as_millis() as u32) as u32;
+                match wait_result {
+                    WAIT_OBJECT_0 => {
+                        if GetOverlappedResult(
+                            raw_handle(&self.0),
+                            &mut overlapped.0,
+                            &mut bytes_returned,
+                            TRUE,
+                        ) == TRUE
+                        {
+                            assert!(bytes_returned != 0);
+                            let start = addr_of!((*req).Data[0]);
+                            let end = (req as *mut u8).offset(bytes_returned as isize);
+                            let len = end.offset_from(start) as usize;
+                            let vec = slice::from_raw_parts(start, len).to_owned();
+                            return Ok(vec);
+                        }
+                    }
+                    WAIT_TIMEOUT => {
+                        assert_eq!(CancelIo(raw_handle(&self.0)), TRUE);
+                        // still need to wait for the event to be signaled
+                        assert_eq!(
+                            GetOverlappedResult(
+                                raw_handle(&self.0),
+                                &mut overlapped.0,
+                                &mut bytes_returned,
+                                TRUE,
+                            ),
+                            FALSE
+                        );
+                        assert_eq!(bytes_returned, 0);
+                    }
+                    _ => {
+                        panic!("Unexpected result from WaitForSingleObject {wait_result}");
+                    }
+                }
+            }
 
-            res
+            let err = GetLastError();
+            debug!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
+            Err(match err {
+                ERROR_GEN_FAILURE => Error::new_os(
+                    ErrorKind::Other,
+                    "descriptor request failed: device might be suspended.",
+                    err,
+                ),
+                _ => Error::new_os(ErrorKind::Other, "descriptor request failed", err),
+            })
         }
     }
 }
@@ -278,12 +344,14 @@ impl HubPort {
         descriptor_type: u8,
         descriptor_index: u8,
         language_id: u16,
+        timeout: std::time::Duration,
     ) -> Result<Vec<u8>, Error> {
         self.hub_handle.get_descriptor(
             self.port_number,
             descriptor_type,
             descriptor_index,
             language_id,
+            timeout,
         )
     }
 }
