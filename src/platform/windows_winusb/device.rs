@@ -2,11 +2,8 @@ use std::{
     collections::{btree_map::Entry, BTreeMap, VecDeque},
     ffi::c_void,
     io,
-    mem::{size_of_val, transmute},
-    os::windows::{
-        io::{AsRawHandle, RawHandle},
-        prelude::OwnedHandle,
-    },
+    mem::{self, size_of_val, transmute},
+    os::windows::io::{AsRawHandle, OwnedHandle, RawHandle},
     ptr::{self, null_mut},
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -26,7 +23,13 @@ use windows_sys::Win32::{
         ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVICE, FALSE,
         HANDLE, TRUE,
     },
-    System::IO::{CancelIoEx, OVERLAPPED},
+    System::{
+        Threading::{
+            CancelThreadpoolIo, CloseThreadpoolIo, CreateThreadpoolIo, StartThreadpoolIo,
+            PTP_CALLBACK_INSTANCE, PTP_IO, PTP_TIMER,
+        },
+        IO::{CancelIoEx, OVERLAPPED},
+    },
 };
 
 use crate::{
@@ -50,6 +53,7 @@ use super::{
         find_usbccgp_child, get_driver_name, get_usbccgp_winusb_device_path, get_winusb_device_path,
     },
     hub::HubPort,
+    threadpool::Timer,
     transfer::TransferData,
     util::{create_file, raw_handle, WCStr},
     DevInst,
@@ -126,7 +130,7 @@ impl WindowsDevice {
 
     pub(crate) fn configuration_descriptors(
         &self,
-    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
@@ -263,6 +267,7 @@ impl BitSet256 {
 pub(crate) struct WinusbFileHandle {
     first_interface: u8,
     handle: OwnedHandle,
+    threadpool_io: PTP_IO,
     winusb_handle: WINUSB_INTERFACE_HANDLE,
     claimed_interfaces: BitSet256,
 }
@@ -275,11 +280,27 @@ impl WinusbFileHandle {
     fn new(path: &WCStr, first_interface: u8) -> Result<Self, Error> {
         let handle = create_file(path)
             .map_err(|e| Error::new_os(ErrorKind::Other, "failed to open device", e).log_debug())?;
-        super::events::register(&handle)?;
+
+        let threadpool_io = unsafe {
+            CreateThreadpoolIo(
+                raw_handle(&handle),
+                Some(io_callback),
+                null_mut(),
+                null_mut(),
+            )
+        };
+
+        if threadpool_io == 0 {
+            let err = unsafe { GetLastError() };
+            return Err(
+                Error::new_os(ErrorKind::Other, "CreateThreadpoolIo failed", err).log_error(),
+            );
+        }
 
         let winusb_handle = unsafe {
             let mut h = ptr::null_mut();
             if WinUsb_Initialize(raw_handle(&handle), &mut h) == FALSE {
+                CloseThreadpoolIo(threadpool_io);
                 return Err(Error::new_os(
                     ErrorKind::Other,
                     "failed to initialize WinUSB",
@@ -292,9 +313,27 @@ impl WinusbFileHandle {
 
         debug!("Opened WinUSB handle for {path} (interface {first_interface})");
 
+        unsafe {
+            // Disable WinUSB's default control transfer timeout so we can do our own
+            // per-request timeout handling by cancelling the transfer with a timer.
+            let timeout: u32 = 0;
+            let r = WinUsb_SetPipePolicy(
+                winusb_handle,
+                0x00,
+                Usb::PIPE_TRANSFER_TIMEOUT,
+                size_of_val(&timeout) as u32,
+                &timeout as *const _ as *const c_void,
+            );
+            if r != TRUE {
+                let err = GetLastError();
+                warn!("Failed to disable default timeout on control endpoint, error {err}");
+            }
+        }
+
         Ok(WinusbFileHandle {
             first_interface,
             handle,
+            threadpool_io,
             winusb_handle,
             claimed_interfaces: BitSet256::new(),
         })
@@ -349,11 +388,13 @@ impl WinusbFileHandle {
 
         Ok(Arc::new(WindowsInterface {
             handle: self.handle.as_raw_handle(),
+            threadpool_io: self.threadpool_io,
             device: device.clone(),
             interface_number,
             first_interface_number: self.first_interface,
             winusb_handle,
             state: Mutex::new(InterfaceState::default()),
+            timeout_mutex: Mutex::new(()),
         }))
     }
 }
@@ -365,18 +406,74 @@ impl Drop for WinusbFileHandle {
             self.first_interface
         );
         unsafe {
+            CloseThreadpoolIo(self.threadpool_io);
             WinUsb_Free(self.winusb_handle);
         }
     }
 }
 
+unsafe extern "system" fn io_callback(
+    _instance: PTP_CALLBACK_INSTANCE,
+    _context: *mut c_void,
+    overlapped: *mut c_void,
+    result: u32,
+    bytes_transferred: usize,
+    _io: PTP_IO,
+) {
+    let t = overlapped as *mut TransferData;
+    {
+        let transfer = unsafe { &*t };
+
+        debug!(
+            "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
+            transfer.endpoint, result, bytes_transferred,
+        );
+
+        if let Some(ref timer) = transfer.timeout {
+            // Cancel the timeout and wait for any callback to complete that may be concurrently
+            // accessing `transfer`.
+            timer.cancel_and_wait();
+        }
+    }
+    unsafe { notify_completion::<TransferData>(t) }
+}
+
+unsafe extern "system" fn timer_callback(
+    _instance: PTP_CALLBACK_INSTANCE,
+    context: *mut c_void,
+    _timer: PTP_TIMER,
+) {
+    let transfer_data = &*(context as *const TransferData);
+    debug!(
+        "Transfer {context:?} timeout on endpoint 0x{:02X}",
+        transfer_data.endpoint
+    );
+
+    // Wait until the transfer has been submitted before trying to cancel it
+    let lock = transfer_data.intf.timeout_mutex.lock().unwrap();
+    unsafe {
+        CancelIoEx(transfer_data.intf.handle, &transfer_data.overlapped);
+    }
+    drop(lock);
+}
+
 pub(crate) struct WindowsInterface {
+    /// Owned by the `WinUSBFileHandle`
     pub(crate) handle: RawHandle,
+
+    /// Owned by the `WinUSBFileHandle`
+    pub(crate) threadpool_io: PTP_IO,
+
     pub(crate) device: Arc<WindowsDevice>,
     pub(crate) first_interface_number: u8,
     pub(crate) interface_number: u8,
+
+    /// Owned by this object if `first_interface_number != interface_number`, otherwise owned by the `WinUSBFileHandle`
     pub(crate) winusb_handle: WINUSB_INTERFACE_HANDLE,
     state: Mutex<InterfaceState>,
+
+    /// Used to synchronize control transfer timeouts with transfer submission.
+    timeout_mutex: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -430,7 +527,7 @@ impl WindowsInterface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        let mut t = TransferData::new(0x80);
+        let mut t = TransferData::new(self.clone(), 0x80);
         t.set_buffer(Buffer::new(data.length as usize));
 
         let pkt = WINUSB_SETUP_PACKET {
@@ -443,7 +540,7 @@ impl WindowsInterface {
 
         let intf = self.clone();
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
             let c = t.take_completion(&intf);
             c.status?;
             Ok(c.buffer.into_vec())
@@ -455,7 +552,7 @@ impl WindowsInterface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        let mut t = TransferData::new(0x00);
+        let mut t = TransferData::new(self.clone(), 0x00);
         t.set_buffer(Buffer::from(data.data.to_vec()));
 
         let pkt = WINUSB_SETUP_PACKET {
@@ -468,7 +565,7 @@ impl WindowsInterface {
 
         let intf = self.clone();
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
             let c = t.take_completion(&intf);
             c.status
         })
@@ -560,13 +657,17 @@ impl WindowsInterface {
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped.InternalHigh = 0;
+        t.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
 
         debug!("Submit transfer {ptr:?} on endpoint {endpoint:02X} for {len} bytes {dir:?}");
+
+        unsafe {
+            StartThreadpoolIo(self.threadpool_io);
+        }
 
         let r = unsafe {
             match dir {
@@ -596,12 +697,13 @@ impl WindowsInterface {
         &self,
         mut t: Idle<TransferData>,
         pkt: WINUSB_SETUP_PACKET,
+        timeout: Duration,
     ) -> Pending<TransferData> {
         let endpoint = t.endpoint;
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped.InternalHigh = 0;
+        t.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         if pkt.RequestType & 0x1f == Recipient::Interface as u8
@@ -612,10 +714,33 @@ impl WindowsInterface {
             return t.simulate_complete();
         }
 
-        let t = t.pre_submit();
+        // Take a lock that blocks the timer callback from trying to cancel the transfer before we've submitted it.
+        let lock = self.timeout_mutex.lock().unwrap();
+
         let ptr = t.as_ptr();
 
-        debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes");
+        // Safety: The timer callback takes a shared reference to the transfer via this passed pointer. The transfer
+        // is valid for a shared borrow at any point between when `set` is called to arm the timer below, and
+        // when the timer is cancelled in `io_callback` (or the error path in `post_submit`).
+        let timer = unsafe {
+            Timer::new(timer_callback, ptr as *mut c_void)
+                .expect("failed to create timer for control transfer")
+        };
+        t.timeout = Some(timer);
+
+        let t = t.pre_submit(); // transition from owned to shared
+
+        // Arm the timeout, now that we're no longer mutably borrowing the transfer, but also before submitting the transfer.
+        // This guarantees that the IO callback trying to cancel the timer can't occur before it is set here.
+        unsafe {
+            (*ptr).timeout.as_ref().unwrap().set(timeout);
+        }
+
+        debug!("Submit control {dir:?} transfer {ptr:?} for {len} bytes with timeout {timeout:?}");
+
+        unsafe {
+            StartThreadpoolIo(self.threadpool_io);
+        }
 
         let r = unsafe {
             WinUsb_ControlTransfer(
@@ -627,6 +752,8 @@ impl WindowsInterface {
                 ptr as *mut OVERLAPPED,
             )
         };
+
+        drop(lock);
 
         self.post_submit(r, t)
     }
@@ -641,9 +768,16 @@ impl WindowsInterface {
         if err != ERROR_IO_PENDING {
             error!("submit failed: {}", io::Error::from_raw_os_error(err as _));
 
+            unsafe {
+                CancelThreadpoolIo(self.threadpool_io);
+            }
+
             // Safety: Transfer was not submitted, so we still own it
             // and must complete it in place of the event thread.
             unsafe {
+                if let Some(ref timer) = (*t.as_ptr()).timeout {
+                    timer.cancel_and_wait();
+                }
                 (*t.as_ptr()).error_from_submit = match err {
                     ERROR_BAD_COMMAND
                     | ERROR_FILE_NOT_FOUND
@@ -711,7 +845,10 @@ impl WindowsEndpoint {
 
     fn make_transfer(&mut self, buffer: Buffer) -> Idle<TransferData> {
         let mut t = self.idle_transfer.take().unwrap_or_else(|| {
-            Idle::new(self.inner.clone(), TransferData::new(self.inner.address))
+            Idle::new(
+                self.inner.clone(),
+                TransferData::new(self.inner.interface.clone(), self.inner.address),
+            )
         });
         t.set_buffer(buffer);
         t

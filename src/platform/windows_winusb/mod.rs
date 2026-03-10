@@ -3,8 +3,6 @@ use std::num::NonZeroU32;
 
 pub use enumeration::{list_buses, list_devices};
 
-mod events;
-
 mod device;
 pub(crate) use device::WindowsDevice as Device;
 pub(crate) use device::WindowsEndpoint as Endpoint;
@@ -19,6 +17,7 @@ pub(crate) use cfgmgr32::DevInst;
 use windows_sys::Win32::Foundation::WIN32_ERROR;
 pub(crate) use DevInst as DeviceId;
 mod hotplug;
+mod threadpool;
 mod util;
 pub(crate) use hotplug::WindowsHotplugWatch as HotplugWatch;
 

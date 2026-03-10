@@ -1,6 +1,8 @@
-use std::mem::{self, ManuallyDrop};
+use std::{
+    mem::{self, ManuallyDrop},
+    sync::Arc,
+};
 
-use log::debug;
 use windows_sys::Win32::{
     Foundation::{
         GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
@@ -10,9 +12,8 @@ use windows_sys::Win32::{
     System::IO::{GetOverlappedResult, OVERLAPPED},
 };
 
-use crate::transfer::{internal::notify_completion, Buffer, Completion, Direction, TransferError};
-
-use super::Interface;
+use super::{threadpool::Timer, Interface};
+use crate::transfer::{Buffer, Completion, Direction, TransferError};
 
 #[repr(C)]
 pub struct TransferData {
@@ -20,18 +21,23 @@ pub struct TransferData {
     // overlapped.Internal contains the status
     // overlapped.InternalHigh contains the number of bytes transferred
     pub(crate) overlapped: OVERLAPPED,
+
     pub(crate) buf: *mut u8,
     pub(crate) capacity: u32,
     pub(crate) request_len: u32,
+
+    pub(crate) intf: Arc<Interface>,
     pub(crate) endpoint: u8,
     pub(crate) error_from_submit: Result<(), TransferError>,
+
+    pub(crate) timeout: Option<Timer>,
 }
 
 unsafe impl Send for TransferData {}
 unsafe impl Sync for TransferData {}
 
 impl TransferData {
-    pub(crate) fn new(endpoint: u8) -> TransferData {
+    pub(crate) fn new(intf: Arc<Interface>, endpoint: u8) -> TransferData {
         let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
 
         TransferData {
@@ -39,14 +45,11 @@ impl TransferData {
             buf: empty.as_mut_ptr(),
             capacity: 0,
             request_len: 0,
+            intf,
             endpoint,
+            timeout: None,
             error_from_submit: Ok(()),
         }
-    }
-
-    #[inline]
-    pub fn actual_len(&self) -> usize {
-        self.overlapped.InternalHigh
     }
 
     pub fn set_buffer(&mut self, buf: Buffer) {
@@ -111,19 +114,4 @@ impl Drop for TransferData {
             drop(Vec::from_raw_parts(self.buf, 0, self.capacity as usize));
         }
     }
-}
-
-pub(super) fn handle_event(completion: *mut OVERLAPPED) {
-    let t = completion as *mut TransferData;
-    {
-        let transfer = unsafe { &mut *t };
-
-        debug!(
-            "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
-            transfer.endpoint,
-            transfer.overlapped.Internal,
-            transfer.actual_len(),
-        );
-    }
-    unsafe { notify_completion::<TransferData>(t) }
 }
