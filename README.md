@@ -20,6 +20,7 @@ transfers on control, bulk, and interrupt endpoints.
 * No context object. You just open a device. There is a global event loop thread
   that is started when opening the first device.
 * Thinner layer over OS APIs, with less internal state.
+* Introduced Android support.
 
 ### License
 
