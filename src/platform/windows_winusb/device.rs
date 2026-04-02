@@ -180,6 +180,7 @@ impl WindowsDevice {
             let mut handles = self.handles.lock().unwrap();
 
             if driver.eq_ignore_ascii_case("winusb") {
+                // Whole device bound to WinUSB (non-composite).
                 match handles.entry(0) {
                     Entry::Occupied(mut e) => e.get_mut().claim_interface(&self, interface_number),
                     Entry::Vacant(e) => {
@@ -190,7 +191,12 @@ impl WindowsDevice {
                         Ok(intf)
                     }
                 }
-            } else if driver.eq_ignore_ascii_case("usbccgp") {
+            } else {
+                // Composite device — walk child device nodes to find the interface.
+                // Works for usbccgp (Microsoft), dg_ssudbus (Samsung), and any
+                // OEM composite parent driver. The child-level WinUSB check in
+                // get_usbccgp_winusb_device_path ensures we only open interfaces
+                // whose driver is WinUSB.
                 let (first_interface, child_dev) =
                     find_usbccgp_child(self.devinst, interface_number)
                         .ok_or_else(|| Error::new(ErrorKind::NotFound, "Interface not found"))?;
@@ -209,12 +215,6 @@ impl WindowsDevice {
                         Ok(intf)
                     }
                 }
-            } else {
-                debug!("Device driver is {driver:?}, not WinUSB or USBCCGP");
-                Err(Error::new(
-                    ErrorKind::Unsupported,
-                    "incompatible driver is installed for this device",
-                ))
             }
         })
     }
