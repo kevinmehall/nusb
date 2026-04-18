@@ -194,7 +194,7 @@ impl Device {
             let _ = timeout;
             self.backend
                 .clone()
-                .get_descriptor(desc_type, desc_index, language_id)
+                .get_descriptor(desc_type, desc_index, language_id, timeout)
                 .map(|r| r.map_err(GetDescriptorError::Transfer))
         }
 

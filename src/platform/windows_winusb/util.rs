@@ -17,6 +17,8 @@ use windows_sys::Win32::{
     },
 };
 
+pub const DEFAULT_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Wrapper around `CreateFile`
 pub fn create_file(path: &WCStr) -> Result<OwnedHandle, WIN32_ERROR> {
     unsafe {

@@ -16,6 +16,7 @@ use crate::{
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
     maybe_future::{blocking::Blocking, MaybeFuture},
+    platform::windows_winusb::util::DEFAULT_TRANSFER_TIMEOUT,
     BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, UsbControllerType,
 };
 
@@ -80,6 +81,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
                 DESCRIPTOR_TYPE_STRING,
                 info.device_desc.iSerialNumber,
                 US_ENGLISH,
+                DEFAULT_TRANSFER_TIMEOUT,
             )
             .ok()
             .and_then(|data| decode_string_descriptor(&data).ok())
@@ -196,6 +198,7 @@ fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Ve
             DESCRIPTOR_TYPE_CONFIGURATION,
             active_config.saturating_sub(1),
             0,
+            DEFAULT_TRANSFER_TIMEOUT,
         )
         .ok()?;
     let desc = ConfigurationDescriptor::new(&buf[..])?;

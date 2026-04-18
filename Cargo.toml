@@ -26,7 +26,8 @@ rustix = { version = "1.0.1", features = ["fs", "event", "net", "time", "mm"] }
 linux-raw-sys = { version = ">= 0.11, <= 0.12", features = ["ioctl"] }
 
 [target.'cfg(target_os="windows")'.dependencies]
-windows-sys = { version = ">= 0.60, <= 0.61", features = ["Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Com"] }
+windows-sys = { version = ">= 0.60, <= 0.61", features = ["Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Com", "Win32_System_Threading"] }
+scopeguard = "1.2.0"
 
 [target.'cfg(target_os="macos")'.dependencies]
 core-foundation = "0.10.1"
