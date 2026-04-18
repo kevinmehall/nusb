@@ -480,9 +480,7 @@ impl MacInterface {
 
 impl Drop for MacInterface {
     fn drop(&mut self) {
-        // Log at debug, matching the `MacDevice` drop at the top of this file:
-        // close() errors are common during unplug (kIOReturnNoDevice) and, since
-        // Drop can't recover anyway, aren't worth surfacing at error level.
+        // Expected to fail with kIOReturnNoDevice when the device is disconnected and can be ignored
         if let Err(err) = self.interface.close() {
             debug!("Failed to close interface: {err:x}")
         }
