@@ -480,8 +480,9 @@ impl MacInterface {
 
 impl Drop for MacInterface {
     fn drop(&mut self) {
+        // Expected to fail with kIOReturnNoDevice when the device is disconnected and can be ignored
         if let Err(err) = self.interface.close() {
-            error!("Failed to close interface: {err}")
+            debug!("Failed to close interface: {err:x}")
         }
         self.device
             .claimed_interfaces
