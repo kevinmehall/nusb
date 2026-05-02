@@ -309,7 +309,12 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "illumos"
+    ))]
     pub fn control_in(
         &self,
         data: ControlIn,
@@ -346,7 +351,12 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "illumos"
+    ))]
     pub fn control_out(
         &self,
         data: ControlOut,
