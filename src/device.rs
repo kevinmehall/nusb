@@ -309,7 +309,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", target_arch = "wasm32"))]
     pub fn control_in(
         &self,
         data: ControlIn,
@@ -346,7 +346,7 @@ impl Device {
     ///
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", target_arch = "wasm32"))]
     pub fn control_out(
         &self,
         data: ControlOut,
@@ -808,6 +808,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// ## Panics
     ///  * if there are no transfers pending (that is, if [`Self::pending()`]
     ///    would return 0).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.backend.wait_next_complete(timeout)
     }
@@ -826,6 +827,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// ## Panics
     ///  * if any transfer is already pending.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn transfer_blocking(&mut self, buf: Buffer, timeout: Duration) -> Completion {
         assert!(self.pending() == 0, "a transfer is already pending");
         self.submit(buf);

@@ -15,3 +15,9 @@ mod macos_iokit;
 
 #[cfg(target_os = "macos")]
 pub use macos_iokit::*;
+
+#[cfg(target_family = "wasm")]
+mod webusb;
+
+#[cfg(target_family = "wasm")]
+pub use webusb::*;

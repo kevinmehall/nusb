@@ -120,6 +120,7 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
         Ok(c.status?)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait_one(&mut self) -> Result<(), Error> {
         let t = self.endpoint.wait_next_complete(self.write_timeout);
         let t = t.ok_or_else(|| Error::new(ErrorKind::TimedOut, "write timeout"))?;
@@ -193,6 +194,7 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
 
     /// Submit any buffered data immediately and wait for all pending transfers
     /// to complete or fail.
+    #[cfg(not(target_arch = "wasm32"))]
     fn flush_blocking(&mut self) -> Result<(), Error> {
         self.submit();
         while self.endpoint.pending() > 0 {
@@ -204,6 +206,7 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
     /// Submit any buffered data immediately, terminating with a short or
     /// zero-length packet, and wait for all pending transfers to complete or
     /// fail.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn flush_end(&mut self) -> Result<(), Error> {
         self.submit_end();
         while self.endpoint.pending() > 0 {
@@ -234,6 +237,7 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<EpType: BulkOrInterrupt> Write for EndpointWrite<EpType> {
     /// Write data to the endpoint.
     ///
