@@ -257,7 +257,6 @@ pub(crate) fn get_raw_string(fd: &OwnedFd, index: u8) -> Result<Vec<u8>, Error> 
         .map_err(|e| Error::new_os(ErrorKind::Other, "failed to write", e))?;
 
     if cnt != setup_packet.len() {
-        println!("fuck5");
         return Err(Error::new(ErrorKind::Other, "incomplete write"));
     }
 
