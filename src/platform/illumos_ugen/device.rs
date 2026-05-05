@@ -212,16 +212,6 @@ impl RawEndpoint {
     }
 }
 
-pub(crate) struct IllumosDevice {
-    fd: OwnedFd,
-    stat_fd: OwnedFd,
-    device_descriptor: DeviceDescriptor,
-    config_descriptors: Vec<u8>,
-    active_config: u8,
-    paths: DevfsPath,
-    interfaces: HashMap<u8, Vec<RawEndpoint>>,
-}
-
 // This is needed for full enumeration because the strings are needed
 // for probe-rs to work
 pub(crate) fn get_raw_string(fd: &OwnedFd, index: u8) -> Result<Vec<u8>, Error> {
@@ -393,6 +383,22 @@ fn get_configuration(fd: &OwnedFd) -> Result<u8, Error> {
     Ok(buf[0])
 }
 
+struct InternalFds {
+    device_fd: OwnedFd,
+    stat_fd: OwnedFd,
+}
+
+pub(crate) struct IllumosDevice {
+    // control transfers involve a write and a read on the same file descriptor
+    // mutex protects against interleaved submission
+    fds: Mutex<InternalFds>,
+    device_descriptor: DeviceDescriptor,
+    config_descriptors: Vec<u8>,
+    active_config: u8,
+    paths: DevfsPath,
+    interfaces: HashMap<u8, Vec<RawEndpoint>>,
+}
+
 impl IllumosDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
@@ -413,7 +419,7 @@ impl IllumosDevice {
                     .ok_or(Error::new(ErrorKind::Other, "not ugen").log_debug())?,
             );
 
-            let fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+            let device_fd = rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
                 .map_err(Error::from)?;
 
             let stat_path = Path::new(
@@ -428,13 +434,13 @@ impl IllumosDevice {
                     .map_err(Error::from)?;
 
             let device_descriptor =
-                DeviceDescriptor::new(&get_dev_descriptor(&fd, DescriptorType::Device, 0)?)
+                DeviceDescriptor::new(&get_dev_descriptor(&device_fd, DescriptorType::Device, 0)?)
                     .ok_or(Error::new(ErrorKind::Other, "Invalid device descriptor"))?;
-            let active_config = get_configuration(&fd)?;
+            let active_config = get_configuration(&device_fd)?;
 
             #[rustfmt::skip]
             let config_descriptors = get_cfg_descriptors(
-                &fd, DescriptorType::Configuration { index: 0 }, 0
+                &device_fd, DescriptorType::Configuration { index: 0 }, 0
             )?;
 
             let c = ConfigurationDescriptor::new(&config_descriptors)
@@ -459,8 +465,9 @@ impl IllumosDevice {
                 .collect::<HashMap<_, _>>();
 
             Ok(Arc::new(Self {
-                fd,
-                stat_fd,
+                //fd,
+                //stat_fd,
+                fds: Mutex::new(InternalFds { device_fd, stat_fd }),
                 device_descriptor,
                 config_descriptors,
                 active_config,
@@ -485,7 +492,8 @@ impl IllumosDevice {
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let mut t = BlockingTransferData::new_control_in(data);
         Blocking::new(move || {
-            match t.blocking_transfer(&self.fd, &self.stat_fd) {
+            let fds = self.fds.lock().unwrap();
+            match t.blocking_transfer(&fds.device_fd, &fds.stat_fd) {
                 Ok(n) => {
                     use crate::transfer::SETUP_PACKET_SIZE;
                     // TODO(AJM): Is this:
@@ -512,9 +520,12 @@ impl IllumosDevice {
         _timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let mut t = BlockingTransferData::new_control_out(data);
-        Blocking::new(move || match t.blocking_transfer(&self.fd, &self.stat_fd) {
-            Ok(_n) => Ok(()),
-            Err(e) => Err(e.to_transfer_error()),
+        Blocking::new(move || {
+            let fds = self.fds.lock().unwrap();
+            match t.blocking_transfer(&fds.device_fd, &fds.stat_fd) {
+                Ok(_n) => Ok(()),
+                Err(e) => Err(e.to_transfer_error()),
+            }
         })
     }
 
