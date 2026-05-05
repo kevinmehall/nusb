@@ -129,14 +129,6 @@ unsafe impl Send for TransferData {}
 /// docs for TransferData for details on correct usage.
 unsafe impl Sync for TransferData {}
 
-/// Transfer data used for blocking syscalls, currently only Control In/Out transfers.
-/// Since this isn't done with AIO, it has no tricky usage requirements like the
-/// main TransferData type.
-pub(crate) struct BlockingTransferData {
-    kind: BlockingTransferType,
-    pub(super) buffer: Buffer,
-}
-
 /// Components for an AIO transfer
 struct AioTransferParts {
     /// The kind of transfer, e.g. Bulk In/Out
@@ -173,57 +165,70 @@ enum AioTransferType {
     BulkOut,
 }
 
-/// Kinds of Blocking transfers
-enum BlockingTransferType {
-    /// Control Out transfer
-    ControlOut,
-    /// Control In transfer
-    ControlIn {
-        /// This is the length we want to read
-        data_in_len: u32,
-    },
+/// Transfer data used for blocking syscalls, currently only Control In/Out transfers.
+/// Since this isn't done with AIO, it has no tricky usage requirements like the
+/// main TransferData type. We simplify this significantly by just taking a `Vec`
+pub(crate) struct BlockingTransferData {
+    /// Control Packet plus data for ControlOut
+    pub(super) out_buffer: Vec<u8>,
+    /// size for reading in, 0 for ControlOut
+    data_in_len: usize,
 }
 
 impl BlockingTransferData {
     pub(super) fn new_control_out(data: ControlOut) -> BlockingTransferData {
-        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
-        buffer.extend_from_slice(&data.setup_packet());
-        buffer.extend_from_slice(data.data);
+        let mut out_buffer =
+            Vec::with_capacity(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
+        out_buffer.extend_from_slice(&data.setup_packet());
+        out_buffer.extend_from_slice(data.data);
         BlockingTransferData {
-            kind: BlockingTransferType::ControlOut,
-            buffer,
+            out_buffer,
+            data_in_len: 0,
         }
     }
 
     pub(super) fn new_control_in(data: ControlIn) -> BlockingTransferData {
-        let mut buffer = Buffer::new(SETUP_PACKET_SIZE.checked_add(data.length as usize).unwrap());
-        buffer.extend_from_slice(&data.setup_packet());
+        let mut out_buffer = Vec::with_capacity(SETUP_PACKET_SIZE);
+        out_buffer.extend_from_slice(&data.setup_packet());
         BlockingTransferData {
-            kind: BlockingTransferType::ControlIn {
-                data_in_len: data.length as u32,
-            },
-            buffer,
+            out_buffer,
+            data_in_len: data.length as usize,
         }
     }
 
-    pub(super) fn blocking_transfer(
+    pub(super) fn blocking_out_transfer(
         &mut self,
         fd: &OwnedFd,
         stat_fd: &OwnedFd,
-    ) -> Result<usize, UsbResult> {
-        let Self { kind, buffer } = self;
-        match kind {
-            BlockingTransferType::ControlOut => handle_errno_result(io::write(fd, buffer), stat_fd),
-            BlockingTransferType::ControlIn { data_in_len } => {
-                let status = handle_errno_result(io::write(fd, buffer), stat_fd);
-                if status.is_err() {
-                    return status;
-                }
-                let dil = *data_in_len as usize;
-                let ptr = buffer.extend_fill(dil, 0);
-                handle_errno_result(io::read(fd, ptr), stat_fd)
-            }
-        }
+    ) -> Result<(), TransferError> {
+        let Self {
+            out_buffer,
+            data_in_len: _,
+        } = self;
+        handle_errno_result(io::write(fd, out_buffer), stat_fd)
+            .map(|_| ())
+            .map_err(|e| e.to_transfer_error())
+    }
+
+    pub(super) fn blocking_in_transfer(
+        &mut self,
+        fd: &OwnedFd,
+        stat_fd: &OwnedFd,
+    ) -> Result<Vec<u8>, TransferError> {
+        let Self {
+            out_buffer,
+            data_in_len,
+        } = self;
+        handle_errno_result(io::write(fd, out_buffer), stat_fd)
+            .map_err(|e| e.to_transfer_error())?;
+
+        let mut v = Vec::with_capacity(*data_in_len);
+        let cnt = handle_errno_result(
+            io::read(fd, rustix::buffer::spare_capacity(&mut v)),
+            stat_fd,
+        )
+        .map_err(|e| e.to_transfer_error())?;
+        Ok(v)
     }
 }
 

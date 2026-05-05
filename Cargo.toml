@@ -46,7 +46,7 @@ smol = ["dep:blocking", "dep:futures-io"]
 tokio = ["dep:tokio"]
 
 [target.'cfg(target_os="illumos")'.dependencies]
-rustix = { version = "0.38.17", features = ["fs", "event", "net"] }
+rustix = { version = "1", features = ["fs", "event", "net"] }
 devinfo = "0.1.0"
 libc = { version = "0.2.185" }
 

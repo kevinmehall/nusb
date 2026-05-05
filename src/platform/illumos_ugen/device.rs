@@ -493,20 +493,7 @@ impl IllumosDevice {
         let mut t = BlockingTransferData::new_control_in(data);
         Blocking::new(move || {
             let fds = self.fds.lock().unwrap();
-            match t.blocking_transfer(&fds.device_fd, &fds.stat_fd) {
-                Ok(n) => {
-                    use crate::transfer::SETUP_PACKET_SIZE;
-                    // TODO(AJM): Is this:
-                    // 1. `SETUP_PACKET_SIZE..(SETUP_PACKET_SIZE + n)`, OR
-                    // 2. `SETUP_PACKET_SIZE..n`?
-                    let Some(read) = t.buffer.get(SETUP_PACKET_SIZE..(SETUP_PACKET_SIZE + n))
-                    else {
-                        panic!()
-                    };
-                    Ok(read.to_owned())
-                }
-                Err(e) => Err(e.to_transfer_error()),
-            }
+            t.blocking_in_transfer(&fds.device_fd, &fds.stat_fd)
         })
     }
 
@@ -522,10 +509,7 @@ impl IllumosDevice {
         let mut t = BlockingTransferData::new_control_out(data);
         Blocking::new(move || {
             let fds = self.fds.lock().unwrap();
-            match t.blocking_transfer(&fds.device_fd, &fds.stat_fd) {
-                Ok(_n) => Ok(()),
-                Err(e) => Err(e.to_transfer_error()),
-            }
+            t.blocking_out_transfer(&fds.device_fd, &fds.stat_fd)
         })
     }
 
