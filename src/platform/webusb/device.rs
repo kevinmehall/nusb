@@ -9,8 +9,8 @@ use std::{
 pub use private::UniqueUsbDevice;
 use wasm_bindgen_futures::{js_sys::Array, spawn_local, wasm_bindgen::JsCast, JsFuture};
 use web_sys::{
-    js_sys::Uint8Array,
-    UsbControlTransferParameters, UsbDevice, UsbInTransferResult, UsbOutTransferResult,
+    js_sys::Uint8Array, UsbControlTransferParameters, UsbDevice, UsbInTransferResult,
+    UsbOutTransferResult,
 };
 
 use crate::{
@@ -290,7 +290,12 @@ pub async fn extract_string(device: &UsbDevice, id: u16) -> Result<String, Error
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
     let mut data = Uint8Array::new(
         &res.data()
-            .ok_or_else(|| Error::new(ErrorKind::Other, "string descriptor transfer returned no data"))?
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Other,
+                    "string descriptor transfer returned no data",
+                )
+            })?
             .buffer(),
     )
     .to_vec();
@@ -574,7 +579,8 @@ impl WebusbEndpoint {
                         }
                     };
 
-                    let transfer_result: UsbOutTransferResult = JsCast::unchecked_from_js(result.into());
+                    let transfer_result: UsbOutTransferResult =
+                        JsCast::unchecked_from_js(result.into());
                     unsafe {
                         // Donate caller's buffer memory to TransferData,
                         // freeing the placeholder first.
@@ -596,7 +602,10 @@ impl WebusbEndpoint {
                     let requested_len = buffer.requested_len() as u32;
 
                     let result = match JsFuture::from(
-                        device.device.device.transfer_in(endpoint_number, requested_len),
+                        device
+                            .device
+                            .device
+                            .transfer_in(endpoint_number, requested_len),
                     )
                     .await
                     {
@@ -611,7 +620,8 @@ impl WebusbEndpoint {
                         }
                     };
 
-                    let transfer_result: UsbInTransferResult = JsCast::unchecked_from_js(result.into());
+                    let transfer_result: UsbInTransferResult =
+                        JsCast::unchecked_from_js(result.into());
 
                     let received = match transfer_result.data() {
                         Some(d) => Uint8Array::new(&d.buffer()),

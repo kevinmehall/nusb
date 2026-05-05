@@ -52,7 +52,12 @@ pub struct DeviceInfo {
     #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub(crate) bus_id: String,
 
     #[cfg(any(
@@ -64,13 +69,23 @@ pub struct DeviceInfo {
     ))]
     pub(crate) device_address: u8,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub(crate) port_chain: Vec<u8>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub(crate) device_version: u16,
 
     pub(crate) usb_version: u16,
@@ -162,7 +177,12 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
@@ -186,13 +206,23 @@ impl DeviceInfo {
     }
 
     /// Identifier for the bus / host controller where the device is connected.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
     /// Number identifying the device within the bus.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn device_address(&self) -> u8 {
         self.device_address
     }
@@ -211,7 +241,12 @@ impl DeviceInfo {
 
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn device_version(&self) -> u16 {
         self.device_version
     }
@@ -243,7 +278,12 @@ impl DeviceInfo {
     }
 
     /// Connection speed
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn speed(&self) -> Option<Speed> {
         self.speed
     }
@@ -484,7 +524,12 @@ impl UsbControllerType {
 /// * Linux: `path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
 pub struct BusInfo {
     #[cfg(any(target_os = "linux"))]
     pub(crate) path: SysfsPath,
@@ -535,7 +580,12 @@ pub struct BusInfo {
     pub(crate) controller_type: Option<UsbControllerType>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_arch = "wasm32"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
     #[cfg(any(target_os = "linux"))]
