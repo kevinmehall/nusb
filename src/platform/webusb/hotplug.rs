@@ -21,12 +21,9 @@ struct Inner {
 
 pub(crate) struct WebusbHotplugWatch {
     inner: Arc<Mutex<Inner>>,
+    _onconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
+    _ondisconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
 }
-
-// WebUSB callbacks dispatch on the JS event loop, which is single-threaded.
-// We expose Send/Sync to satisfy the cross-platform HotplugWatch bound.
-unsafe impl Send for WebusbHotplugWatch {}
-unsafe impl Sync for WebusbHotplugWatch {}
 
 fn push(inner: &Mutex<Inner>, event: HotplugEvent) {
     let waker = {
@@ -47,9 +44,9 @@ impl WebusbHotplugWatch {
             events: VecDeque::new(),
         }));
 
-        {
+        let onconnect = {
             let inner = inner.clone();
-            let onconnect = Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
+            Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
                 let inner = inner.clone();
                 spawn_local(async move {
                     let device = Arc::new(UniqueUsbDevice::new(event.device()));
@@ -58,22 +55,24 @@ impl WebusbHotplugWatch {
                         Err(e) => log::warn!("hotplug connect descriptor read: {e:?}"),
                     }
                 });
-            }) as Box<dyn FnMut(UsbConnectionEvent)>);
-            usb.set_onconnect(Some(onconnect.as_ref().unchecked_ref()));
-            onconnect.forget();
-        }
+            }) as Box<dyn FnMut(UsbConnectionEvent)>)
+        };
+        usb.set_onconnect(Some(onconnect.as_ref().unchecked_ref()));
 
-        {
+        let ondisconnect = {
             let inner = inner.clone();
-            let ondisconnect = Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
+            Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
                 let id = crate::DeviceId(DeviceId::from_device(&event.device()));
                 push(&inner, HotplugEvent::Disconnected(id));
-            }) as Box<dyn FnMut(UsbConnectionEvent)>);
-            usb.set_ondisconnect(Some(ondisconnect.as_ref().unchecked_ref()));
-            ondisconnect.forget();
-        }
+            }) as Box<dyn FnMut(UsbConnectionEvent)>)
+        };
+        usb.set_ondisconnect(Some(ondisconnect.as_ref().unchecked_ref()));
 
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            _onconnect: onconnect,
+            _ondisconnect: ondisconnect,
+        })
     }
 
     pub(crate) fn poll_next(&mut self, cx: &mut std::task::Context<'_>) -> Poll<HotplugEvent> {
@@ -83,6 +82,15 @@ impl WebusbHotplugWatch {
         } else {
             guard.waker = Some(cx.waker().clone());
             Poll::Pending
+        }
+    }
+}
+
+impl Drop for WebusbHotplugWatch {
+    fn drop(&mut self) {
+        if let Ok(usb) = super::usb() {
+            usb.set_onconnect(None);
+            usb.set_ondisconnect(None);
         }
     }
 }

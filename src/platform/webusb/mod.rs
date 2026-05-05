@@ -1,9 +1,6 @@
 mod device;
 mod enumeration;
 mod hotplug;
-mod transfer;
-
-pub(crate) use transfer::TransferData;
 
 pub use enumeration::{list_buses, list_devices};
 

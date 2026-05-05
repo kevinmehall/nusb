@@ -1,13 +1,18 @@
 use std::{
     collections::VecDeque,
-    mem::ManuallyDrop,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
     time::Duration,
 };
 
 pub use private::UniqueUsbDevice;
-use wasm_bindgen_futures::{js_sys::Array, spawn_local, wasm_bindgen::JsCast, JsFuture};
+use wasm_bindgen_futures::{
+    js_sys::{Array, Promise},
+    wasm_bindgen::{JsCast, JsValue},
+    JsFuture,
+};
 use web_sys::{
     js_sys::Uint8Array, UsbControlTransferParameters, UsbDevice, UsbInTransferResult,
     UsbOutTransferResult,
@@ -19,16 +24,12 @@ use crate::{
         ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor,
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
-    transfer::{
-        internal::{notify_completion, take_completed_from_queue, Idle, Notify, Pending},
-        Buffer, Completion, ControlIn, ControlOut, Direction, TransferError,
-    },
+    transfer::{Buffer, Completion, ControlIn, ControlOut, Direction, TransferError},
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
 
 use super::{
-    js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error,
-    TransferData, WebFuture,
+    js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error, WebFuture,
 };
 
 pub mod private {
@@ -446,31 +447,56 @@ impl WebusbInterface {
         Ok(WebusbEndpoint {
             inner: Arc::new(EndpointInner {
                 address,
-                notify: Arc::new(Notify::new()),
                 interface: self.clone(),
             }),
             max_packet_size,
             pending: VecDeque::new(),
-            idle_transfer: None,
         })
     }
 }
+
+/// One queued transfer.
+///
+/// WebUSB owns its own buffers in JS land, so unlike the OS-level backends
+/// we just hold the user's `Buffer` alongside the `JsFuture` for the in-flight
+/// promise.
+enum Pending {
+    InFlight {
+        future: JsFuture<JsValue>,
+        buffer: Buffer,
+        direction: Direction,
+    },
+    /// Submission failed synchronously (e.g. validation error or a thrown
+    /// exception from the WebUSB API). Returned as a completion when the
+    /// caller next polls.
+    Failed {
+        buffer: Buffer,
+        error: TransferError,
+    },
+}
+
+// `JsFuture` contains an `Rc<RefCell<...>>`, so it is neither `Send` nor
+// `Sync`. The cross-platform `Endpoint` API requires its backend to be both
+// (so users can pass endpoints into Send-bounded async runtimes, the same
+// reason `wasm-bindgen` itself unsafe-impls `Send`/`Sync` for `JsValue`).
+// wasm32 is single-threaded by default, and even with the threads proposal
+// JS objects can't transit between worker contexts, so this is sound in
+// practice.
+unsafe impl Send for Pending {}
+unsafe impl Sync for Pending {}
 
 pub(crate) struct WebusbEndpoint {
     inner: Arc<EndpointInner>,
 
     pub(crate) max_packet_size: usize,
 
-    /// A queue of pending transfers, expected to complete in order
-    pending: VecDeque<Pending<super::TransferData>>,
-
-    idle_transfer: Option<Idle<super::TransferData>>,
+    /// A queue of pending transfers, expected to complete in order.
+    pending: VecDeque<Pending>,
 }
 
 struct EndpointInner {
     interface: Arc<WebusbInterface>,
     address: u8,
-    notify: Arc<Notify>,
 }
 
 impl WebusbEndpoint {
@@ -488,186 +514,76 @@ impl WebusbEndpoint {
         // cannot be cancelled and will run to completion on the JS event loop.
     }
 
-    /// Push a transfer that fails immediately with `Fault`. Used by the
-    /// public `Endpoint::submit` to surface validation errors (e.g. an
-    /// IN buffer length that's not a multiple of max packet size) through
-    /// the same completion queue as real transfers.
-    pub(crate) fn submit_err(&mut self, buffer: Buffer, _err: TransferError) {
-        let buf_ptr = buffer.ptr;
-        let capacity = buffer.capacity as u32;
-        let requested_len = buffer.requested_len as u32;
-        let len = buffer.len as u32;
-        let _buffer = ManuallyDrop::new(buffer);
-
-        let transfer = self
-            .idle_transfer
-            .take()
-            .unwrap_or_else(|| Idle::new(self.inner.notify.clone(), super::TransferData::new()));
-        let transfer = transfer.pre_submit();
-        let ptr = transfer.as_ptr();
-        unsafe {
-            // Replace the placeholder TransferData buffer with the caller's.
-            drop(Vec::from_raw_parts((*ptr).buf, 0, (*ptr).capacity as usize));
-            (*ptr).buf = buf_ptr;
-            (*ptr).capacity = capacity;
-            (*ptr).requested_len = requested_len;
-            (*ptr).actual_len = len;
-            (*ptr).fault = true;
-            notify_completion::<TransferData>(ptr);
-        }
-        self.pending.push_back(transfer);
+    /// Enqueue a transfer that fails immediately with the given error.
+    ///
+    /// Used by the public `Endpoint::submit` to surface validation errors
+    /// through the same completion queue as real transfers.
+    pub(crate) fn submit_err(&mut self, buffer: Buffer, error: TransferError) {
+        self.pending.push_back(Pending::Failed { buffer, error });
     }
 
     pub(crate) fn submit(&mut self, buffer: Buffer) {
-        let transfer = self
-            .idle_transfer
-            .take()
-            .unwrap_or_else(|| Idle::new(self.inner.notify.clone(), super::TransferData::new()));
-
-        let buffer = ManuallyDrop::new(buffer);
-
         let address = self.inner.address;
-        let dir = Direction::from_address(self.inner.address);
+        let direction = Direction::from_address(address);
+        let endpoint_number = address & 0x7F;
+        let device = &self.inner.interface.device.device;
 
-        let transfer = transfer.pre_submit();
-        let ptr = transfer.as_ptr();
-
-        let device = self.inner.interface.clone();
-
-        spawn_local(async move {
-            match dir {
-                Direction::Out => {
-                    // Capture the buffer's geometry before we donate its
-                    // memory to TransferData. The data needs to be copied
-                    // into a JS Uint8Array for `transfer_out_with_buffer_source`
-                    // anyway; the original buffer's memory just rides along
-                    // so `take_completion` returns a `Buffer` with valid
-                    // (ptr, len, capacity) and its Drop doesn't trip
-                    // `Vec::from_raw_parts`'s `len <= capacity` precondition.
-                    let buf_ptr: *mut u8 = buffer.as_ptr() as *mut u8;
-                    let capacity = buffer.capacity() as u32;
-                    let payload_len = buffer.len() as u32;
-                    let data = buffer.to_vec();
-                    let array = Uint8Array::from(data.as_slice());
-                    let endpoint_number = address & 0x7F;
-
-                    let donate_on_fault = || unsafe {
-                        drop(Vec::from_raw_parts((*ptr).buf, 0, (*ptr).capacity as usize));
-                        (*ptr).buf = buf_ptr;
-                        (*ptr).capacity = capacity;
-                        (*ptr).fault = true;
-                        notify_completion::<TransferData>(ptr);
-                    };
-
-                    let promise = match device
-                        .device
-                        .device
-                        .transfer_out_with_buffer_source(endpoint_number, array.unchecked_ref())
-                    {
-                        Ok(p) => p,
-                        Err(_) => {
-                            donate_on_fault();
-                            return;
-                        }
-                    };
-
-                    let result = match JsFuture::from(promise).await {
-                        Ok(r) => r,
-                        Err(_) => {
-                            donate_on_fault();
-                            return;
-                        }
-                    };
-
-                    let transfer_result: UsbOutTransferResult =
-                        JsCast::unchecked_from_js(result.into());
-                    unsafe {
-                        // Donate caller's buffer memory to TransferData,
-                        // freeing the placeholder first.
-                        drop(Vec::from_raw_parts((*ptr).buf, 0, (*ptr).capacity as usize));
-                        (*ptr).buf = buf_ptr;
-                        (*ptr).capacity = capacity;
-                        (*ptr).status = transfer_result.status();
-                        (*ptr).actual_len = transfer_result.bytes_written();
-                        (*ptr).requested_len = payload_len;
-                        notify_completion::<TransferData>(ptr)
+        let promise: Promise<JsValue> = match direction {
+            Direction::Out => {
+                let array = Uint8Array::from(&buffer[..]);
+                match device.transfer_out_with_buffer_source(endpoint_number, array.unchecked_ref())
+                {
+                    Ok(p) => p.unchecked_into(),
+                    Err(_) => {
+                        self.pending.push_back(Pending::Failed {
+                            buffer,
+                            error: TransferError::Fault,
+                        });
+                        return;
                     }
-                    // `buffer` is ManuallyDrop; its memory is now owned by
-                    // TransferData.
-                }
-                Direction::In => {
-                    let endpoint_number = address & 0x7F;
-                    let buf_ptr: *mut u8 = buffer.as_ptr() as *mut u8;
-                    let capacity = buffer.capacity() as u32;
-                    let requested_len = buffer.requested_len() as u32;
-
-                    let result = match JsFuture::from(
-                        device
-                            .device
-                            .device
-                            .transfer_in(endpoint_number, requested_len),
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            unsafe {
-                                drop(ManuallyDrop::into_inner(buffer));
-                                (*ptr).fault = true;
-                                notify_completion::<TransferData>(ptr);
-                            }
-                            return;
-                        }
-                    };
-
-                    let transfer_result: UsbInTransferResult =
-                        JsCast::unchecked_from_js(result.into());
-
-                    let received = match transfer_result.data() {
-                        Some(d) => Uint8Array::new(&d.buffer()),
-                        None => {
-                            unsafe {
-                                drop(ManuallyDrop::into_inner(buffer));
-                                (*ptr).fault = true;
-                                notify_completion::<TransferData>(ptr);
-                            }
-                            return;
-                        }
-                    };
-
-                    // Copy received bytes directly into the caller's buffer.
-                    let received_len = received.length().min(capacity);
-                    received.copy_to(unsafe {
-                        std::slice::from_raw_parts_mut(buf_ptr, received_len as usize)
-                    });
-
-                    unsafe {
-                        // Donate the caller's buffer memory to TransferData, freeing
-                        // TransferData's original zero-capacity placeholder.
-                        drop(Vec::from_raw_parts((*ptr).buf, 0, (*ptr).capacity as usize));
-                        (*ptr).buf = buf_ptr;
-                        (*ptr).capacity = capacity;
-                        (*ptr).actual_len = received_len;
-                        (*ptr).requested_len = requested_len;
-                        (*ptr).status = transfer_result.status();
-                        notify_completion::<TransferData>(ptr)
-                    }
-                    // buffer is ManuallyDrop; its memory is now owned by TransferData.
                 }
             }
+            Direction::In => device
+                .transfer_in(endpoint_number, buffer.requested_len() as u32)
+                .unchecked_into(),
+        };
+
+        self.pending.push_back(Pending::InFlight {
+            future: JsFuture::from(promise),
+            buffer,
+            direction,
         });
-        self.pending.push_back(transfer);
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
-        self.inner.notify.subscribe(cx);
-        let dir = Direction::from_address(self.inner.address);
-        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let completion = unsafe { transfer.take_completion(dir) };
-            self.idle_transfer = Some(transfer);
-            Poll::Ready(completion)
-        } else {
-            Poll::Pending
+        let Some(head) = self.pending.front_mut() else {
+            return Poll::Pending;
+        };
+
+        match head {
+            Pending::Failed { .. } => {
+                let Some(Pending::Failed { buffer, error }) = self.pending.pop_front() else {
+                    unreachable!()
+                };
+                Poll::Ready(Completion {
+                    buffer,
+                    actual_len: 0,
+                    status: Err(error),
+                })
+            }
+            Pending::InFlight { future, .. } => {
+                let result = match Pin::new(future).poll(cx) {
+                    Poll::Ready(r) => r,
+                    Poll::Pending => return Poll::Pending,
+                };
+                let Some(Pending::InFlight {
+                    buffer, direction, ..
+                }) = self.pending.pop_front()
+                else {
+                    unreachable!()
+                };
+                Poll::Ready(complete_transfer(buffer, direction, result))
+            }
         }
     }
 
@@ -688,6 +604,63 @@ impl WebusbEndpoint {
             .map_err(js_value_to_error)
             .map(|_| ())
         })
+    }
+}
+
+fn complete_transfer(
+    mut buffer: Buffer,
+    direction: Direction,
+    result: Result<JsValue, JsValue>,
+) -> Completion {
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            return Completion {
+                buffer,
+                actual_len: 0,
+                status: Err(js_value_to_transfer_error(e)),
+            };
+        }
+    };
+
+    match direction {
+        Direction::Out => {
+            let result: UsbOutTransferResult = JsCast::unchecked_from_js(result.into());
+            // `buffer.len` is the user-supplied payload length (unchanged from
+            // submit). `actual_len` is what the device acknowledged.
+            Completion {
+                actual_len: result.bytes_written() as usize,
+                status: webusb_status_to_nusb_transfer_error(result.status()),
+                buffer,
+            }
+        }
+        Direction::In => {
+            let result: UsbInTransferResult = JsCast::unchecked_from_js(result.into());
+            let Some(data) = result.data() else {
+                return Completion {
+                    buffer,
+                    actual_len: 0,
+                    status: Err(TransferError::Fault),
+                };
+            };
+            let received = Uint8Array::new(&data.buffer());
+            let received_len = received.length().min(buffer.capacity);
+            // Safety: the slice covers `received_len` bytes within the buffer's
+            // allocation (capacity-bounded). `Buffer` derefs as `&[u8]` of
+            // length `len`, so we write past `len` here.
+            unsafe {
+                received.copy_to(std::slice::from_raw_parts_mut(
+                    buffer.ptr,
+                    received_len as usize,
+                ));
+            }
+            buffer.len = received_len;
+            Completion {
+                actual_len: received_len as usize,
+                status: webusb_status_to_nusb_transfer_error(result.status()),
+                buffer,
+            }
+        }
     }
 }
 
