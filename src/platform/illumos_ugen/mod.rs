@@ -1,3 +1,5 @@
+/// Details about the Illumos ugen interface for USSB can be found at
+/// https://illumos.org/man/4D/ugen
 mod transfer;
 use crate::ErrorKind;
 use rustix::io::Errno;
