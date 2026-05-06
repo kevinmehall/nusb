@@ -347,7 +347,7 @@ fn get_cfg_descriptors(
     let cnt = io::read(fd, &mut descriptors)
         .map_err(|e| Error::new_os(ErrorKind::Other, "failed to read", e))?;
     if cnt != total as usize {
-        return Err(Error::new(ErrorKind::Other, "short descriptor write"));
+        return Err(Error::new(ErrorKind::Other, "short descriptor read"));
     }
 
     Ok(descriptors)
