@@ -78,7 +78,7 @@ pub(crate) async fn device_to_info(device: Arc<UniqueUsbDevice>) -> Result<Devic
                 for interface_group in configuration.interfaces() {
                     let alternate = interface_group.first_alt_setting();
                     let interface_string = if let Some(id) = alternate.string_index() {
-                        Some(extract_string(&device, id.get() as u16).await?)
+                        extract_string(&device, id.get() as u16).await.ok()
                     } else {
                         None
                     };
