@@ -9,7 +9,7 @@ use std::{
 
 pub use private::UniqueUsbDevice;
 use wasm_bindgen_futures::{
-    js_sys::{Array, Promise},
+    js_sys::Promise,
     wasm_bindgen::{JsCast, JsValue},
     JsFuture,
 };
@@ -22,7 +22,7 @@ use crate::{
     bitset::EndpointBitSet,
     descriptors::{
         ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor,
-        DESCRIPTOR_TYPE_CONFIGURATION,
+        DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_DEVICE,
     },
     transfer::{Buffer, Completion, ControlIn, ControlOut, Direction, TransferError},
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
@@ -63,6 +63,7 @@ pub mod private {
 #[derive(Clone)]
 pub(crate) struct WebusbDevice {
     pub device: Arc<UniqueUsbDevice>,
+    device_descriptor: Vec<u8>,
     config_descriptors: Vec<Vec<u8>>,
     speed: Option<Speed>,
 }
@@ -74,35 +75,32 @@ impl WebusbDevice {
         let target_device = d.device.clone();
         let speed = d.speed;
         WebFuture(async move {
-            let usb = super::usb()?;
-            let devices = JsFuture::from(usb.get_devices())
+            JsFuture::from(target_device.open())
                 .await
                 .map_err(js_value_to_error)?;
-            let devices: Array = JsCast::unchecked_from_js(devices.into());
 
-            for device in devices {
-                let device: UsbDevice = JsCast::unchecked_from_js(device);
-                if device.eq(&target_device) {
-                    JsFuture::from(device.open())
-                        .await
-                        .map_err(js_value_to_error)?;
+            let device_descriptor = get_descriptor(
+                &target_device,
+                DESCRIPTOR_TYPE_DEVICE,
+                0,
+                0,
+                Duration::from_millis(500),
+            )
+            .await?;
+            let config_descriptors = extract_decriptors(&target_device).await?;
 
-                    let config_descriptors = extract_decriptors(&device).await?;
-
-                    #[allow(clippy::arc_with_non_send_sync)]
-                    return Ok(Arc::new(Self {
-                        device: Arc::new(UniqueUsbDevice::new(device)),
-                        config_descriptors,
-                        speed,
-                    }));
-                }
-            }
-            Err(Error::new(ErrorKind::NotFound, "device not found"))
+            #[allow(clippy::arc_with_non_send_sync)]
+            Ok(Arc::new(Self {
+                device: target_device,
+                device_descriptor,
+                config_descriptors,
+                speed,
+            }))
         })
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
-        DeviceDescriptor::new(&self.config_descriptors[0]).unwrap()
+        DeviceDescriptor::new(&self.device_descriptor).unwrap()
     }
 
     pub(crate) fn speed(&self) -> Option<Speed> {
@@ -289,7 +287,9 @@ pub async fn extract_string(device: &UsbDevice, id: u16) -> Result<String, Error
         .await
         .map_err(js_value_to_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
-    let mut data = Uint8Array::new(
+    webusb_status_to_nusb_transfer_error(res.status())
+        .map_err(|_| Error::new(ErrorKind::Other, "string descriptor transfer failed"))?;
+    let data = Uint8Array::new(
         &res.data()
             .ok_or_else(|| {
                 Error::new(
@@ -301,15 +301,17 @@ pub async fn extract_string(device: &UsbDevice, id: u16) -> Result<String, Error
     )
     .to_vec();
 
-    String::from_utf16(
-        &data
-            .drain(2..data[0] as usize)
-            .collect::<Vec<_>>()
-            .chunks(2)
-            .map(|c| ((c[1] as u16) << 8) | c[0] as u16)
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| Error::new(ErrorKind::Other, "invalid utf16"))
+    if data.len() < 2 {
+        return Err(Error::new(ErrorKind::Other, "string descriptor too short"));
+    }
+    // Bound the declared length (`data[0]`) to what was actually returned, so
+    // a malformed length byte can't index out of bounds.
+    let len = (data[0] as usize).min(data.len());
+    let utf16: Vec<u16> = data[2..len]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    String::from_utf16(&utf16).map_err(|_| Error::new(ErrorKind::Other, "invalid utf16"))
 }
 
 #[derive(Clone)]
@@ -558,9 +560,10 @@ impl WebusbEndpoint {
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
-        let Some(head) = self.pending.front_mut() else {
-            return Poll::Pending;
-        };
+        let head = self
+            .pending
+            .front_mut()
+            .expect("poll_next_complete called with no transfers pending");
 
         match head {
             Pending::Failed { .. } => {

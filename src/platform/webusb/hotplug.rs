@@ -21,8 +21,8 @@ struct Inner {
 
 pub(crate) struct WebusbHotplugWatch {
     inner: Arc<Mutex<Inner>>,
-    _onconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
-    _ondisconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
+    onconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
+    ondisconnect: Closure<dyn FnMut(UsbConnectionEvent)>,
 }
 
 fn push(inner: &Mutex<Inner>, event: HotplugEvent) {
@@ -57,7 +57,8 @@ impl WebusbHotplugWatch {
                 });
             }) as Box<dyn FnMut(UsbConnectionEvent)>)
         };
-        usb.set_onconnect(Some(onconnect.as_ref().unchecked_ref()));
+        usb.add_event_listener_with_callback("connect", onconnect.as_ref().unchecked_ref())
+            .map_err(super::js_value_to_error)?;
 
         let ondisconnect = {
             let inner = inner.clone();
@@ -66,12 +67,13 @@ impl WebusbHotplugWatch {
                 push(&inner, HotplugEvent::Disconnected(id));
             }) as Box<dyn FnMut(UsbConnectionEvent)>)
         };
-        usb.set_ondisconnect(Some(ondisconnect.as_ref().unchecked_ref()));
+        usb.add_event_listener_with_callback("disconnect", ondisconnect.as_ref().unchecked_ref())
+            .map_err(super::js_value_to_error)?;
 
         Ok(Self {
             inner,
-            _onconnect: onconnect,
-            _ondisconnect: ondisconnect,
+            onconnect: onconnect,
+            ondisconnect: ondisconnect,
         })
     }
 
@@ -89,8 +91,14 @@ impl WebusbHotplugWatch {
 impl Drop for WebusbHotplugWatch {
     fn drop(&mut self) {
         if let Ok(usb) = super::usb() {
-            usb.set_onconnect(None);
-            usb.set_ondisconnect(None);
+            let _ = usb.remove_event_listener_with_callback(
+                "connect",
+                self.onconnect.as_ref().unchecked_ref(),
+            );
+            let _ = usb.remove_event_listener_with_callback(
+                "disconnect",
+                self.ondisconnect.as_ref().unchecked_ref(),
+            );
         }
     }
 }
