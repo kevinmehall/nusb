@@ -1,16 +1,12 @@
 use crate::platform::illumos_ugen::{errno_to_transfer_error, ugen_to_transfer_error};
 use crate::transfer::internal::Idle;
 use crate::transfer::internal::Pending;
-use crate::transfer::{
-    internal::notify_completion, Buffer, Completion, ControlIn, ControlOut, TransferError,
-    SETUP_PACKET_SIZE,
-};
+use crate::transfer::{internal::notify_completion, Buffer, Completion, TransferError};
 use core::mem::MaybeUninit;
-use rustix::fd::{BorrowedFd, OwnedFd};
+use rustix::fd::BorrowedFd;
 use rustix::io;
 use rustix::io::Errno;
 use std::cell::UnsafeCell;
-use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 // We have two possible cases for transfer errors: the raw read/write
@@ -163,73 +159,6 @@ enum AioTransferType {
     BulkIn,
     /// Bulk Out Transfer
     BulkOut,
-}
-
-/// Transfer data used for blocking syscalls, currently only Control In/Out transfers.
-/// Since this isn't done with AIO, it has no tricky usage requirements like the
-/// main TransferData type. We simplify this significantly by just taking a `Vec`
-pub(crate) struct BlockingTransferData {
-    /// Control Packet plus data for ControlOut
-    pub(super) out_buffer: Vec<u8>,
-    /// size for reading in, 0 for ControlOut
-    data_in_len: usize,
-}
-
-impl BlockingTransferData {
-    pub(super) fn new_control_out(data: ControlOut) -> BlockingTransferData {
-        let mut out_buffer =
-            Vec::with_capacity(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
-        out_buffer.extend_from_slice(&data.setup_packet());
-        out_buffer.extend_from_slice(data.data);
-        BlockingTransferData {
-            out_buffer,
-            data_in_len: 0,
-        }
-    }
-
-    pub(super) fn new_control_in(data: ControlIn) -> BlockingTransferData {
-        let mut out_buffer = Vec::with_capacity(SETUP_PACKET_SIZE);
-        out_buffer.extend_from_slice(&data.setup_packet());
-        BlockingTransferData {
-            out_buffer,
-            data_in_len: data.length as usize,
-        }
-    }
-
-    pub(super) fn blocking_out_transfer(
-        &mut self,
-        fd: &OwnedFd,
-        stat_fd: &OwnedFd,
-    ) -> Result<(), TransferError> {
-        let Self {
-            out_buffer,
-            data_in_len: _,
-        } = self;
-        handle_errno_result(io::write(fd, out_buffer), stat_fd)
-            .map(|_| ())
-            .map_err(|e| e.to_transfer_error())
-    }
-
-    pub(super) fn blocking_in_transfer(
-        &mut self,
-        fd: &OwnedFd,
-        stat_fd: &OwnedFd,
-    ) -> Result<Vec<u8>, TransferError> {
-        let Self {
-            out_buffer,
-            data_in_len,
-        } = self;
-        handle_errno_result(io::write(fd, out_buffer), stat_fd)
-            .map_err(|e| e.to_transfer_error())?;
-
-        let mut v = Vec::with_capacity(*data_in_len);
-        let cnt = handle_errno_result(
-            io::read(fd, rustix::buffer::spare_capacity(&mut v)),
-            stat_fd,
-        )
-        .map_err(|e| e.to_transfer_error())?;
-        Ok(v)
-    }
 }
 
 impl Idle<TransferData> {
@@ -496,30 +425,6 @@ extern "C" fn aio_callback(arg: libc::sigval) {
 
         // Notify that this transfer has completed
         notify_completion::<TransferData>(alias_ptr)
-    }
-}
-
-fn handle_errno_result(
-    status: Result<usize, Errno>,
-    stat_fd: &OwnedFd,
-) -> Result<usize, UsbResult> {
-    let Err(errno) = status else {
-        return status.map_err(UsbResult::Errno);
-    };
-    // The exact wording is that if the return value is -1 we should check the
-    // stat fd
-    if errno.raw_os_error() == -1 {
-        let mut stat: [u8; 4] = [0; 4];
-        match io::read(stat_fd, &mut stat) {
-            Ok(4) => Err(UsbResult::UgenStat(u32::from_le_bytes(stat))),
-            // man page example just returns the unspecified error
-            Ok(_) => Err(UsbResult::UgenStat(USB_LC_STAT_UNSPECIFIED_ERR)),
-            Err(errno) => Err(UsbResult::Errno(errno)),
-        }
-    } else {
-        // Some other error dealing with the reading/writing. Treat this
-        // a a standard errno
-        status.map_err(UsbResult::Errno)
     }
 }
 

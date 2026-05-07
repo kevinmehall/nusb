@@ -92,11 +92,6 @@ fn errno_to_transfer_error(e: Errno) -> TransferError {
         Errno::PROTO | Errno::ILSEQ | Errno::OVERFLOW | Errno::COMM | Errno::TIME => {
             TransferError::Fault
         }
-        Errno::BADF => {
-            println!("we have closed it somehow?");
-
-            TransferError::Unknown(e.raw_os_error() as u32)
-        }
         _ => TransferError::Unknown(e.raw_os_error() as u32),
     }
 }

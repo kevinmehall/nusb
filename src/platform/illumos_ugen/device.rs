@@ -7,12 +7,13 @@ use crate::descriptors::{
     EndpointDescriptor, TransferType,
 };
 use crate::maybe_future::{blocking::Blocking, MaybeFuture};
-use crate::platform::illumos_ugen::transfer::{BlockingTransferData, UsbResult};
-use crate::platform::illumos_ugen::Errno;
+use crate::platform::illumos_ugen::transfer::UsbResult;
+use crate::platform::illumos_ugen::{errno_to_transfer_error, ugen_to_transfer_error, Errno};
 use crate::platform::TransferData;
 use crate::transfer::{
     internal::{take_completed_from_queue, Idle, Notify, Pending},
     Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
+    SETUP_PACKET_SIZE,
 };
 use crate::ErrorKind;
 use log::debug;
@@ -22,7 +23,6 @@ use rustix::{
     io,
 };
 use std::collections::{HashMap, VecDeque};
-use std::num::NonZero;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -383,9 +383,52 @@ fn get_configuration(fd: &OwnedFd) -> Result<u8, Error> {
     Ok(buf[0])
 }
 
+fn handle_errno_result(
+    status: Result<usize, Errno>,
+    stat_fd: &OwnedFd,
+) -> Result<usize, TransferError> {
+    const USB_LC_STAT_UNSPECIFIED_ERR: u32 = 0xe;
+
+    let Err(errno) = status else {
+        return status.map_err(|e| errno_to_transfer_error(e));
+    };
+    // The exact wording is that if the return value is -1 we should check the
+    // stat fd
+    if errno.raw_os_error() == -1 {
+        let mut stat: [u8; 4] = [0; 4];
+        match io::read(stat_fd, &mut stat) {
+            Ok(4) => Err(ugen_to_transfer_error(u32::from_le_bytes(stat))),
+            // man page example just returns the unspecified error
+            Ok(_) => Err(ugen_to_transfer_error(USB_LC_STAT_UNSPECIFIED_ERR)),
+            Err(errno) => Err(errno_to_transfer_error(errno)),
+        }
+    } else {
+        // Some other error dealing with the reading/writing. Treat this
+        // a a standard errno
+        status.map_err(|e| errno_to_transfer_error(e))
+    }
+}
+
 struct InternalFds {
     device_fd: OwnedFd,
     stat_fd: OwnedFd,
+}
+
+impl InternalFds {
+    fn control_out(&mut self, out_buffer: Vec<u8>) -> Result<(), TransferError> {
+        handle_errno_result(io::write(&self.device_fd, &out_buffer), &self.stat_fd).map(|_| ())
+    }
+
+    fn control_in(&mut self, out_buffer: Vec<u8>, length: usize) -> Result<Vec<u8>, TransferError> {
+        handle_errno_result(io::write(&self.device_fd, &out_buffer), &self.stat_fd)?;
+
+        let mut v = Vec::with_capacity(length);
+        handle_errno_result(
+            io::read(&self.device_fd, rustix::buffer::spare_capacity(&mut v)),
+            &self.stat_fd,
+        )?;
+        Ok(v)
+    }
 }
 
 pub(crate) struct IllumosDevice {
@@ -488,10 +531,12 @@ impl IllumosDevice {
         data: ControlIn,
         _timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        let mut t = BlockingTransferData::new_control_in(data);
+        let mut out_buffer = Vec::with_capacity(SETUP_PACKET_SIZE);
+        out_buffer.extend_from_slice(&data.setup_packet());
+
         Blocking::new(move || {
-            let fds = self.fds.lock().unwrap();
-            t.blocking_in_transfer(&fds.device_fd, &fds.stat_fd)
+            let mut fds = self.fds.lock().unwrap();
+            fds.control_in(out_buffer, data.length.into())
         })
     }
 
@@ -504,10 +549,14 @@ impl IllumosDevice {
         data: ControlOut,
         _timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        let mut t = BlockingTransferData::new_control_out(data);
+        let mut out_buffer =
+            Vec::with_capacity(SETUP_PACKET_SIZE.checked_add(data.data.len()).unwrap());
+        out_buffer.extend_from_slice(&data.setup_packet());
+        out_buffer.extend_from_slice(data.data);
+
         Blocking::new(move || {
-            let fds = self.fds.lock().unwrap();
-            t.blocking_out_transfer(&fds.device_fd, &fds.stat_fd)
+            let mut fds = self.fds.lock().unwrap();
+            fds.control_out(out_buffer)
         })
     }
 
