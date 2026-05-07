@@ -465,8 +465,6 @@ impl IllumosDevice {
                 .collect::<HashMap<_, _>>();
 
             Ok(Arc::new(Self {
-                //fd,
-                //stat_fd,
                 fds: Mutex::new(InternalFds { device_fd, stat_fd }),
                 device_descriptor,
                 config_descriptors,
