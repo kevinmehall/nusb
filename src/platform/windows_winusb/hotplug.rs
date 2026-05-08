@@ -155,13 +155,20 @@ unsafe extern "system" fn hotplug_callback(
         }
     };
 
-    let device_interface =
+    let interface =
         unsafe { WCStr::from_ptr(addr_of!((*eventdata).u.DeviceInterface.SymbolicLink[0])) };
 
-    let device_instance =
-        get_device_interface_property::<WCString>(device_interface, DEVPKEY_Device_InstanceId)
-            .unwrap();
-    let devinst = DevInst::from_instance_id(&device_instance).unwrap();
+    let Some(device_instance) =
+        get_device_interface_property::<WCString>(interface, DEVPKEY_Device_InstanceId)
+    else {
+        debug!("Failed to get device instance ID for hotplug {action:?} event on {interface}");
+        return ERROR_SUCCESS;
+    };
+
+    let Some(devinst) = DevInst::from_instance_id(&device_instance) else {
+        debug!("Failed to get device instance for hotplug {action:?} event on {interface}");
+        return ERROR_SUCCESS;
+    };
 
     debug!("Hotplug callback: action={action:?}, instance={device_instance}");
     inner.events.lock().unwrap().push_back((action, devinst));

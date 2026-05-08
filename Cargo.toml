@@ -1,6 +1,6 @@
 [package]
 name = "nusb"
-version = "0.2.2"
+version = "0.2.3"
 description = "Cross-platform low-level access to USB devices in pure Rust"
 categories = ["hardware-support"]
 keywords = ["usb", "hardware"]
@@ -54,6 +54,11 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [package.metadata.docs.rs]
 all-features = true
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
 
 [[example]]
 name = "bulk_io_smol"
