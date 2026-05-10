@@ -227,7 +227,7 @@ mod error;
 pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 
 #[cfg(target_os = "android")]
-pub use platform::{check_startup_intent, PermissionRequest};
+pub use platform::PermissionRequest;
 
 /// Get an iterator listing the connected devices.
 ///

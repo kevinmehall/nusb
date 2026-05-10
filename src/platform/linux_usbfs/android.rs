@@ -9,6 +9,7 @@ use crate::{
 use std::{
     collections::VecDeque,
     future::IntoFuture,
+    ops::Deref,
     sync::{Arc, Mutex, OnceLock, Weak},
     task::{self, Poll, Waker},
 };
@@ -18,6 +19,7 @@ use log::{debug, error};
 use jni::{
     jni_sig, jni_str,
     objects::{Global, JMap, JObject, JString},
+    refs::Reference,
     sys::jint,
     Env,
 };
@@ -217,37 +219,6 @@ fn usb_manager() -> Result<&'static AndroidUsbManager<'static>, Error> {
 
     let _ = USB_MAN.set(usb_man);
     Ok(USB_MAN.get().unwrap().as_ref())
-}
-
-/// *(Android-only)* Checks if the Android context is an activity opened by an intent of
-/// `android.hardware.usb.action.USB_DEVICE_ATTACHED`. If so, it returns the `DeviceInfo`
-/// for the caller to open the device without the need of permission request.
-///
-/// This requires the `ndk_context` crate to be initialized correctly.
-pub fn check_startup_intent() -> Option<DeviceInfo> {
-    let _ = usb_manager().ok()?;
-
-    // Note: `getIntent()` and `setIntent()` are functions of `Activity` (not `Context`)
-    let dev_info = jni_with_env(|env| {
-        let activity = env.as_cast::<AndroidActivity>(android_context())?;
-        let intent_startup = activity.get_intent(env)?;
-        // checks if the action of current intent is ACTION_USB_DEVICE_ATTACHED
-        let action_startup = intent_startup.get_action(env)?.to_string();
-        if action_startup.trim()
-            != AndroidUsbManager::ACTION_USB_DEVICE_ATTACHED(env)?
-                .to_string()
-                .trim()
-        {
-            return Ok(None);
-        }
-        Ok(get_extra_device(env, &intent_startup).ok())
-    })
-    .ok()??;
-    if dev_info.check_connection() && dev_info.has_permission().ok()? {
-        Some(dev_info)
-    } else {
-        None
-    }
 }
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
@@ -622,15 +593,8 @@ fn get_extra_device(
     intent: &Intent<'_>,
 ) -> Result<DeviceInfo, jni::errors::Error> {
     let extra_device = AndroidUsbManager::EXTRA_DEVICE(env)?;
-    let java_dev = env
-        .call_method(
-            intent,
-            jni_str!("getParcelableExtra"),
-            // XXX: this is deprecated in API 33 and above without the class parameter.
-            jni_sig!((JString) -> android.os.Parcelable),
-            &[(&extra_device).into()],
-        )?
-        .l()?;
+    let cls_dev = AndroidUsbDevice::lookup_class(env, &jni::refs::LoaderContext::None)?;
+    let java_dev = intent.get_parcelable_extra(env, &extra_device, cls_dev.deref())?;
     if !java_dev.is_null() {
         let java_dev = AndroidUsbDevice::cast_local(env, java_dev)?;
         build_device_info(env, &java_dev)

@@ -24,7 +24,7 @@ pub(crate) use hotplug::LinuxHotplugWatch as HotplugWatch;
 mod android;
 
 #[cfg(target_os = "android")]
-pub use android::{check_startup_intent, PermissionRequest};
+pub use android::PermissionRequest;
 
 #[cfg(target_os = "android")]
 pub(crate) use android::{
