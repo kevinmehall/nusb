@@ -142,10 +142,10 @@ impl DeviceInfo {
         &self.path.path
     }
 
-    /// *(Linux-only)* Bus number.
+    /// Bus number.
     ///
-    /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(target_os = "linux")]
+    /// On Linux/Illumos, the `bus_id` is an integer and this provides the value as `u8`.
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
@@ -181,7 +181,12 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
