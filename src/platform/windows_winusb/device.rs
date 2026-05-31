@@ -450,6 +450,37 @@ impl WindowsInterface {
         })
     }
 
+    pub fn control_in_buf<'a>(
+        self: Arc<Self>,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        assert!(usize::from(data.length) <= buf.len());
+
+        let mut t = TransferData::new(0x80);
+        t.set_buffer(unsafe {
+            // SAFETY: `buf` is exclusively borrowed for the duration when the created buffer has a `*mut u8` to it.
+            Buffer::from_slice(buf.as_mut_ptr())
+        });
+
+        let pkt = WINUSB_SETUP_PACKET {
+            RequestType: data.request_type(),
+            Request: data.request,
+            Value: data.value,
+            Index: data.index,
+            Length: data.length,
+        };
+
+        let intf = self.clone();
+
+        TransferFuture::new(t, |t| self.submit_control(t, pkt)).map(move |mut t| {
+            let c = t.take_completion(&intf);
+            c.status?;
+            Ok(c.buffer.len())
+        })
+    }
+
     pub fn control_out(
         self: &Arc<Self>,
         data: ControlOut,

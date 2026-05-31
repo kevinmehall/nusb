@@ -299,6 +299,38 @@ impl MacDevice {
         })
     }
 
+    pub fn control_in_buf<'a>(
+        self: Arc<Self>,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        assert!(usize::from(data.length) <= buf.len());
+
+        let timeout = timeout.as_millis().try_into().expect("timeout too long");
+        let t = unsafe {
+            TransferData::from_raw(buf.as_mut_ptr(), data.length as u32, buf.len() as u32)
+        };
+
+        let req = IOUSBDevRequestTO {
+            bmRequestType: data.request_type(),
+            bRequest: data.request,
+            wValue: data.value,
+            wIndex: data.index,
+            wLength: data.length,
+            pData: t.buf as *mut c_void,
+            wLenDone: 0,
+            completionTimeout: timeout,
+            noDataTimeout: timeout,
+        };
+
+        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |t| {
+            drop(self); // ensure device stays alive
+            t.status()?;
+            Ok(t.actual_len as usize)
+        })
+    }
+
     pub fn control_out(
         self: Arc<Self>,
         data: ControlOut,
@@ -432,6 +464,15 @@ impl MacInterface {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.device.clone().control_in(data, timeout)
+    }
+
+    pub fn control_in_buf<'a>(
+        &self,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        self.device.clone().control_in_buf(data, timeout, buf)
     }
 
     pub fn control_out(

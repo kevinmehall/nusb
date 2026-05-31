@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
@@ -318,6 +319,48 @@ impl Device {
         self.backend.clone().control_in(data, timeout)
     }
 
+    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// This is a variant of [`control_in`](Self::control_in) that writes the output data into a provided buffer.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # use nusb::MaybeFuture;
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
+    ///
+    /// let mut buf = [0; 64];
+    ///
+    /// let num_received = device.control_in_buf(ControlIn {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x30,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     length: 64,
+    /// }, Duration::from_millis(100), &mut buf).wait()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// ### Platform-specific details
+    ///
+    /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
+    ///   and use the interface handle to submit transfers.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    pub fn control_in_buf<'a>(
+        &self,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        self.backend.clone().control_in_buf(data, timeout, buf)
+    }
+
     /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
     ///
     /// ### Example
@@ -434,6 +477,52 @@ impl Interface {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.backend.clone().control_in(data, timeout)
+    }
+
+    /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
+    ///
+    /// This is a variant of [`control_in`](Self::control_in) that writes the output data into a provided buffer.
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use futures_lite::future::block_on;
+    /// use nusb::transfer::{ ControlIn, ControlType, Recipient };
+    /// # use nusb::MaybeFuture;
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// # let di = nusb::list_devices().wait().unwrap().next().unwrap();
+    /// # let device = di.open().wait().unwrap();
+    /// # let interface = device.claim_interface(0).wait().unwrap();
+    ///
+    /// let mut buf = [0; 64];
+    ///
+    /// let num_received = interface.control_in_buf(ControlIn {
+    ///     control_type: ControlType::Vendor,
+    ///     recipient: Recipient::Device,
+    ///     request: 0x30,
+    ///     value: 0x0,
+    ///     index: 0x0,
+    ///     length: 64,
+    /// }, Duration::from_millis(100), &mut buf).wait()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// ### Platform-specific details
+    /// * On Windows, if the `recipient` is `Interface`, the least significant
+    ///   byte of `index` must match the interface number, or
+    ///   `TransferError::InvalidArgument` will be returned. This is a WinUSB
+    ///   limitation.
+    /// * On Windows, the timeout is currently fixed to 5 seconds and the
+    ///   timeout argument is ignored.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    pub fn control_in_buf<'a>(
+        &self,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        self.backend.clone().control_in_buf(data, timeout, buf)
     }
 
     /// Submit a single **OUT (host-to-device)** transfer on the default

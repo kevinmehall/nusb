@@ -9,6 +9,8 @@ pub(crate) enum Allocator {
     Default,
     #[cfg(any(target_os = "linux", target_os = "android"))]
     Mmap,
+    #[cfg(target_os = "windows")]
+    None,
 }
 
 /// Buffer for bulk and interrupt transfers.
@@ -94,6 +96,18 @@ impl Buffer {
             capacity: len_u32,
             allocator: Allocator::Mmap,
         })
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) unsafe fn from_raw(ptr: *mut u8, requested_len: usize, capacity: usize) -> Self {
+        let len_u32 = requested_len.try_into().expect("length overflow");
+        Buffer {
+            ptr,
+            len: 0,
+            requested_len: len_u32,
+            capacity: capacity.try_into().expect("capacity overflow"),
+            allocator: Allocator::None,
+        }
     }
 
     /// Get the number of initialized bytes in the buffer.
@@ -290,6 +304,8 @@ impl Drop for Buffer {
             Allocator::Mmap => unsafe {
                 rustix::mm::munmap(self.ptr as *mut _, self.capacity as usize).unwrap();
             },
+            #[cfg(target_os = "windows")]
+            Allocator::None => {}
         }
     }
 }

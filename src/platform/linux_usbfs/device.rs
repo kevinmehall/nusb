@@ -389,6 +389,29 @@ impl LinuxDevice {
         })
     }
 
+    pub fn control_in_buf<'a>(
+        self: Arc<Self>,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        assert!(usize::from(data.length) <= buf.len());
+
+        let t = TransferData::new_control_in(data);
+        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(move |t| {
+            drop(self); // ensure device stays alive
+            t.status()?;
+
+            let in_data = t.control_in_data();
+
+            // can the returned length ever be longer? no, right?
+            let buf = &mut buf[..in_data.len()];
+
+            buf.copy_from_slice(in_data);
+            Ok(in_data.len())
+        })
+    }
+
     pub fn control_out(
         self: Arc<Self>,
         data: ControlOut,
@@ -646,6 +669,15 @@ impl LinuxInterface {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.device.clone().control_in(data, timeout)
+    }
+
+    pub fn control_in_buf<'a>(
+        &self,
+        data: ControlIn,
+        timeout: Duration,
+        buf: &'a mut [u8],
+    ) -> impl MaybeFuture<Output = Result<usize, TransferError>> + 'a {
+        self.device.clone().control_in_buf(data, timeout, buf)
     }
 
     pub fn control_out(
