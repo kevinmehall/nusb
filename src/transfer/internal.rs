@@ -115,16 +115,38 @@ const STATE_PENDING: u8 = 1;
 const STATE_ABANDONED: u8 = 2;
 
 /// Handle to a transfer that is known to be idle.
-pub(crate) struct Idle<P>(Box<TransferInner<P>>);
+pub(crate) struct Idle<P> {
+    ptr: NonNull<TransferInner<P>>,
+}
 
 impl<P> Idle<P> {
     /// Create a new transfer and get a handle.
     pub(crate) fn new(notify: Arc<dyn AsRef<Notify> + Send + Sync>, inner: P) -> Idle<P> {
-        Idle(Box::new(TransferInner {
+        let b = Box::new(TransferInner {
             platform_data: inner,
             state: AtomicU8::new(STATE_IDLE),
             notify,
-        }))
+        });
+        Idle {
+            // SAFETY: Box pointer is non-null
+            ptr: unsafe { NonNull::new_unchecked(Box::into_raw(b)) },
+        }
+    }
+
+    fn inner(&self) -> &TransferInner<P> {
+        // SAFETY: Idle state means there is no concurrent access
+        unsafe { self.ptr.as_ref() }
+    }
+
+    fn inner_mut(&mut self) -> &mut TransferInner<P> {
+        // SAFETY: Idle state means there is no concurrent access
+        unsafe { self.ptr.as_mut() }
+    }
+
+    #[allow(unused)]
+    pub fn as_ptr(&self) -> *mut P {
+        // first member of repr(C) struct
+        self.ptr.as_ptr().cast()
     }
 
     /// Mark the transfer as pending. The caller must submit the transfer to the kernel
@@ -132,30 +154,38 @@ impl<P> Idle<P> {
     pub(crate) fn pre_submit(self) -> Pending<P> {
         // It's the syscall that submits the transfer that actually performs the
         // release ordering.
-        let prev = self.0.state.swap(STATE_PENDING, Ordering::Relaxed);
+        let prev = self.inner().state.swap(STATE_PENDING, Ordering::Relaxed);
         assert_eq!(prev, STATE_IDLE, "Transfer should be idle when submitted");
-        Pending {
-            ptr: unsafe { NonNull::new_unchecked(Box::into_raw(self.0)) },
-        }
+        let transfer = ManuallyDrop::new(self);
+        Pending { ptr: transfer.ptr }
     }
 
     pub(crate) fn simulate_complete(self) -> Pending<P> {
-        Pending {
-            ptr: unsafe { NonNull::new_unchecked(Box::into_raw(self.0)) },
-        }
+        let transfer = ManuallyDrop::new(self);
+        Pending { ptr: transfer.ptr }
     }
 }
+
+unsafe impl<P: Send> Send for Idle<P> {}
+unsafe impl<P: Sync> Sync for Idle<P> {}
 
 impl<P> Deref for Idle<P> {
     type Target = P;
     fn deref(&self) -> &Self::Target {
-        &self.0.platform_data
+        &self.inner().platform_data
     }
 }
 
 impl<P> DerefMut for Idle<P> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.platform_data
+        &mut self.inner_mut().platform_data
+    }
+}
+
+impl<P> Drop for Idle<P> {
+    fn drop(&mut self) {
+        // SAFETY: state means there is no concurrent access
+        unsafe { drop(Box::from_raw(self.ptr.as_ptr())) }
     }
 }
 
@@ -191,7 +221,7 @@ impl<P> Pending<P> {
     pub unsafe fn into_idle(self) -> Idle<P> {
         debug_assert!(self.is_complete());
         let transfer = ManuallyDrop::new(self);
-        Idle(Box::from_raw(transfer.ptr.as_ptr()))
+        Idle { ptr: transfer.ptr }
     }
 }
 
