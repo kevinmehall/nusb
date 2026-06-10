@@ -58,8 +58,8 @@ impl Notify {
     }
 
     pub fn wait<T>(&self, mut check: impl FnMut() -> Option<T>) -> T {
-        *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
         loop {
+            *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
             if let Some(result) = check() {
                 return result;
             }
@@ -72,9 +72,9 @@ impl Notify {
         timeout: Duration,
         mut check: impl FnMut() -> Option<T>,
     ) -> Option<T> {
-        *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
         let start = Instant::now();
         loop {
+            *self.state.lock().unwrap() = NotifyState::Thread(thread::current());
             if let Some(result) = check() {
                 return Some(result);
             }
