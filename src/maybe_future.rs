@@ -38,7 +38,8 @@ impl<T> NonWasmSend for T {}
     target_os = "linux",
     target_os = "android",
     target_os = "windows",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "illumos"
 ))]
 pub mod blocking {
     use super::MaybeFuture;

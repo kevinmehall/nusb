@@ -1,8 +1,11 @@
 #[cfg(target_os = "windows")]
 use std::ffi::{OsStr, OsString};
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use crate::platform::SysfsPath;
+
+#[cfg(target_os = "illumos")]
+use crate::platform::DevfsPath;
 
 use crate::{Device, Error, MaybeFuture};
 
@@ -25,7 +28,10 @@ pub struct DeviceInfo {
     #[cfg(target_os = "linux")]
     pub(crate) path: SysfsPath,
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "illumos")]
+    pub(crate) path: DevfsPath,
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
     pub(crate) busnum: u8,
 
     #[cfg(target_os = "windows")]
@@ -52,24 +58,40 @@ pub struct DeviceInfo {
     #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub(crate) bus_id: String,
 
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_os = "illumos",
     ))]
     pub(crate) device_address: u8,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub(crate) port_chain: Vec<u8>,
 
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub(crate) device_version: u16,
 
     pub(crate) usb_version: u16,
@@ -94,7 +116,7 @@ impl DeviceInfo {
             DeviceId(self.devinst)
         }
 
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
         {
             DeviceId(crate::platform::DeviceId {
                 bus: self.busnum,
@@ -114,10 +136,16 @@ impl DeviceInfo {
         &self.path.0
     }
 
-    /// *(Linux-only)* Bus number.
+    /// *(illumos-only)* devfs path for the device.
+    #[cfg(target_os = "illumos")]
+    pub fn devfs_path(&self) -> &String {
+        &self.path.path
+    }
+
+    /// Bus number.
     ///
-    /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(any(target_os = "linux"))]
+    /// On Linux/Illumos, the `bus_id` is an integer and this provides the value as `u8`.
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
@@ -153,7 +181,12 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
@@ -177,13 +210,23 @@ impl DeviceInfo {
     }
 
     /// Identifier for the bus / host controller where the device is connected.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
     /// Number identifying the device within the bus.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub fn device_address(&self) -> u8 {
         self.device_address
     }
@@ -202,7 +245,12 @@ impl DeviceInfo {
 
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    ))]
     pub fn device_version(&self) -> u16 {
         self.device_version
     }
@@ -294,7 +342,12 @@ impl std::fmt::Debug for DeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("DeviceInfo");
 
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "illumos"
+        ))]
         s.field("bus_id", &self.bus_id)
             .field("device_address", &self.device_address)
             .field("port_chain", &format_args!("{:?}", self.port_chain));
@@ -320,6 +373,10 @@ impl std::fmt::Debug for DeviceInfo {
         #[cfg(target_os = "linux")]
         {
             s.field("sysfs_path", &self.path);
+        }
+        #[cfg(target_os = "illumos")]
+        {
+            s.field("devfs_path", &self.path);
         }
 
         #[cfg(target_os = "windows")]
@@ -475,7 +532,12 @@ impl UsbControllerType {
 /// * Linux: `path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 pub struct BusInfo {
     #[cfg(any(target_os = "linux"))]
     pub(crate) path: SysfsPath,
@@ -526,7 +588,12 @@ pub struct BusInfo {
     pub(crate) controller_type: Option<UsbControllerType>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
     #[cfg(any(target_os = "linux"))]
@@ -641,10 +708,21 @@ impl BusInfo {
         {
             self.name.as_deref()
         }
+
+        #[cfg(target_os = "illumos")]
+        {
+            // What would illumos like to put here?
+            None
+        }
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 impl std::fmt::Debug for BusInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("BusInfo");
