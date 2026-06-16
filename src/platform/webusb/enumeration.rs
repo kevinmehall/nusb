@@ -44,8 +44,6 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 
 pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Error> {
     Ok(DeviceInfo {
-        bus_id: "webusb".to_string(),
-        device_address: 0,
         vendor_id: device.vendor_id(),
         product_id: device.product_id(),
         device_version: ((device.device_version_major() as u16) << 8)
@@ -54,7 +52,6 @@ pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Erro
         class: device.device_class(),
         subclass: device.device_subclass(),
         protocol: device.device_protocol(),
-        speed: None,
         manufacturer_string: device.manufacturer_name(),
         product_string: device.product_name(),
         serial_number: device.serial_number(),
@@ -87,7 +84,6 @@ pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Erro
             }
             interfaces
         },
-        port_chain: vec![],
         device: device.clone(),
     })
 }

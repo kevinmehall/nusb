@@ -37,7 +37,6 @@ pub(crate) struct WebusbDevice {
     pub device: UsbDevice,
     device_descriptor: Vec<u8>,
     config_descriptors: Vec<Vec<u8>>,
-    speed: Option<Speed>,
 }
 
 impl WebusbDevice {
@@ -45,7 +44,6 @@ impl WebusbDevice {
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<WebusbDevice>, Error>> {
         let target_device = d.device.clone();
-        let speed = d.speed;
         WebFuture(async move {
             JsFuture::from(target_device.open())
                 .await
@@ -66,7 +64,6 @@ impl WebusbDevice {
                 device: target_device,
                 device_descriptor,
                 config_descriptors,
-                speed,
             }))
         })
     }
@@ -76,7 +73,7 @@ impl WebusbDevice {
     }
 
     pub(crate) fn speed(&self) -> Option<Speed> {
-        self.speed
+        None
     }
 
     pub(crate) fn configuration_descriptors(
