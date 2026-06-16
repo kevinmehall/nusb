@@ -70,6 +70,14 @@ impl Device {
         platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
     }
 
+    /// Open and use a [`web_sys::UsbDevice`] object from JS.
+    ///
+    /// *Supported on wasm only.*
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_js(device: web_sys::UsbDevice) -> impl MaybeFuture<Output = Result<Device, Error>> {
+        platform::Device::from_js(device).map(|d| d.map(Device::wrap))
+    }
+
     /// Open an interface of the device and claim it for exclusive use.
     pub fn claim_interface(
         &self,

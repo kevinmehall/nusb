@@ -43,25 +43,30 @@ impl WebusbDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<WebusbDevice>, Error>> {
-        let target_device = d.device.clone();
+        Self::from_js(d.device.clone())
+    }
+
+    pub fn from_js(
+        device: UsbDevice,
+    ) -> impl MaybeFuture<Output = Result<Arc<WebusbDevice>, Error>> {
         WebFuture(async move {
-            JsFuture::from(target_device.open())
+            JsFuture::from(device.open())
                 .await
                 .map_err(js_value_to_error)?;
 
             let device_descriptor = get_descriptor(
-                &target_device,
+                &device,
                 DESCRIPTOR_TYPE_DEVICE,
                 0,
                 0,
                 Duration::from_millis(500),
             )
             .await?;
-            let config_descriptors = extract_decriptors(&target_device).await?;
+            let config_descriptors = extract_decriptors(&device).await?;
 
             #[allow(clippy::arc_with_non_send_sync)]
             Ok(Arc::new(Self {
-                device: target_device,
+                device,
                 device_descriptor,
                 config_descriptors,
             }))
