@@ -1,5 +1,11 @@
 use std::{
-    collections::VecDeque, future::Future, mem::MaybeUninit, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}, time::Duration
+    collections::VecDeque,
+    future::Future,
+    mem::MaybeUninit,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+    time::Duration,
 };
 
 pub use private::UniqueUsbDevice;
@@ -619,17 +625,21 @@ fn complete_transfer(
                 };
             };
             let received = Uint8Array::new(&data.buffer());
-            let received_len = received.length().min(buffer.capacity);
-            // Safety: the slice covers `received_len` bytes within the buffer's
-            // allocation (capacity-bounded). `Buffer` derefs as `&[u8]` of
-            // length `len`, so we write past `len` here.
+            let received_len = received.length();
+            assert!(
+                received_len <= buffer.capacity,
+                "received length ({}) exceeds buffer capacity ({})",
+                received_len,
+                buffer.capacity
+            );
             unsafe {
-                received.copy_to(std::slice::from_raw_parts_mut(
-                    buffer.ptr,
+                // Safety: Checked above that `received_len` is wthin bounds. Afterwards, `received_len` bytes are initialized.
+                received.copy_to_uninit(std::slice::from_raw_parts_mut(
+                    buffer.ptr.cast::<MaybeUninit<u8>>(),
                     received_len as usize,
                 ));
+                buffer.len = received_len;
             }
-            buffer.len = received_len;
             Completion {
                 actual_len: received_len as usize,
                 status: webusb_status_to_nusb_transfer_error(result.status()),
