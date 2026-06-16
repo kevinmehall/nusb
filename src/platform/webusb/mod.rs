@@ -67,22 +67,25 @@ pub(crate) fn webusb_status_to_nusb_transfer_error(
 }
 
 pub(crate) fn usb() -> Result<Usb, Error> {
-    let window = js_sys::global().dyn_into::<Window>().ok();
+    let usb = if let Ok(window) = js_sys::global().dyn_into::<Window>() {
+        window.navigator().usb()
+    } else if let Ok(wgs) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
+        wgs.navigator().usb()
+    } else {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "Could not obtain Window or WorkerGlobalScope",
+        ));
+    };
 
-    if let Some(window) = window {
-        return Ok(window.navigator().usb());
+    if usb.is_undefined() {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "WebUSB is not available",
+        ))
+    } else {
+        Ok(usb)
     }
-
-    let wgs = js_sys::global().dyn_into::<WorkerGlobalScope>().ok();
-
-    if let Some(wgs) = wgs {
-        return Ok(wgs.navigator().usb());
-    }
-
-    Err(Error::new(
-        ErrorKind::Unsupported,
-        "WebUSB is not available on this platform",
-    ))
 }
 
 pub fn js_value_to_error(value: JsValue) -> Error {
