@@ -31,18 +31,12 @@ impl DeviceId {
         let key = JsValue::from_str("nusbUniqueId");
         static INCREMENT: std::sync::LazyLock<std::sync::Mutex<usize>> =
             std::sync::LazyLock::new(|| std::sync::Mutex::new(0));
-        let id = if let Ok(device_id) = Reflect::get(device, &key) {
-            device_id
-                .as_f64()
-                .expect("Expected an integer ID. This is a bug. Please report it.")
-                as usize
+        let id = if let Some(device_id) = Reflect::get(device, &key).ok().and_then(|v| v.as_f64()) {
+            device_id as usize
         } else {
-            let mut lock = INCREMENT
-                .lock()
-                .expect("this should never be poisoned as we do not have multiple threads");
+            let mut lock = INCREMENT.lock().unwrap();
             *lock += 1;
-            Reflect::set(device, &key, &JsValue::from_f64(*lock as f64))
-                .expect("Could not set ID on JS object. This is a bug. Please report it.");
+            Reflect::set(device, &key, &JsValue::from_f64(*lock as f64)).unwrap();
             *lock
         };
 

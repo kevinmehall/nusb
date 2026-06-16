@@ -68,8 +68,8 @@ impl WebusbHotplugWatch {
 
         Ok(Self {
             inner,
-            onconnect: onconnect,
-            ondisconnect: ondisconnect,
+            onconnect,
+            ondisconnect,
         })
     }
 
