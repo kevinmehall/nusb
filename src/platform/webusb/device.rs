@@ -234,45 +234,6 @@ pub async fn get_descriptor(
     Ok(Uint8Array::new(&data.buffer()).to_vec())
 }
 
-pub async fn extract_string(device: &UsbDevice, id: u16) -> Result<String, Error> {
-    let setup = UsbControlTransferParameters::new(
-        0,
-        web_sys::UsbRecipient::Device,
-        0x6, // Get descriptor: https://www.beyondlogic.org/usbnutshell/usb6.shtml#StandardDeviceRequests
-        web_sys::UsbRequestType::Standard,
-        (0x03_u16 << 8) | (id),
-    );
-    let res = JsFuture::from(device.control_transfer_in(&setup, 255))
-        .await
-        .map_err(js_value_to_error)?;
-    let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
-    webusb_status_to_nusb_transfer_error(res.status())
-        .map_err(|_| Error::new(ErrorKind::Other, "string descriptor transfer failed"))?;
-    let data = Uint8Array::new(
-        &res.data()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Other,
-                    "string descriptor transfer returned no data",
-                )
-            })?
-            .buffer(),
-    )
-    .to_vec();
-
-    if data.len() < 2 {
-        return Err(Error::new(ErrorKind::Other, "string descriptor too short"));
-    }
-    // Bound the declared length (`data[0]`) to what was actually returned, so
-    // a malformed length byte can't index out of bounds.
-    let len = (data[0] as usize).min(data.len());
-    let utf16: Vec<u16> = data[2..len]
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-    String::from_utf16(&utf16).map_err(|_| Error::new(ErrorKind::Other, "invalid utf16"))
-}
-
 #[derive(Clone)]
 pub(crate) struct WebusbInterface {
     pub interface_number: u8,

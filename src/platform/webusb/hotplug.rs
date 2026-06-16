@@ -47,13 +47,10 @@ impl WebusbHotplugWatch {
         let onconnect = {
             let inner = inner.clone();
             Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
-                let inner = inner.clone();
-                spawn_local(async move {
-                    match device_to_info(event.device()).await {
-                        Ok(info) => push(&inner, HotplugEvent::Connected(info)),
-                        Err(e) => log::warn!("hotplug connect descriptor read: {e:?}"),
-                    }
-                });
+                push(
+                    &inner,
+                    HotplugEvent::Connected(device_to_info(event.device())),
+                )
             }) as Box<dyn FnMut(UsbConnectionEvent)>)
         };
         usb.add_event_listener_with_callback("connect", onconnect.as_ref().unchecked_ref())

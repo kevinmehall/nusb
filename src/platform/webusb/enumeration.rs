@@ -1,49 +1,27 @@
 use wasm_bindgen_futures::JsFuture;
 use web_sys::UsbDevice;
 
-use crate::{
-    descriptors::ConfigurationDescriptor,
-    error::ErrorKind,
-    maybe_future::Ready,
-    platform::webusb::device::{extract_decriptors, extract_string},
-    BusInfo, DeviceInfo, Error, InterfaceInfo, MaybeFuture,
-};
+use crate::{maybe_future::Ready, BusInfo, DeviceInfo, Error, InterfaceInfo, MaybeFuture};
 
 use super::{js_value_to_error, WebFuture};
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
-    async fn inner() -> Result<Vec<DeviceInfo>, Error> {
+    WebFuture(async move {
         let usb = super::usb()?;
         let devices = JsFuture::from(usb.get_devices())
             .await
             .map_err(js_value_to_error)?;
-
-        let mut result = vec![];
-        for device in devices {
-            JsFuture::from(device.open())
-                .await
-                .map_err(js_value_to_error)?;
-
-            let device_info = device_to_info(device.clone()).await?;
-            result.push(device_info);
-            JsFuture::from(device.close())
-                .await
-                .map_err(js_value_to_error)?;
-        }
-
-        Ok(result)
-    }
-
-    WebFuture(async move { Ok(inner().await?.into_iter()) })
+        Ok(devices.into_iter().map(device_to_info))
+    })
 }
 
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     Ready(Ok(Vec::<BusInfo>::new().into_iter()))
 }
 
-pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Error> {
-    Ok(DeviceInfo {
+pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
+    DeviceInfo {
         vendor_id: device.vendor_id(),
         product_id: device.product_id(),
         device_version: ((device.device_version_major() as u16) << 8)
@@ -55,35 +33,24 @@ pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Erro
         manufacturer_string: device.manufacturer_name(),
         product_string: device.product_name(),
         serial_number: device.serial_number(),
-        interfaces: {
-            let descriptors = extract_decriptors(&device).await?;
-            let mut interfaces = vec![];
-            for descriptor in descriptors.into_iter() {
-                let Some(configuration) = ConfigurationDescriptor::new(&descriptor) else {
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        "invalid configuration descriptor",
-                    ));
-                };
-                for interface_group in configuration.interfaces() {
-                    let alternate = interface_group.first_alt_setting();
-                    let interface_string = if let Some(id) = alternate.string_index() {
-                        extract_string(&device, id.get() as u16).await.ok()
-                    } else {
-                        None
-                    };
-
-                    interfaces.push(InterfaceInfo {
-                        interface_number: interface_group.interface_number(),
-                        class: alternate.class(),
-                        subclass: alternate.subclass(),
-                        protocol: alternate.protocol(),
-                        interface_string,
-                    });
-                }
-            }
-            interfaces
+        interfaces: if let Some(config) = device.configuration() {
+            config
+                .interfaces()
+                .into_iter()
+                .filter_map(|iface| {
+                    let alt = iface.alternates().iter().next()?;
+                    Some(InterfaceInfo {
+                        interface_number: iface.interface_number(),
+                        class: alt.interface_class(),
+                        subclass: alt.interface_subclass(),
+                        protocol: alt.interface_protocol(),
+                        interface_string: alt.interface_name(),
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
         },
         device: device.clone(),
-    })
+    }
 }
