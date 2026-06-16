@@ -1,10 +1,5 @@
 use std::{
-    collections::VecDeque,
-    future::Future,
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::{Context, Poll},
-    time::Duration,
+    collections::VecDeque, future::Future, mem::MaybeUninit, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}, time::Duration
 };
 
 pub use private::UniqueUsbDevice;
@@ -109,7 +104,7 @@ impl WebusbDevice {
 
     pub(crate) fn configuration_descriptors(
         &self,
-    ) -> impl Iterator<Item = ConfigurationDescriptor> {
+    ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
             .map(|d| ConfigurationDescriptor::new(&d[..]).unwrap())
@@ -169,16 +164,6 @@ impl WebusbDevice {
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<WebusbInterface>, Error>> {
         self.claim_interface(interface_number)
-    }
-
-    pub async fn get_descriptor(
-        &self,
-        desc_type: u8,
-        desc_index: u8,
-        language_id: u16,
-        timeout: Duration,
-    ) -> Result<Vec<u8>, Error> {
-        get_descriptor(&self.device, desc_type, desc_index, language_id, timeout).await
     }
 
     pub fn control_in(
@@ -363,21 +348,6 @@ impl WebusbInterface {
 
     pub fn get_alt_setting(&self) -> u8 {
         self.state.lock().unwrap().alt_setting
-    }
-
-    pub async fn clear_halt(&self, endpoint: u8) -> Result<(), Error> {
-        let endpoint_in = endpoint & 0x80 != 0;
-        JsFuture::from(self.device.device.clear_halt(
-            if endpoint_in {
-                web_sys::UsbDirection::In
-            } else {
-                web_sys::UsbDirection::Out
-            },
-            endpoint,
-        ))
-        .await
-        .map_err(js_value_to_error)
-        .map(|_| ())
     }
 
     #[allow(dead_code)]

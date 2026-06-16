@@ -112,9 +112,7 @@ pub fn js_value_to_transfer_error(value: JsValue) -> TransferError {
 
 /// Wrap an `async` block so it implements [`MaybeFuture`][crate::MaybeFuture].
 ///
-/// Replaces the old `crate::maybe_future::future::ActualFuture` that the
-/// pre-merge webusb backend used. On wasm32, `MaybeFuture` only requires
-/// `IntoFuture` (no `wait()`), so this is enough.
+/// On wasm32, `MaybeFuture` only requires `IntoFuture` (no `wait()`), so this is enough.
 pub(crate) struct WebFuture<F>(pub F);
 
 impl<F: std::future::Future> std::future::IntoFuture for WebFuture<F> {
