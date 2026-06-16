@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-pub use private::UniqueUsbDevice;
 use wasm_bindgen_futures::{
     js_sys::Promise,
     wasm_bindgen::{JsCast, JsValue},
@@ -33,37 +32,9 @@ use super::{
     js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error, WebFuture,
 };
 
-pub mod private {
-    use std::ops::{Deref, DerefMut};
-
-    use web_sys::UsbDevice;
-
-    pub struct UniqueUsbDevice(UsbDevice);
-
-    impl Deref for UniqueUsbDevice {
-        type Target = UsbDevice;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl DerefMut for UniqueUsbDevice {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    impl UniqueUsbDevice {
-        pub fn new(device: UsbDevice) -> Self {
-            Self(device)
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct WebusbDevice {
-    pub device: Arc<UniqueUsbDevice>,
+    pub device: UsbDevice,
     device_descriptor: Vec<u8>,
     config_descriptors: Vec<Vec<u8>>,
     speed: Option<Speed>,

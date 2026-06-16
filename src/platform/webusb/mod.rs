@@ -4,7 +4,6 @@ mod hotplug;
 
 pub use enumeration::{list_buses, list_devices};
 
-pub(crate) use device::UniqueUsbDevice;
 pub(crate) use device::WebusbDevice as Device;
 pub(crate) use device::WebusbEndpoint as Endpoint;
 pub(crate) use device::WebusbInterface as Interface;
@@ -15,7 +14,7 @@ use web_sys::js_sys::Reflect;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::JsValue;
 use web_sys::Usb;
-use web_sys::UsbDevice;
+pub use web_sys::UsbDevice;
 use web_sys::Window;
 use web_sys::WorkerGlobalScope;
 

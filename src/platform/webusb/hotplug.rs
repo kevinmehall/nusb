@@ -12,7 +12,7 @@ use web_sys::{
 
 use crate::{hotplug::HotplugEvent, Error};
 
-use super::{enumeration::device_to_info, DeviceId, UniqueUsbDevice};
+use super::{enumeration::device_to_info, DeviceId};
 
 struct Inner {
     waker: Option<Waker>,
@@ -49,8 +49,7 @@ impl WebusbHotplugWatch {
             Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
                 let inner = inner.clone();
                 spawn_local(async move {
-                    let device = Arc::new(UniqueUsbDevice::new(event.device()));
-                    match device_to_info(device).await {
+                    match device_to_info(event.device()).await {
                         Ok(info) => push(&inner, HotplugEvent::Connected(info)),
                         Err(e) => log::warn!("hotplug connect descriptor read: {e:?}"),
                     }

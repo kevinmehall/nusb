@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use wasm_bindgen_futures::{js_sys::Array, wasm_bindgen::JsCast, JsFuture};
+use wasm_bindgen_futures::JsFuture;
 use web_sys::UsbDevice;
 
 use crate::{
@@ -11,7 +9,7 @@ use crate::{
     BusInfo, DeviceInfo, Error, InterfaceInfo, MaybeFuture,
 };
 
-use super::{js_value_to_error, UniqueUsbDevice, WebFuture};
+use super::{js_value_to_error, WebFuture};
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
@@ -21,16 +19,11 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
             .await
             .map_err(js_value_to_error)?;
 
-        let devices: Array = JsCast::unchecked_from_js(devices.into());
-
         let mut result = vec![];
         for device in devices {
-            let device: UsbDevice = JsCast::unchecked_from_js(device);
             JsFuture::from(device.open())
                 .await
                 .map_err(js_value_to_error)?;
-
-            let device = Arc::new(UniqueUsbDevice::new(device));
 
             let device_info = device_to_info(device.clone()).await?;
             result.push(device_info);
@@ -49,7 +42,7 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
     Ready(Ok(Vec::<BusInfo>::new().into_iter()))
 }
 
-pub(crate) async fn device_to_info(device: Arc<UniqueUsbDevice>) -> Result<DeviceInfo, Error> {
+pub(crate) async fn device_to_info(device: UsbDevice) -> Result<DeviceInfo, Error> {
     Ok(DeviceInfo {
         bus_id: "webusb".to_string(),
         device_address: 0,

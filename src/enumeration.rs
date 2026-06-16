@@ -102,7 +102,7 @@ pub struct DeviceInfo {
     pub(crate) interfaces: Vec<InterfaceInfo>,
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) device: std::sync::Arc<crate::platform::UniqueUsbDevice>,
+    pub(crate) device: crate::platform::UsbDevice,
 }
 
 impl DeviceInfo {
