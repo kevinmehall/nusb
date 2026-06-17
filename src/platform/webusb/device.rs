@@ -422,12 +422,6 @@ impl WebusbEndpoint {
         self.pending.len()
     }
 
-    pub(crate) fn cancel_all(&mut self) {
-        // WebUSB does not expose a transfer cancellation API (see
-        // https://github.com/WICG/webusb/issues/25), so pending transfers
-        // cannot be cancelled and will run to completion on the JS event loop.
-    }
-
     /// Enqueue a transfer that fails immediately with the given error.
     ///
     /// Used by the public `Endpoint::submit` to surface validation errors
@@ -580,12 +574,6 @@ fn complete_transfer(
                 buffer,
             }
         }
-    }
-}
-
-impl Drop for WebusbEndpoint {
-    fn drop(&mut self) {
-        self.cancel_all();
     }
 }
 

@@ -699,6 +699,10 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// The transfers are cancelled asynchronously. Once cancelled, they will be
     /// returned from calls to `next_complete` so you can tell which were
     /// completed, partially-completed, or cancelled.
+    ///
+    /// Platform-specific notes:
+    /// - This is not supported on WebUSB, because [it does not expose a transfer cancellation API](https://github.com/WICG/webusb/issues/25).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn cancel_all(&mut self) {
         self.backend.cancel_all()
     }

@@ -176,6 +176,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
     ///
     /// Call [`num_transfers`](Self::set_num_transfers) with a non-zero value
     /// to resume receiving data.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn cancel_all(&mut self) {
         self.num_transfers = 0;
         self.endpoint.cancel_all();
