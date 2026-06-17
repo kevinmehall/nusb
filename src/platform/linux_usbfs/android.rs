@@ -23,7 +23,10 @@ use jni::{
     sys::jint,
     Env,
 };
-use jni_min_helper::{android_api_level, android_context, jni_with_env, BroadcastReceiver, Intent};
+use jni_min_helper::{
+    android_api_level, android_app_package_name, android_context, jni_with_env, BroadcastReceiver,
+    Intent,
+};
 
 pub type DeviceId = i32;
 pub type JniGlobal = Arc<Global<AndroidUsbDevice<'static>>>;
@@ -353,26 +356,30 @@ pub fn request_permission(dev_info: &DeviceInfo) -> Result<Option<PermissionRequ
     }
 
     let usb_man = usb_manager()?;
-    jni_with_env(|env| {
+    let perm_req = jni_with_env(|env| {
         let context = env.as_cast::<AndroidContext>(android_context())?;
 
-        let str_perm = JString::new(env, ACTION_USB_PERMISSION)?;
+        let str_perm = android_app_package_name().to_string() + "." + ACTION_USB_PERMISSION;
+        let str_perm = JString::new(env, str_perm)?;
+        let package_name = JString::new(env, android_app_package_name())?;
         let intent = Intent::new_with_action(env, str_perm)?;
+        intent.set_package(env, package_name)?;
 
         let flags = if android_api_level() < 31 {
             0
         } else {
             PendingIntent::FLAG_MUTABLE
         };
+        let perm_req = PermissionRequest::build(dev_info)?;
         let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
         usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)?;
-        Ok(())
+        Ok(perm_req)
     })?;
 
     if dev_info.has_permission()? {
         return Ok(None); // almost impossible
     }
-    Ok(Some(PermissionRequest::build(dev_info)?))
+    Ok(Some(perm_req))
 }
 
 /// Android-specific: Represents an ongoing permission request.
@@ -399,7 +406,8 @@ impl PermissionRequest {
         let receiver = BroadcastReceiver::build(move |env, _, intent| {
             Self::on_receive(&inner_weak, &dev_info_2, env, intent)
         })?;
-        receiver.register_for_action(ACTION_USB_PERMISSION)?;
+        let str_perm = android_app_package_name().to_string() + "." + ACTION_USB_PERMISSION;
+        receiver.register_for_action(&str_perm)?;
 
         Ok(Self {
             dev_info: dev_info.clone(),
@@ -425,6 +433,10 @@ impl PermissionRequest {
         intent: Intent<'a>,
     ) -> Result<(), jni::errors::Error> {
         let dev = get_extra_device(env, &intent)?;
+        debug!(
+            "Received permission request result of device {:?}",
+            dev.id()
+        );
         if dev.id() == dev_expected.id() {
             let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
             let granted = intent
@@ -434,6 +446,7 @@ impl PermissionRequest {
                 return Ok(());
             };
             inner.result.lock().unwrap().replace(granted);
+            debug!("notifying for `PermissionRequest` with value {granted}");
             inner.notify.take_notify_state().notify();
         }
         Ok(())
@@ -447,6 +460,9 @@ impl std::future::Future for PermissionRequest {
         self: std::pin::Pin<&mut Self>,
         cx: &mut task::Context<'_>,
     ) -> task::Poll<Self::Output> {
+        if let Ok(true) = self.device_info().has_permission() {
+            return task::Poll::Ready(true);
+        }
         self.inner.notify.subscribe(cx);
         if let Some(result) = self.responsed() {
             task::Poll::Ready(result)
@@ -458,6 +474,9 @@ impl std::future::Future for PermissionRequest {
 
 impl MaybeFuture for PermissionRequest {
     fn wait(self) -> Self::Output {
+        if let Ok(true) = self.device_info().has_permission() {
+            return true;
+        }
         self.inner.notify.wait(|| self.responsed())
     }
 }
@@ -493,7 +512,7 @@ pub fn open_device(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Linux
             }
             let raw_fd = conn.get_file_descriptor(env)?;
 
-            // Safety: `close()` is not called automatically when the JNI `AutoLocal` of `conn`
+            // Safety: `close()` is not called automatically when the JNI local reference of `conn`
             // and the corresponding Java object is destroyed. (check `UsbDeviceConnection` source)
             use std::os::fd::*;
             debug!("Wrapping fd {raw_fd} as usbfs device");

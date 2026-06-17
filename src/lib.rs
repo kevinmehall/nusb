@@ -167,6 +167,7 @@
 //!
 //! Please make sure the [ndk-context] is configured correctly, unless you have a
 //! native activity application based on [android-activity] or a similar glue crate.
+//! See <https://cjycode.com/flutter_rust_bridge/guides/how-to/ndk-init>.
 //!
 //! Note that a few fields are not available in [DeviceInfo].
 //!
