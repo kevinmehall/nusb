@@ -67,7 +67,10 @@ pub(super) fn register_fd(fd: BorrowedFd, tag: Tag, flags: EventFlags) -> Result
     })?;
 
     if start_thread {
-        thread::spawn(event_loop);
+        thread::Builder::new()
+            .name("nusb-events".into())
+            .spawn(event_loop)
+            .unwrap();
     }
 
     epoll::add(epoll_fd, fd, tag.as_event_data(), flags)
