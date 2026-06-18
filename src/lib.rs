@@ -159,11 +159,12 @@
 //!
 //! ### Android
 //!
-//! `nusb` uses the Android SDK API for device listing and runtime permission
-//! request; the rest operations are the same as Linux.
+//! `nusb` uses the Android `UsbManager` API via JNI for listing and opening
+//! devices. The Linux usbfs backend is then used once a device is opened.
 //!
-//! The Android application must have the `android.hardware.usb.host` feature;
-//! for description of permission issues, see [DeviceInfo::open].
+//! The Android application must have the `android.hardware.usb.host` feature.
+//! [Opening a device][DeviceInfo::open] requires user permission and may
+//! prompt the user if necessary.
 //!
 //! Please make sure the [ndk-context] is configured correctly, unless you have a
 //! native activity application based on [android-activity] or a similar glue crate.

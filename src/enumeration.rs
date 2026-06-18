@@ -161,14 +161,15 @@ impl DeviceInfo {
         self.port_number
     }
 
-    /// *(Not available on Android)* Path of port numbers identifying the port where
-    /// the device is connected.
+    /// Path of port numbers identifying the port where the device is connected.
     ///
     /// Together with the bus ID, it identifies a physical port. The path is
     /// expected to remain stable across device insertions or reboots.
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
+    ///
+    /// *Not available on Android*
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
@@ -192,13 +193,17 @@ impl DeviceInfo {
         self.registry_id
     }
 
-    /// *(Not available on Android)* Identifier for the bus / host controller where the device is connected.
+    /// Identifier for the bus / host controller where the device is connected.
+    ///
+    /// *Not available on Android*
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
-    /// *(Not available on Android)* Number identifying the device within the bus.
+    /// Number identifying the device within the bus.
+    ///
+    /// *Not available on Android*
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_address(&self) -> u8 {
         self.device_address
@@ -216,8 +221,7 @@ impl DeviceInfo {
         self.product_id
     }
 
-    /// *(Not available on Android)* The device version, normally encoded as BCD, from the `bcdDevice`
-    /// device descriptor field.
+    /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_version(&self) -> u16 {
@@ -250,7 +254,9 @@ impl DeviceInfo {
         self.protocol
     }
 
-    /// *(Not available on Android)* Connection speed.
+    /// Connection speed.
+    ///
+    /// *Not available on Android*
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn speed(&self) -> Option<Speed> {
         self.speed
@@ -275,10 +281,9 @@ impl DeviceInfo {
     /// Serial number string, if available without device IO.
     ///
     /// ### Platform-specific notes
-    ///  * Android: Starting from Android 10, this can not be read without permission
-    ///    of opening the device. Currently the permission request API is not exposed in
-    ///    `nusb`, please try to open the device to make sure of having the permission.
-    ///    See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
+    /// * Android: Starting from Android 10, reading the serial number requires
+    ///   permission, and will only be available if the device has been opened and
+    ///   the user has approved the permission request.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -319,10 +324,10 @@ impl DeviceInfo {
     ///
     /// * On Android, a permission request will be performed if the permission has not been granted:
     ///   - The permission dialog will be shown, waiting for user interaction; the current Android
-    ///     activity may be paused by this call and resumed on receving result.
-    ///   - An error of `ErrorKind::PermissionDenied` is returned when the user refused the request.
-    ///   - Please avoid blocking on this with [MaybeFuture::wait] in the UI thread or the native-side
-    ///     main event thread of the native activity, doing so may get blocked forever.
+    ///     activity may be paused by this call and resumed on receiving the response.
+    ///   - An error of `ErrorKind::PermissionDenied` is returned if the user refuses the request.
+    ///   - Avoid blocking on this with [MaybeFuture::wait] in the UI thread or the native-side
+    ///     main event thread of the native activity; doing so may get blocked forever.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
     }

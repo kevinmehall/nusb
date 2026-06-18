@@ -1,6 +1,6 @@
 use crate::{
     hotplug::HotplugEvent,
-    maybe_future::{blocking::Blocking, MaybeFuture, Ready},
+    maybe_future::{MaybeFuture, Ready},
     platform::linux_usbfs::device::LinuxDevice,
     transfer::internal::Notify,
     DeviceInfo, Error, ErrorKind, InterfaceInfo,
@@ -8,7 +8,6 @@ use crate::{
 
 use std::{
     collections::VecDeque,
-    future::IntoFuture,
     ops::Deref,
     sync::{Arc, Mutex, OnceLock, Weak},
     task::{self, Poll, Waker},
@@ -17,8 +16,7 @@ use std::{
 use log::{debug, error};
 
 use jni::{
-    jni_sig, jni_str,
-    objects::{Global, JMap, JObject, JString},
+    objects::{Global, JMap, JString},
     refs::Reference,
     sys::jint,
     Env,
@@ -31,7 +29,7 @@ use jni_min_helper::{
 pub type DeviceId = i32;
 pub type JniGlobal = Arc<Global<AndroidUsbDevice<'static>>>;
 
-const ACTION_USB_PERMISSION: &str = "rust.android_usbser.USB_PERMISSION"; // custom
+const ACTION_USB_PERMISSION: &str = "rust.nusb.USB_PERMISSION";
 
 jni::bind_java_type! {
     AndroidContext => "android.content.Context",
@@ -521,7 +519,7 @@ pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Lin
             if conn.is_null() {
                 return Ok(Err(Error::new(
                     ErrorKind::NotFound,
-                    "`UsbManager.openDevice()` failed`",
+                    "`UsbManager.openDevice()` failed",
                 )));
             }
             let raw_fd = conn.get_file_descriptor(env)?;

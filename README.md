@@ -8,7 +8,7 @@ A new pure-Rust library for cross-platform low-level access to USB devices.
 * [Issues](https://github.com/kevinmehall/nusb/issues)
 * [Discussions](https://github.com/kevinmehall/nusb/discussions)
 
-`nusb` supports Windows, macOS, and Linux, and provides both async and
+`nusb` supports Windows, macOS, Linux, and Android and provides both async and
 blocking APIs for listing and watching USB devices, reading descriptor
 details, opening and managing devices and interfaces, and performing
 transfers on control, bulk, and interrupt endpoints.
@@ -20,7 +20,6 @@ transfers on control, bulk, and interrupt endpoints.
 * No context object. You just open a device. There is a global event loop thread
   that is started when opening the first device.
 * Thinner layer over OS APIs, with less internal state.
-* Introduced Android support.
 
 ### License
 
