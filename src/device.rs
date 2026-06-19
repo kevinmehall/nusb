@@ -426,8 +426,6 @@ impl Interface {
     ///   byte of `index` must match the interface number, or
     ///   `TransferError::InvalidArgument` will be returned. This is a WinUSB
     ///   limitation.
-    /// * On Windows, the timeout is currently fixed to 5 seconds and the
-    ///   timeout argument is ignored.
     pub fn control_in(
         &self,
         data: ControlIn,
@@ -467,8 +465,6 @@ impl Interface {
     ///   byte of `index` must match the interface number, or
     ///   `TransferError::InvalidArgument` will be returned. This is a WinUSB
     ///   limitation.
-    /// * On Windows, the timeout is currently fixed to 5 seconds and the
-    ///   timeout argument is ignored.
     pub fn control_out(
         &self,
         data: ControlOut,
