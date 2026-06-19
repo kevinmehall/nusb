@@ -25,8 +25,11 @@ pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
         vendor_id: device.vendor_id(),
         product_id: device.product_id(),
         device_version: ((device.device_version_major() as u16) << 8)
-            | device.device_version_minor() as u16,
-        usb_version: ((device.usb_version_major() as u16) << 8) | device.usb_version_minor() as u16,
+            | ((device.device_version_minor() as u16) << 4)
+            | (device.device_version_subminor() as u16),
+        usb_version: ((device.usb_version_major() as u16) << 8)
+            | ((device.usb_version_minor() as u16) << 4)
+            | (device.usb_version_subminor() as u16),
         class: device.device_class(),
         subclass: device.device_subclass(),
         protocol: device.device_protocol(),
