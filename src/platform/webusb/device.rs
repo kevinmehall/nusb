@@ -462,15 +462,13 @@ impl WebusbEndpoint {
     pub(crate) fn clear_halt(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         let device = self.inner.interface.device.clone();
         let endpoint = self.inner.address;
-        let endpoint_in = endpoint & 0x80 != 0;
         WebFuture(async move {
             JsFuture::from(device.device.clear_halt(
-                if endpoint_in {
-                    web_sys::UsbDirection::In
-                } else {
-                    web_sys::UsbDirection::Out
+                match Direction::from_address(endpoint) {
+                    Direction::Out => web_sys::UsbDirection::Out,
+                    Direction::In => web_sys::UsbDirection::In,
                 },
-                endpoint,
+                endpoint & 0x7f,
             ))
             .await
             .map_err(js_value_to_error)
