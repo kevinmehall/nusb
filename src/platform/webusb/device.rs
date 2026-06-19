@@ -4,7 +4,7 @@ use std::{
     mem::MaybeUninit,
     pin::Pin,
     sync::{Arc, Mutex},
-    task::{Context, Poll},
+    task::{ready, Context, Poll},
     time::Duration,
 };
 
@@ -161,8 +161,10 @@ impl WebusbDevice {
             let res = JsFuture::from(self.device.control_transfer_in(&setup, control.length))
                 .await
                 .map_err(js_value_to_transfer_error)?;
-            let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
-            let data = res.data().ok_or(TransferError::Fault)?;
+
+            webusb_status_to_nusb_transfer_error(res.status())?;
+
+            let data = res.data().ok_or(TransferError::Unknown(0))?;
             Ok(Uint8Array::new(&data.buffer()).to_vec())
         })
     }
@@ -262,7 +264,7 @@ impl WebusbInterface {
                 let state = self.state.lock().unwrap();
                 if !state.endpoints_used.is_empty() {
                     return Err(Error::new(
-                        ErrorKind::Other,
+                        ErrorKind::Busy,
                         "must drop endpoints before changing alt setting",
                     ));
                 }
@@ -405,7 +407,12 @@ impl WebusbEndpoint {
                 match device.transfer_out_with_buffer_source(endpoint_number, array.unchecked_ref())
                 {
                     Ok(p) => p.unchecked_into(),
-                    Err(_) => {
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to submit OUT transfer on endpoint {}: {:?}",
+                            endpoint_number,
+                            e
+                        );
                         self.pending.push_back(Pending::Failed {
                             buffer,
                             error: TransferError::Fault,
@@ -444,10 +451,7 @@ impl WebusbEndpoint {
                 })
             }
             Pending::InFlight { future, .. } => {
-                let result = match Pin::new(future).poll(cx) {
-                    Poll::Ready(r) => r,
-                    Poll::Pending => return Poll::Pending,
-                };
+                let result = ready!(Pin::new(future).poll(cx));
                 let Some(Pending::InFlight {
                     buffer, direction, ..
                 }) = self.pending.pop_front()
@@ -506,31 +510,29 @@ fn complete_transfer(
         }
         Direction::In => {
             let result: UsbInTransferResult = JsCast::unchecked_from_js(result.into());
-            let Some(data) = result.data() else {
-                return Completion {
-                    buffer,
-                    actual_len: 0,
-                    status: Err(TransferError::Fault),
-                };
+            let actual_len = if let Some(data) = result.data() {
+                let received = Uint8Array::new(&data.buffer());
+                let received_len = received.length();
+                assert!(
+                    received_len <= buffer.capacity,
+                    "received length ({}) exceeds buffer capacity ({})",
+                    received_len,
+                    buffer.capacity
+                );
+                unsafe {
+                    // Safety: Checked above that `received_len` is wthin bounds. Afterwards, `received_len` bytes are initialized.
+                    received.copy_to_uninit(std::slice::from_raw_parts_mut(
+                        buffer.ptr.cast::<MaybeUninit<u8>>(),
+                        received_len as usize,
+                    ));
+                    buffer.len = received_len;
+                }
+                received_len as usize
+            } else {
+                0
             };
-            let received = Uint8Array::new(&data.buffer());
-            let received_len = received.length();
-            assert!(
-                received_len <= buffer.capacity,
-                "received length ({}) exceeds buffer capacity ({})",
-                received_len,
-                buffer.capacity
-            );
-            unsafe {
-                // Safety: Checked above that `received_len` is wthin bounds. Afterwards, `received_len` bytes are initialized.
-                received.copy_to_uninit(std::slice::from_raw_parts_mut(
-                    buffer.ptr.cast::<MaybeUninit<u8>>(),
-                    received_len as usize,
-                ));
-                buffer.len = received_len;
-            }
             Completion {
-                actual_len: received_len as usize,
+                actual_len,
                 status: webusb_status_to_nusb_transfer_error(result.status()),
                 buffer,
             }

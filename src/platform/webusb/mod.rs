@@ -55,7 +55,7 @@ pub(crate) fn webusb_status_to_nusb_transfer_error(
         web_sys::UsbTransferStatus::Ok => Ok(()),
         web_sys::UsbTransferStatus::Stall => Err(TransferError::Stall),
         web_sys::UsbTransferStatus::Babble => Err(TransferError::Fault),
-        _ => unreachable!(),
+        _ => Err(TransferError::Unknown(0)),
     }
 }
 
@@ -94,12 +94,10 @@ pub fn js_value_to_transfer_error(value: JsValue) -> TransferError {
     let err: js_sys::Error = value
         .dyn_into()
         .unwrap_or_else(|_| js_sys::Error::new("error could not be constructed"));
+    log::warn!("WebUSB transfer error: {:?}", err);
     match err.name().as_string().as_deref() {
         Some("NetworkError") => TransferError::Disconnected,
-        _ => {
-            log::debug!("WebUSB transfer error: {:?}", err);
-            TransferError::Fault
-        }
+        _ => TransferError::Fault,
     }
 }
 
