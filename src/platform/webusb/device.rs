@@ -62,7 +62,7 @@ impl WebusbDevice {
                 Duration::from_millis(500),
             )
             .await?;
-            let config_descriptors = extract_decriptors(&device).await?;
+            let config_descriptors = extract_descriptors(&device).await?;
 
             #[allow(clippy::arc_with_non_send_sync)]
             Ok(Arc::new(Self {
@@ -194,7 +194,7 @@ impl WebusbDevice {
     }
 }
 
-pub async fn extract_decriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> {
+async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> {
     let num_configurations = device.configurations().length() as usize;
     let mut config_descriptors = Vec::with_capacity(num_configurations);
 
@@ -229,7 +229,7 @@ pub async fn get_descriptor(
         web_sys::UsbRequestType::Standard,
         ((desc_type as u16) << 8) | (desc_index as u16),
     );
-    let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 255))
+    let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 4095))
         .await
         .map_err(js_value_to_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
