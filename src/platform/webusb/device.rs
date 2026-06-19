@@ -290,57 +290,20 @@ impl WebusbInterface {
         self.state.lock().unwrap().alt_setting
     }
 
-    #[allow(dead_code)]
     pub fn control_in(
         self: Arc<Self>,
         control: ControlIn,
         _timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        WebFuture(async move {
-            let setup = UsbControlTransferParameters::new(
-                control.index,
-                control.recipient.into(),
-                control.request,
-                control.control_type.into(),
-                control.value,
-            );
-            let res = JsFuture::from(self.device.device.control_transfer_in(&setup, 255))
-                .await
-                .map_err(js_value_to_transfer_error)?;
-            let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
-            let data = res.data().ok_or(TransferError::Fault)?;
-            Ok(Uint8Array::new(&data.buffer()).to_vec())
-        })
+        self.device.clone().control_in(control, _timeout)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn control_out(
         self: Arc<Self>,
         control: ControlOut<'_>,
         _timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        let setup = UsbControlTransferParameters::new(
-            control.index,
-            control.recipient.into(),
-            control.request,
-            control.control_type.into(),
-            control.value,
-        );
-        let mut data = control.data.to_vec();
-
-        WebFuture(async move {
-            let res = JsFuture::from(
-                self.device
-                    .device
-                    .control_transfer_out_with_u8_slice(&setup, &mut data)
-                    .map_err(js_value_to_transfer_error)?,
-            )
-            .await
-            .map_err(js_value_to_transfer_error)?;
-            let res: UsbOutTransferResult = JsCast::unchecked_from_js(res.into());
-
-            webusb_status_to_nusb_transfer_error(res.status())
-        })
+        self.device.clone().control_out(control, _timeout)
     }
 
     pub fn endpoint(
