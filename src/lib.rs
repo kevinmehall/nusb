@@ -189,10 +189,11 @@
 //! rustflags = "--cfg=web_sys_unstable_apis"
 //! ```
 //!
-//! `nusb` does not yet wrap `requestDevice()`. You must call it yourself via JS
-//! or `web-sys` and pass the resulting device to `Device::from_js()`. Once
-//! permissions are granted by the user, the device will appear in
-//! [`list_devices`] as well.
+//! WebUSB requires a user permission request to access a device. Use
+//! [`request_devices`] to prompt the user and get the selected device. Once
+//! permissions are granted, the device will appear in [`list_devices`] as well.
+//! Alternatively, use `Device::from_js` to wrap a `web_sys::UsbDevice` you
+//! obtain yourself.
 //!
 //! [WebUSB]: https://wicg.github.io/webusb/
 //! [web_sys_unstable]: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
@@ -225,7 +226,9 @@ pub mod descriptors;
 mod enumeration;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use enumeration::BusInfo;
-pub use enumeration::{DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
+pub use enumeration::{
+    DeviceId, DeviceInfo, DeviceSelector, InterfaceInfo, Speed, UsbControllerType,
+};
 
 mod device;
 pub use device::{Device, Endpoint, Interface};
@@ -269,6 +272,54 @@ pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
     platform::list_devices()
+}
+
+/// List devices that match a [`DeviceSelector`] and request user permission if necessary.
+///
+/// ### Example
+///
+/// ```no_run
+/// use nusb::{self, DeviceSelector};
+/// # async{
+/// let device = nusb::request_devices(&DeviceSelector::by_vid_pid(0xAAAA, 0xBBBB))
+///     .await
+///     .unwrap()
+///     .next()
+///     .expect("device not connected");
+/// # };
+/// ```
+///
+/// Platform-specific notes:
+///
+/// * **WebUSB**: This prompts the user for permission to access matching
+/// devices. If approved, the single device selected by the user will be
+/// returned. If cancelled, the iterator will be empty. The browser requires
+/// [Transient User Activation] for this call: it must be called in response to
+/// a user action, not unprompted on page load.
+///
+/// * On other platforms, this calls [`list_devices`] and filters for devices
+/// matching the selector.
+///
+/// [Transient User Activation]: https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/User_activation
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
+pub fn request_devices(
+    selector: &DeviceSelector,
+) -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo> + use<'_>, Error>> + use<'_>
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        list_devices().map(|r| r.map(|devices| devices.filter(|dev| dev.matches(selector))))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        platform::request_devices(selector)
+    }
 }
 
 /// Get an iterator listing the system USB buses.
