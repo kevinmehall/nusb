@@ -315,7 +315,7 @@ impl DeviceInfo {
     ///
     /// ### Platform-specific notes
     ///
-    /// * On Android, `DeviceInfo::request_permission` must be called if the permission
+    /// * On Android, `DeviceInfo::request_permission` has to be called if the permission
     ///   has not been granted.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
@@ -329,18 +329,14 @@ impl DeviceInfo {
 
     /// *(Android-only)* Performs a permission request for the device.
     ///
-    /// Returns `Ok(None)` if the permission is already granted; otherwise it returns
-    /// a `PermissionRequest`.
+    /// Returns `Ok(true)` immediately if the permission is already granted, or an error if the
+    /// device has been disconnected. Otherwise, it calls `UsbManager.requestPermission()`;
+    /// the current Android activity may be paused by this call and resumed on receving result.
     ///
-    /// The current Android activity may be paused by `UsbManager.requestPermission()`
-    /// called here, and resumed on receving result.
-    ///
-    /// Blocking on such a request in the UI thread or the native activity's main
-    /// event thread may block forever. Please avoid blocking in such a thread if
-    /// `DeviceInfo::has_permission` returns `false`. Status of the `PermissionRequest`
-    /// can be checked on the activity resume event.
+    /// Please avoid blocking on such a request with [MaybeFuture::wait] in the UI thread or the
+    /// native-side main event thread of the native activity, doing so may get blocked forever.
     #[cfg(target_os = "android")]
-    pub fn request_permission(&self) -> Result<Option<crate::PermissionRequest>, Error> {
+    pub fn request_permission(&self) -> impl MaybeFuture<Output = Result<bool, Error>> {
         crate::platform::request_permission(self)
     }
 }

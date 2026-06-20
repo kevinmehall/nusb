@@ -31,6 +31,8 @@ use jni_min_helper::{
 pub type DeviceId = i32;
 pub type JniGlobal = Arc<Global<AndroidUsbDevice<'static>>>;
 
+const ACTION_USB_PERMISSION: &str = "rust.android_usbser.USB_PERMISSION"; // custom
+
 jni::bind_java_type! {
     AndroidContext => "android.content.Context",
     fields {
@@ -39,20 +41,6 @@ jni::bind_java_type! {
     },
     methods {
         fn get_system_service(name: JString) -> JObject,
-    }
-}
-
-jni::bind_java_type! {
-    AndroidActivity => "android.app.Activity",
-    type_map = {
-        AndroidContext => "android.content.Context",
-        Intent => "android.content.Intent",
-    },
-    methods {
-        fn get_intent() -> Intent,
-    },
-    is_instance_of = {
-        AndroidContext,
     }
 }
 
@@ -151,8 +139,6 @@ jni::bind_java_type! {
 impl<'local> PendingIntent<'local> {
     const FLAG_MUTABLE: i32 = 0x02000000;
 }
-
-const ACTION_USB_PERMISSION: &str = "rust.android_usbser.USB_PERMISSION"; // custom
 
 /// Maps *unexpected* JNI errors to `nusb::Error` of `ErrorKind::Other`.
 /// Do not use this convenient conversion if error sorting is needed.
@@ -344,88 +330,114 @@ pub fn has_permission(dev_info: &DeviceInfo) -> Result<bool, Error> {
     })?)
 }
 
-pub fn request_permission(dev_info: &DeviceInfo) -> Result<Option<PermissionRequest>, Error> {
-    if !dev_info.check_connection() {
-        return Err(Error::new(
-            ErrorKind::Disconnected,
-            "the device has been disconnected",
-        ));
+pub fn request_permission(dev_info: &DeviceInfo) -> impl MaybeFuture<Output = Result<bool, Error>> {
+    match PermissionRequest::build(dev_info) {
+        Ok(req) => req,
+        Err(e) => PermissionRequest::build_dummy(dev_info, Err(e)),
     }
-    if dev_info.has_permission()? {
-        return Ok(None);
-    }
-
-    let usb_man = usb_manager()?;
-    let perm_req = jni_with_env(|env| {
-        let context = env.as_cast::<AndroidContext>(android_context())?;
-
-        let str_perm = android_app_package_name().to_string() + "." + ACTION_USB_PERMISSION;
-        let str_perm = JString::new(env, str_perm)?;
-        let package_name = JString::new(env, android_app_package_name())?;
-        let intent = Intent::new_with_action(env, str_perm)?;
-        intent.set_package(env, package_name)?;
-
-        let flags = if android_api_level() < 31 {
-            0
-        } else {
-            PendingIntent::FLAG_MUTABLE
-        };
-        let perm_req = PermissionRequest::build(dev_info)?;
-        let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
-        usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)?;
-        Ok(perm_req)
-    })?;
-
-    if dev_info.has_permission()? {
-        return Ok(None); // almost impossible
-    }
-    Ok(Some(perm_req))
 }
 
 /// Android-specific: Represents an ongoing permission request.
-pub struct PermissionRequest {
+struct PermissionRequest {
     dev_info: DeviceInfo,
-    _receiver: BroadcastReceiver, // deregisters on dropping
     inner: Arc<PermissionRequestInner>,
+    _receiver: Option<BroadcastReceiver>, // deregisters on dropping
 }
 
 struct PermissionRequestInner {
     notify: Notify,
-    result: Mutex<Option<bool>>,
+    result: OnceLock<Result<bool, Error>>,
 }
 
 impl PermissionRequest {
-    fn build(dev_info: &DeviceInfo) -> Result<Self, jni::errors::Error> {
+    fn build(dev_info: &DeviceInfo) -> Result<Self, Error> {
+        if !dev_info.check_connection() {
+            return Ok(Self::build_dummy(
+                dev_info,
+                Err(Error::new(ErrorKind::Disconnected, "device disconnected")),
+            ));
+        }
+        if dev_info.has_permission()? {
+            return Ok(Self::build_dummy(dev_info, Ok(true)));
+        }
+
+        let action_usb_permission =
+            format!("{}.{}", android_app_package_name(), ACTION_USB_PERMISSION);
+
         let inner = Arc::new(PermissionRequestInner {
             notify: Notify::new(),
-            result: Mutex::new(None),
+            result: OnceLock::new(),
         });
 
-        let inner_weak = Arc::downgrade(&inner);
-        let dev_info_2 = dev_info.clone();
-        let receiver = BroadcastReceiver::build(move |env, _, intent| {
-            Self::on_receive(&inner_weak, &dev_info_2, env, intent)
+        let receiver = {
+            let inner_weak = Arc::downgrade(&inner);
+            let dev_info_2 = dev_info.clone();
+            let receiver = BroadcastReceiver::build(move |env, _, intent| {
+                Self::on_receive(&inner_weak, &dev_info_2, env, intent)
+            })?;
+            receiver.register_for_action(&action_usb_permission)?;
+            receiver
+        };
+
+        let usb_man = usb_manager()?;
+        jni_with_env(|env| {
+            let context = env.as_cast::<AndroidContext>(android_context())?;
+            let intent = {
+                let str_perm = JString::new(env, action_usb_permission)?;
+                let package_name = JString::new(env, android_app_package_name())?;
+                let intent = Intent::new_with_action(env, str_perm)?;
+                intent.set_package(env, package_name)?;
+                intent
+            };
+            let flags = if android_api_level() < 31 {
+                0
+            } else {
+                PendingIntent::FLAG_MUTABLE
+            };
+            let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
+            usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)
         })?;
-        let str_perm = android_app_package_name().to_string() + "." + ACTION_USB_PERMISSION;
-        receiver.register_for_action(&str_perm)?;
 
         Ok(Self {
             dev_info: dev_info.clone(),
-            _receiver: receiver,
+            _receiver: Some(receiver),
             inner,
         })
     }
 
+    /// Builds a finished permission request with known result.
+    /// No `BroadcastReceiver` is built or registered here.
+    fn build_dummy(dev_info: &DeviceInfo, result: Result<bool, Error>) -> Self {
+        Self {
+            dev_info: dev_info.clone(),
+            inner: Arc::new(PermissionRequestInner {
+                notify: Notify::new(),
+                result: OnceLock::from(result),
+            }),
+            _receiver: None,
+        }
+    }
+
     /// Returns a reference of the associated `DeviceInfo` which can be cloned.
-    pub fn device_info(&self) -> &DeviceInfo {
+    fn device_info(&self) -> &DeviceInfo {
         &self.dev_info
     }
 
-    /// Checks the boolean result if the request has completed.
-    pub fn responsed(&self) -> Option<bool> {
-        *self.inner.result.lock().unwrap()
+    /// Returns the result if it is received or otherwise determined.
+    fn get_result(&self) -> Option<Result<bool, Error>> {
+        if !self.device_info().check_connection() {
+            return Some(Err(Error::new(
+                ErrorKind::Disconnected,
+                "device disconnected",
+            )));
+        }
+        if let Ok(true) = self.device_info().has_permission() {
+            return Some(Ok(true));
+        }
+        self.inner.result.get().cloned()
     }
 
+    /// This callback is received for once.
     fn on_receive<'a>(
         inner_weak: &Weak<PermissionRequestInner>,
         dev_expected: &DeviceInfo,
@@ -441,12 +453,15 @@ impl PermissionRequest {
             let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
             let granted = intent
                 .get_boolean_extra(env, extra_name, false)
-                .unwrap_or(false);
+                .map_err(|_| {
+                    env.exception_clear();
+                    Error::new(ErrorKind::Other, "failed to get EXTRA_PERMISSION_GRANTED")
+                });
             let Some(inner) = inner_weak.upgrade() else {
                 return Ok(());
             };
-            inner.result.lock().unwrap().replace(granted);
-            debug!("notifying for `PermissionRequest` with value {granted}");
+            debug!("notifying for `PermissionRequest` with value `{granted:?}`");
+            let _ = inner.result.set(granted);
             inner.notify.take_notify_state().notify();
         }
         Ok(())
@@ -454,17 +469,16 @@ impl PermissionRequest {
 }
 
 impl std::future::Future for PermissionRequest {
-    type Output = bool;
+    type Output = Result<bool, Error>;
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut task::Context<'_>,
     ) -> task::Poll<Self::Output> {
-        if let Ok(true) = self.device_info().has_permission() {
-            return task::Poll::Ready(true);
-        }
+        // It is assumed that Android always sends a false result on disconnection,
+        // so that `on_receive` can notify for it to make sure it is polled here.
         self.inner.notify.subscribe(cx);
-        if let Some(result) = self.responsed() {
+        if let Some(result) = self.get_result() {
             task::Poll::Ready(result)
         } else {
             task::Poll::Pending
@@ -474,10 +488,7 @@ impl std::future::Future for PermissionRequest {
 
 impl MaybeFuture for PermissionRequest {
     fn wait(self) -> Self::Output {
-        if let Ok(true) = self.device_info().has_permission() {
-            return true;
-        }
-        self.inner.notify.wait(|| self.responsed())
+        self.inner.notify.wait(|| self.get_result())
     }
 }
 

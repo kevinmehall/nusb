@@ -832,23 +832,12 @@ impl LinuxEndpoint {
     }
 
     pub(crate) fn allocate(&self, len: usize) -> Result<Buffer, Errno> {
-        match Buffer::mmap(&self.inner.interface.device.fd, len) {
-            Ok(buf) => Ok(buf),
-            Err(Errno::ACCESS) => {
-                warn!(
-                    "Access denied while allocating zero-copy buffer of length {len} for endpoint {}, using fallback",
-                    self.inner.address
-                );
-                Ok(Buffer::new(len))
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to allocate zero-copy buffer of length {len} for endpoint {}: {e}",
-                    self.inner.address
-                );
-                Err(e)
-            }
-        }
+        Buffer::mmap(&self.inner.interface.device.fd, len).inspect_err(|e| {
+            warn!(
+                "Failed to allocate zero-copy buffer of length {len} for endpoint {}: {e}",
+                self.inner.address
+            );
+        })
     }
 }
 
