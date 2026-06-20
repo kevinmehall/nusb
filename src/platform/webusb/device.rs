@@ -32,7 +32,6 @@ use super::{
     js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error, WebFuture,
 };
 
-#[derive(Clone)]
 pub(crate) struct WebusbDevice {
     pub device: UsbDevice,
     device_descriptor: Vec<u8>,
@@ -214,6 +213,7 @@ async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> 
         .await?;
         config_descriptors.push(data)
     }
+
     Ok(config_descriptors)
 }
 
@@ -241,7 +241,6 @@ pub async fn get_descriptor(
     Ok(Uint8Array::new(&data.buffer()).to_vec())
 }
 
-#[derive(Clone)]
 pub(crate) struct WebusbInterface {
     pub interface_number: u8,
     pub(crate) device: Arc<WebusbDevice>,
@@ -499,7 +498,7 @@ fn complete_transfer(
 
     match direction {
         Direction::Out => {
-            let result: UsbOutTransferResult = JsCast::unchecked_from_js(result.into());
+            let result: UsbOutTransferResult = JsCast::unchecked_from_js(result);
             // `buffer.len` is the user-supplied payload length (unchanged from
             // submit). `actual_len` is what the device acknowledged.
             Completion {
@@ -509,7 +508,7 @@ fn complete_transfer(
             }
         }
         Direction::In => {
-            let result: UsbInTransferResult = JsCast::unchecked_from_js(result.into());
+            let result: UsbInTransferResult = JsCast::unchecked_from_js(result);
             let actual_len = if let Some(data) = result.data() {
                 let received = Uint8Array::new(&data.buffer());
                 let received_len = received.length();

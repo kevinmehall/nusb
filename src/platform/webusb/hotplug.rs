@@ -4,7 +4,6 @@ use std::{
     task::{Poll, Waker},
 };
 
-use wasm_bindgen_futures::spawn_local;
 use web_sys::{
     wasm_bindgen::{prelude::Closure, JsCast},
     UsbConnectionEvent,
