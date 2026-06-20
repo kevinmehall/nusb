@@ -2,7 +2,7 @@ mod device;
 mod enumeration;
 mod hotplug;
 
-pub use enumeration::{list_buses, list_devices};
+pub use enumeration::list_devices;
 
 pub(crate) use device::WebusbDevice as Device;
 pub(crate) use device::WebusbEndpoint as Endpoint;

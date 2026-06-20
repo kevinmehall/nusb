@@ -1,7 +1,7 @@
 use wasm_bindgen_futures::JsFuture;
 use web_sys::UsbDevice;
 
-use crate::{maybe_future::Ready, BusInfo, DeviceInfo, Error, InterfaceInfo, MaybeFuture};
+use crate::{DeviceInfo, Error, InterfaceInfo, MaybeFuture};
 
 use super::{js_value_to_error, WebFuture};
 
@@ -14,10 +14,6 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
             .map_err(js_value_to_error)?;
         Ok(devices.into_iter().map(device_to_info))
     })
-}
-
-pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
-    Ready(Ok(Vec::<BusInfo>::new().into_iter()))
 }
 
 pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {

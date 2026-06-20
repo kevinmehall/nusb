@@ -183,12 +183,7 @@ mod platform;
 
 pub mod descriptors;
 mod enumeration;
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_arch = "wasm32"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use enumeration::BusInfo;
 pub use enumeration::{DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
@@ -255,12 +250,7 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 ///     })
 ///     .collect();
 /// ```
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_arch = "wasm32"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     platform::list_buses()
 }

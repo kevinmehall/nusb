@@ -504,12 +504,7 @@ impl UsbControllerType {
 /// * Linux: `path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_arch = "wasm32"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub struct BusInfo {
     #[cfg(any(target_os = "linux"))]
     pub(crate) path: SysfsPath,
@@ -560,12 +555,7 @@ pub struct BusInfo {
     pub(crate) controller_type: Option<UsbControllerType>,
 }
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_arch = "wasm32"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
     #[cfg(any(target_os = "linux"))]
