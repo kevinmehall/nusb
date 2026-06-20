@@ -119,7 +119,7 @@ pub(crate) struct Async<T: AsFd> {
 impl<T: AsFd> Async<T> {
     pub fn new(inner: T) -> Result<Self, Error> {
         let id = WAKERS.lock().unwrap().insert(None);
-        register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::empty())?;
+        register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::ONESHOT)?;
         Ok(Async { inner, id })
     }
 
