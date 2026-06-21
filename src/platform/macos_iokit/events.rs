@@ -34,14 +34,19 @@ pub(crate) fn add_event_source(source: CFRunLoopSource) -> EventRegistration {
         let (tx, rx) = mpsc::channel();
         let source = SendCFRunLoopSource(source.clone());
         info!("starting event loop thread");
-        thread::spawn(move || {
-            let runloop = CFRunLoop::get_current();
-            let source = source;
-            runloop.add_source(&source.0, unsafe { kCFRunLoopCommonModes });
-            tx.send(runloop).unwrap();
-            CFRunLoop::run_current();
-            info!("event loop thread exited");
-        });
+
+        thread::Builder::new()
+            .name("nusb-events".into())
+            .spawn(move || {
+                let runloop = CFRunLoop::get_current();
+                let source = source;
+                runloop.add_source(&source.0, unsafe { kCFRunLoopCommonModes });
+                tx.send(runloop).unwrap();
+                CFRunLoop::run_current();
+                info!("event loop thread exited");
+            })
+            .unwrap();
+
         event_loop.runloop = Some(rx.recv().expect("failed to start run loop thread"));
         event_loop.count = 1;
     }

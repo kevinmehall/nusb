@@ -97,7 +97,7 @@ impl LinuxDevice {
                         Errno::NOENT => {
                             Error::new_os(ErrorKind::Disconnected, "device not found", e)
                         }
-                        Errno::PERM => {
+                        Errno::PERM | Errno::ACCESS => {
                             Error::new_os(ErrorKind::PermissionDenied, "permission denied", e)
                         }
                         e => Error::new_os(ErrorKind::Other, "failed to open device", e),

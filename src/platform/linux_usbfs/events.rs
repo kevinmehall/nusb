@@ -67,7 +67,10 @@ pub(super) fn register_fd(fd: BorrowedFd, tag: Tag, flags: EventFlags) -> Result
     })?;
 
     if start_thread {
-        thread::spawn(event_loop);
+        thread::Builder::new()
+            .name("nusb-events".into())
+            .spawn(event_loop)
+            .unwrap();
     }
 
     epoll::add(epoll_fd, fd, tag.as_event_data(), flags)
@@ -116,7 +119,7 @@ pub(crate) struct Async<T: AsFd> {
 impl<T: AsFd> Async<T> {
     pub fn new(inner: T) -> Result<Self, Error> {
         let id = WAKERS.lock().unwrap().insert(None);
-        register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::empty())?;
+        register_fd(inner.as_fd(), Tag::Waker(id), EventFlags::ONESHOT)?;
         Ok(Async { inner, id })
     }
 
