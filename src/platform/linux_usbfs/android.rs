@@ -611,8 +611,9 @@ impl HotplugWatch {
             let id = get_extra_device(env, &intent)?.id();
             inner.events.lock().unwrap().push_back(Disconnected(id));
         }
-        if let Some(w) = inner.waker.lock().unwrap().take() {
-            w.wake()
+        let waker = inner.waker.lock().unwrap().take();
+        if let Some(w) = waker {
+            w.wake();
         }
         Ok(())
     }
