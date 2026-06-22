@@ -275,7 +275,9 @@ impl DeviceInfo {
     /// Serial number string, if available without device IO.
     ///
     /// ### Platform-specific notes
-    ///  * Android: Starting from Android 10, this can not be read without permission of opening the device.
+    ///  * Android: Starting from Android 10, this can not be read without permission
+    ///    of opening the device. Currently the permission request API is not exposed in
+    ///    `nusb`, please try to open the device to make sure of having the permission.
     ///    See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
@@ -315,29 +317,14 @@ impl DeviceInfo {
     ///
     /// ### Platform-specific notes
     ///
-    /// * On Android, `DeviceInfo::request_permission` has to be called if the permission
-    ///   has not been granted.
+    /// * On Android, a permission request will be performed if the permission has not been granted:
+    ///   - The permission dialog will be shown, waiting for user interaction; the current Android
+    ///     activity may be paused by this call and resumed on receving result.
+    ///   - An error of `ErrorKind::PermissionDenied` is returned when the user refused the request.
+    ///   - Please avoid blocking on this with [MaybeFuture::wait] in the UI thread or the native-side
+    ///     main event thread of the native activity, doing so may get blocked forever.
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
-    }
-
-    /// *(Android-only)* Checks if the caller has permission to access the device.
-    #[cfg(target_os = "android")]
-    pub fn has_permission(&self) -> Result<bool, Error> {
-        crate::platform::has_permission(self)
-    }
-
-    /// *(Android-only)* Performs a permission request for the device.
-    ///
-    /// Returns `Ok(true)` immediately if the permission is already granted, or an error if the
-    /// device has been disconnected. Otherwise, it calls `UsbManager.requestPermission()`;
-    /// the current Android activity may be paused by this call and resumed on receving result.
-    ///
-    /// Please avoid blocking on such a request with [MaybeFuture::wait] in the UI thread or the
-    /// native-side main event thread of the native activity, doing so may get blocked forever.
-    #[cfg(target_os = "android")]
-    pub fn request_permission(&self) -> impl MaybeFuture<Output = Result<bool, Error>> {
-        crate::platform::request_permission(self)
     }
 }
 

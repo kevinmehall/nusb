@@ -308,6 +308,10 @@ impl DeviceInfo {
         .unwrap_or(false)
     }
 
+    fn has_permission(&self) -> Result<bool, Error> {
+        has_permission(self)
+    }
+
     pub(crate) fn get_serial_number(&self) -> Option<&str> {
         if self.serial_number.get().is_none() {
             let _ = jni_with_env(|env| {
@@ -492,19 +496,18 @@ impl MaybeFuture for PermissionRequest {
     }
 }
 
-pub fn open_device(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
-    Ready((|| {
-        if !d.check_connection() {
-            return Err(Error::new(
-                ErrorKind::Disconnected,
-                "the device has been disconnected",
-            ));
-        }
-        if !d.has_permission()? {
-            return Err(Error::new(
-                ErrorKind::PermissionDenied,
-                "please call `DeviceInfo::request_permission` for Android",
-            ));
+pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
+    let dev = dev.clone();
+    request_permission(&dev).map(move |perm_result| {
+        match perm_result {
+            Ok(true) => (),
+            Ok(false) => {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "USB device permission request refused by the user",
+                ))
+            }
+            Err(e) => return Err(e),
         }
         jni_with_env(|env| {
             let usb_man = match usb_manager() {
@@ -514,7 +517,7 @@ pub fn open_device(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Linux
             // Another thread executing `from_device_info` will block here, until the guard
             // for the current thread is dropped after `LinuxDevice::create_inner`.
             let _guard = env.lock_obj(usb_man).unwrap();
-            let conn = usb_man.open_device(env, d.jni_global_ref.as_ref())?;
+            let conn = usb_man.open_device(env, dev.jni_global_ref.as_ref())?;
             if conn.is_null() {
                 return Ok(Err(Error::new(
                     ErrorKind::NotFound,
@@ -530,7 +533,7 @@ pub fn open_device(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Linux
             let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd as RawFd) };
             Ok(LinuxDevice::create_inner(owned_fd))
         })?
-    })())
+    })
 }
 
 #[derive(Debug)]
