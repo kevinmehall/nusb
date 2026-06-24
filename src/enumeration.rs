@@ -1,9 +1,6 @@
 #[cfg(target_os = "windows")]
 use std::ffi::{OsStr, OsString};
 
-#[cfg(target_os = "android")]
-use std::sync::{Arc, OnceLock};
-
 #[cfg(any(target_os = "linux"))]
 use crate::platform::SysfsPath;
 
@@ -86,12 +83,7 @@ pub struct DeviceInfo {
 
     pub(crate) manufacturer_string: Option<String>,
     pub(crate) product_string: Option<String>,
-
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub(crate) serial_number: Option<String>,
-
-    #[cfg(target_os = "android")]
-    pub(crate) serial_number: Arc<OnceLock<String>>,
 
     pub(crate) interfaces: Vec<InterfaceInfo>,
 }
@@ -282,18 +274,16 @@ impl DeviceInfo {
     ///
     /// ### Platform-specific notes
     /// * Android: Starting from Android 10, reading the serial number requires
-    ///   permission, and will only be available if the device has been opened and
-    ///   the user has approved the permission request.
+    ///   permission, and will only be available if the device has been opened
+    ///   after the user has approved the permission request, or the current
+    ///   application has been started by the user after the system suggested
+    ///   starting it on an USB device connection event according to the
+    ///   application's USB device filter. For the first case, please call
+    ///   [crate::list_devices] and find the [DeviceInfo] of the device again
+    ///   after opening the device in order to get the serial number.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-        {
-            self.serial_number.as_deref()
-        }
-        #[cfg(target_os = "android")]
-        {
-            self.get_serial_number()
-        }
+        self.serial_number.as_deref()
     }
 
     /// Iterator over the device's interfaces.

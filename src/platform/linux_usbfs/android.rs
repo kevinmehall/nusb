@@ -18,7 +18,6 @@ use log::{debug, error};
 use jni::{
     objects::{Global, JMap, JString},
     refs::Reference,
-    sys::jint,
     Env,
 };
 use jni_min_helper::{
@@ -100,7 +99,6 @@ jni::bind_java_type! {
         fn get_version() -> JString,
         fn get_interface_count() -> jint,
         fn get_interface(index: jint) -> AndroidUsbInterface,
-
     }
 }
 
@@ -256,7 +254,19 @@ fn build_device_info(
         speed: None,
         manufacturer_string: non_null_string(dev.get_manufacturer_name(env)?),
         product_string: non_null_string(dev.get_product_name(env)?),
-        serial_number: Arc::new(OnceLock::new()),
+        serial_number: if android_api_level() < 29 {
+            non_null_string(dev.get_serial_number(env)?)
+        } else {
+            // See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
+            match dev.get_serial_number(env) {
+                Ok(ser) => non_null_string(ser),
+                Err(_) => {
+                    // usually `java.lang.SecurityException: User has not given permission...`
+                    let _ = env.exception_catch();
+                    None
+                }
+            }
+        },
         interfaces: {
             let num_interfaces = dev.get_interface_count(env)? as u8;
             let mut interfaces = Vec::new();
@@ -308,20 +318,6 @@ impl DeviceInfo {
 
     fn has_permission(&self) -> Result<bool, Error> {
         has_permission(self)
-    }
-
-    pub(crate) fn get_serial_number(&self) -> Option<&str> {
-        if self.serial_number.get().is_none() {
-            let _ = jni_with_env(|env| {
-                if let Some(serial_no) =
-                    non_null_string(self.jni_global_ref.get_serial_number(env)?)
-                {
-                    let _ = self.serial_number.set(serial_no);
-                }
-                Ok(())
-            });
-        };
-        self.serial_number.get().map(|s| s.as_str())
     }
 }
 
@@ -446,12 +442,9 @@ impl PermissionRequest {
         env: &mut Env<'a>,
         intent: Intent<'a>,
     ) -> Result<(), jni::errors::Error> {
-        let dev = get_extra_device(env, &intent)?;
-        debug!(
-            "Received permission request result of device {:?}",
-            dev.id()
-        );
-        if dev.id() == dev_expected.id() {
+        let dev_id = get_extra_device_id(env, &intent)?;
+        debug!("Received permission request result of device {dev_id:?}");
+        if dev_id == dev_expected.id() {
             let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
             let granted = intent
                 .get_boolean_extra(env, extra_name, false)
@@ -606,10 +599,11 @@ impl HotplugWatch {
         let action_attached = AndroidUsbManager::ACTION_USB_DEVICE_ATTACHED(env)?.to_string();
         let action_detached = AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env)?.to_string();
         if action == action_attached.trim() {
-            let dev = get_extra_device(env, &intent)?;
+            let java_dev = get_extra_device(env, &intent)?;
+            let dev = build_device_info(env, &java_dev)?;
             inner.events.lock().unwrap().push_back(Connected(dev));
         } else if action == action_detached.trim() {
-            let id = get_extra_device(env, &intent)?.id();
+            let id = get_extra_device_id(env, &intent)?;
             inner.events.lock().unwrap().push_back(Disconnected(id));
         }
         let waker = inner.waker.lock().unwrap().take();
@@ -620,19 +614,27 @@ impl HotplugWatch {
     }
 }
 
-fn get_extra_device(
-    env: &mut Env<'_>,
+fn get_extra_device<'local>(
+    env: &mut Env<'local>,
     intent: &Intent<'_>,
-) -> Result<DeviceInfo, jni::errors::Error> {
+) -> Result<AndroidUsbDevice<'local>, jni::errors::Error> {
     let extra_device = AndroidUsbManager::EXTRA_DEVICE(env)?;
     let cls_dev = AndroidUsbDevice::lookup_class(env, &jni::refs::LoaderContext::None)?;
     let java_dev = intent.get_parcelable_extra(env, &extra_device, cls_dev.deref())?;
     if !java_dev.is_null() {
-        let java_dev = AndroidUsbDevice::cast_local(env, java_dev)?;
-        build_device_info(env, &java_dev)
+        AndroidUsbDevice::cast_local(env, java_dev)
     } else {
         Err(jni::errors::Error::NullPtr(
             "Unexpected: the Intent has no EXTRA_DEVICE",
         ))
     }
+}
+
+fn get_extra_device_id(
+    env: &mut Env<'_>,
+    intent: &Intent<'_>,
+) -> Result<crate::DeviceId, jni::errors::Error> {
+    Ok(crate::DeviceId(
+        get_extra_device(env, intent)?.get_device_id(env)?,
+    ))
 }
