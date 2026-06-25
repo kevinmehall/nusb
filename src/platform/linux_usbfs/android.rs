@@ -356,13 +356,15 @@ pub fn request_permission(dev_info: &DeviceInfo) -> impl MaybeFuture<Output = Re
     }
 }
 
-static FLAG_UNFINISHED_REQUEST: AtomicBool = AtomicBool::new(false);
+/// Android will only show one permission request dialog at a time. This
+/// receiver is used to wait for the completion of the permission request, and
+/// if already set, we won't start a new one.
+static PENDING_PERMISSION_RECEIVER: Mutex<Option<BroadcastReceiver>> = Mutex::new(None);
 
-/// Android-specific: Represents an ongoing permission request.
+/// Represents an ongoing permission request.
 struct PermissionRequest {
     dev_info: DeviceInfo,
     inner: Arc<PermissionRequestInner>,
-    receiver: Option<BroadcastReceiver>, // deregisters on dropping
 }
 
 struct PermissionRequestInner {
@@ -380,6 +382,16 @@ impl PermissionRequest {
         }
         if dev_info.has_permission()? {
             return Ok(Self::build_dummy(dev_info, Ok(true)));
+        }
+
+        let mut receiver_lock = PENDING_PERMISSION_RECEIVER.lock().unwrap();
+
+        if receiver_lock.is_some() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "another permission request is already pending",
+            )
+            .log_debug());
         }
 
         let action_usb_permission =
@@ -401,12 +413,7 @@ impl PermissionRequest {
         };
 
         let usb_man = usb_manager()?;
-        if FLAG_UNFINISHED_REQUEST.swap(true, Ordering::SeqCst) {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Previous device permission request is unfinished",
-            ));
-        }
+
         jni_with_env(|env| {
             let context = env.as_cast::<AndroidContext>(android_context())?;
             let intent = {
@@ -423,18 +430,21 @@ impl PermissionRequest {
             };
             let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
             usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)
-        })
-        .inspect_err(|_| FLAG_UNFINISHED_REQUEST.store(false, Ordering::SeqCst))?;
+        })?;
+
+        *receiver_lock = Some(receiver);
+        log::debug!(
+            "requested user permission for device {}",
+            dev_info.device_id
+        );
 
         Ok(Self {
             dev_info: dev_info.clone(),
-            receiver: Some(receiver),
             inner,
         })
     }
 
     /// Builds a finished permission request with known result.
-    /// No `BroadcastReceiver` is built or registered here.
     fn build_dummy(dev_info: &DeviceInfo, result: Result<bool, Error>) -> Self {
         Self {
             dev_info: dev_info.clone(),
@@ -442,7 +452,6 @@ impl PermissionRequest {
                 notify: Notify::new(),
                 result: OnceLock::from(result),
             }),
-            receiver: None,
         }
     }
 
@@ -465,7 +474,7 @@ impl PermissionRequest {
         self.inner.result.get().cloned()
     }
 
-    /// This callback is received for once.
+    /// Called when a permission request result is received.
     fn on_receive<'a>(
         inner_weak: &Weak<PermissionRequestInner>,
         dev_expected: &DeviceInfo,
@@ -475,6 +484,7 @@ impl PermissionRequest {
         let dev_id = get_extra_device_id(env, &intent)?;
         debug!("Received permission request result of device {dev_id:?}");
         if dev_id == dev_expected.id() {
+            drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
             let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
             let granted = intent
                 .get_boolean_extra(env, extra_name, false)
@@ -494,16 +504,8 @@ impl PermissionRequest {
 }
 
 impl PermissionRequestInner {
-    /// Sets the `result` once lock and unsets the global pending request flag
-    /// if the result is previously unset.
-    fn set_result(&self, res: Result<bool, Error>) -> bool {
-        let mut is_set = false;
-        self.result.get_or_init(|| {
-            is_set = true;
-            FLAG_UNFINISHED_REQUEST.store(false, Ordering::SeqCst);
-            res
-        });
-        is_set
+    fn set_result(&self, res: Result<bool, Error>) {
+        let _ = self.result.set(res);
     }
 }
 
@@ -528,23 +530,6 @@ impl std::future::Future for PermissionRequest {
 impl MaybeFuture for PermissionRequest {
     fn wait(self) -> Self::Output {
         self.inner.notify.wait(|| self.get_result())
-    }
-}
-
-impl Drop for PermissionRequest {
-    fn drop(&mut self) {
-        if self.get_result().is_none() {
-            // This is not a dummy request, and the permission dialog probably still exists,
-            // so wait for the result before resetting `FLAG_UNFINISHED_REQUEST`.
-            warn!("Aborted device opening during permission request, waiting for result in a new thread");
-            let inner = self.inner.clone();
-            let receiver = self.receiver.take().unwrap();
-            std::thread::spawn(move || {
-                let _receiver = receiver;
-                inner.notify.wait(|| inner.result.get());
-                warn!("Got result in the permission request tracker thread");
-            });
-        }
     }
 }
 
