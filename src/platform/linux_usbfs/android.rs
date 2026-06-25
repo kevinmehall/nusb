@@ -9,11 +9,14 @@ use crate::{
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock, Weak,
+    },
     task::{self, Poll, Waker},
 };
 
-use log::{debug, error};
+use log::{debug, error, warn};
 
 use jni::{
     objects::{Global, JMap, JString},
@@ -117,6 +120,7 @@ jni::bind_java_type! {
     AndroidUsbDeviceConnection => "android.hardware.usb.UsbDeviceConnection",
     methods {
         fn get_file_descriptor() -> jint,
+        fn close(),
     }
 }
 
@@ -230,24 +234,33 @@ fn build_device_info(
     env: &mut Env,
     dev: &AndroidUsbDevice<'_>,
 ) -> Result<DeviceInfo, jni::errors::Error> {
-    let version = dev.get_version(env)?.to_string();
-    // Note: on PC, `bcdUSB 1.10` shown in `lsusb` corresponds to raw value `usb_version: 0x0110`,
-    // but here `getVersion` returns `1.16`; is the "buggy" code below dealing with an Android bug?
-    let ver_parser = |version: &str| {
-        let mut ver_iter = version.split('.').map(|v| v.trim().parse());
-        Some((ver_iter.next()?.ok()?, ver_iter.next()?.ok()?))
+    let device_version = if android_api_level() >= 28 {
+        let version = dev.get_version(env)?.to_string();
+        let ver_parser = |version: &str| -> Option<(u16, u16)> {
+            let mut ver_iter = version.split('.').map(|v| v.trim().parse());
+            Some((ver_iter.next()?.ok()?, ver_iter.next()?.ok()?))
+        };
+        ver_parser(&version)
+            .map(|(major, minor)| {
+                let (ver_tens, ver_ones) = (major / 10, major % 10);
+                let (ver_tenths, ver_hundredths) = (minor / 10, minor % 10);
+                (ver_tens << 12) | (ver_ones << 8) | (ver_tenths << 4) | ver_hundredths
+            })
+            .unwrap_or_else(|| {
+                warn!("Unable to parse device version for DeviceInfo '{version}'");
+                0xFFFF
+            })
+    } else {
+        warn!("Unable to get device_version for DeviceInfo (Android API level < 28)");
+        0xFFFF
     };
-    let (ver_major, ver_minor): (u16, u16) = ver_parser(&version).unwrap_or_else(|| {
-        log::warn!("Unable to parse device USB version '{version}'");
-        (0, 0)
-    });
 
     Ok(DeviceInfo {
         device_id: dev.get_device_id(env)?,
         jni_global_ref: Arc::new(env.new_global_ref(dev)?),
         vendor_id: dev.get_vendor_id(env)? as u16,
         product_id: dev.get_product_id(env)? as u16,
-        usb_version: (ver_major << 8) | ver_minor,
+        device_version,
         class: dev.get_device_class(env)? as u8,
         subclass: dev.get_device_subclass(env)? as u8,
         protocol: dev.get_device_protocol(env)? as u8,
@@ -268,12 +281,20 @@ fn build_device_info(
             }
         },
         interfaces: {
-            let num_interfaces = dev.get_interface_count(env)? as u8;
-            let mut interfaces = Vec::new();
-            for i in 0..num_interfaces {
+            let cnt_interfaces = dev.get_interface_count(env)? as u8;
+            let mut interfaces: Vec<InterfaceInfo> = Vec::new();
+            for i in 0..cnt_interfaces {
                 let interface = dev.get_interface(env, i as i32)?;
+                let interface_number = interface.get_id(env)? as u8;
+                // Get information from the first alternative setting, ignore others.
+                if interfaces
+                    .iter()
+                    .any(|intr| intr.interface_number == interface_number)
+                {
+                    continue;
+                }
                 interfaces.push(InterfaceInfo {
-                    interface_number: interface.get_id(env)? as u8,
+                    interface_number,
                     class: interface.get_interface_class(env)? as u8,
                     subclass: interface.get_interface_subclass(env)? as u8,
                     protocol: interface.get_interface_protocol(env)? as u8,
@@ -335,11 +356,13 @@ pub fn request_permission(dev_info: &DeviceInfo) -> impl MaybeFuture<Output = Re
     }
 }
 
+static FLAG_UNFINISHED_REQUEST: AtomicBool = AtomicBool::new(false);
+
 /// Android-specific: Represents an ongoing permission request.
 struct PermissionRequest {
     dev_info: DeviceInfo,
     inner: Arc<PermissionRequestInner>,
-    _receiver: Option<BroadcastReceiver>, // deregisters on dropping
+    receiver: Option<BroadcastReceiver>, // deregisters on dropping
 }
 
 struct PermissionRequestInner {
@@ -378,6 +401,12 @@ impl PermissionRequest {
         };
 
         let usb_man = usb_manager()?;
+        if FLAG_UNFINISHED_REQUEST.swap(true, Ordering::SeqCst) {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Previous device permission request is unfinished",
+            ));
+        }
         jni_with_env(|env| {
             let context = env.as_cast::<AndroidContext>(android_context())?;
             let intent = {
@@ -394,11 +423,12 @@ impl PermissionRequest {
             };
             let pending_intent = PendingIntent::get_broadcast(env, context, 0, intent, flags)?;
             usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)
-        })?;
+        })
+        .inspect_err(|_| FLAG_UNFINISHED_REQUEST.store(false, Ordering::SeqCst))?;
 
         Ok(Self {
             dev_info: dev_info.clone(),
-            _receiver: Some(receiver),
+            receiver: Some(receiver),
             inner,
         })
     }
@@ -412,7 +442,7 @@ impl PermissionRequest {
                 notify: Notify::new(),
                 result: OnceLock::from(result),
             }),
-            _receiver: None,
+            receiver: None,
         }
     }
 
@@ -424,12 +454,12 @@ impl PermissionRequest {
     /// Returns the result if it is received or otherwise determined.
     fn get_result(&self) -> Option<Result<bool, Error>> {
         if !self.device_info().check_connection() {
-            return Some(Err(Error::new(
-                ErrorKind::Disconnected,
-                "device disconnected",
-            )));
+            let res = Err(Error::new(ErrorKind::Disconnected, "device disconnected"));
+            self.inner.set_result(res.clone());
+            return Some(res);
         }
         if let Ok(true) = self.device_info().has_permission() {
+            self.inner.set_result(Ok(true));
             return Some(Ok(true));
         }
         self.inner.result.get().cloned()
@@ -456,10 +486,24 @@ impl PermissionRequest {
                 return Ok(());
             };
             debug!("notifying for `PermissionRequest` with value `{granted:?}`");
-            let _ = inner.result.set(granted);
+            inner.set_result(granted);
             inner.notify.take_notify_state().notify();
         }
         Ok(())
+    }
+}
+
+impl PermissionRequestInner {
+    /// Sets the `result` once lock and unsets the global pending request flag
+    /// if the result is previously unset.
+    fn set_result(&self, res: Result<bool, Error>) -> bool {
+        let mut is_set = false;
+        self.result.get_or_init(|| {
+            is_set = true;
+            FLAG_UNFINISHED_REQUEST.store(false, Ordering::SeqCst);
+            res
+        });
+        is_set
     }
 }
 
@@ -487,6 +531,23 @@ impl MaybeFuture for PermissionRequest {
     }
 }
 
+impl Drop for PermissionRequest {
+    fn drop(&mut self) {
+        if self.get_result().is_none() {
+            // This is not a dummy request, and the permission dialog probably still exists,
+            // so wait for the result before resetting `FLAG_UNFINISHED_REQUEST`.
+            warn!("Aborted device opening during permission request, waiting for result in a new thread");
+            let inner = self.inner.clone();
+            let receiver = self.receiver.take().unwrap();
+            std::thread::spawn(move || {
+                let _receiver = receiver;
+                inner.notify.wait(|| inner.result.get());
+                warn!("Got result in the permission request tracker thread");
+            });
+        }
+    }
+}
+
 pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<LinuxDevice>, Error>> {
     let dev = dev.clone();
     request_permission(&dev).map(move |perm_result| {
@@ -505,9 +566,6 @@ pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Lin
                 Ok(man) => man,
                 Err(e) => return Ok(Err(e)),
             };
-            // Another thread executing `from_device_info` will block here, until the guard
-            // for the current thread is dropped after `LinuxDevice::create_inner`.
-            let _guard = env.lock_obj(usb_man).unwrap();
             let conn = usb_man.open_device(env, dev.jni_global_ref.as_ref())?;
             if conn.is_null() {
                 return Ok(Err(Error::new(
@@ -522,7 +580,10 @@ pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Lin
             use std::os::fd::*;
             debug!("Wrapping fd {raw_fd} as usbfs device");
             let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd as RawFd) };
-            Ok(LinuxDevice::create_inner(owned_fd))
+            let linux_dev = LinuxDevice::create_inner(owned_fd).inspect_err(|_| {
+                let _ = conn.close(env);
+            });
+            Ok(linux_dev)
         })?
     })
 }

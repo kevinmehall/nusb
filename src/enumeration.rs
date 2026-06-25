@@ -72,9 +72,9 @@ pub struct DeviceInfo {
     pub(crate) product_id: u16,
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    pub(crate) device_version: u16,
-
     pub(crate) usb_version: u16,
+
+    pub(crate) device_version: u16,
     pub(crate) class: u8,
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
@@ -215,13 +215,13 @@ impl DeviceInfo {
 
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn device_version(&self) -> u16 {
         self.device_version
     }
 
     /// Encoded version of the USB specification, from the `bcdUSB` device descriptor field.
     #[doc(alias = "bcdUSB")]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     pub fn usb_version(&self) -> u16 {
         self.usb_version
     }
@@ -342,19 +342,19 @@ impl std::fmt::Debug for DeviceInfo {
             .field("product_id", &format_args!("0x{:04X}", self.product_id));
 
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        s.field("usb_version", &format_args!("0x{:04X}", self.usb_version));
+
         s.field(
             "device_version",
             &format_args!("0x{:04X}", self.device_version),
-        );
-
-        s.field("usb_version", &format_args!("0x{:04X}", self.usb_version))
-            .field("class", &format_args!("0x{:02X}", self.class))
-            .field("subclass", &format_args!("0x{:02X}", self.subclass))
-            .field("protocol", &format_args!("0x{:02X}", self.protocol))
-            .field("speed", &self.speed)
-            .field("manufacturer_string", &self.manufacturer_string)
-            .field("product_string", &self.product_string)
-            .field("serial_number", &self.serial_number());
+        )
+        .field("class", &format_args!("0x{:02X}", self.class))
+        .field("subclass", &format_args!("0x{:02X}", self.subclass))
+        .field("protocol", &format_args!("0x{:02X}", self.protocol))
+        .field("speed", &self.speed)
+        .field("manufacturer_string", &self.manufacturer_string)
+        .field("product_string", &self.product_string)
+        .field("serial_number", &self.serial_number());
 
         #[cfg(target_os = "linux")]
         {
