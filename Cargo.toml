@@ -45,6 +45,10 @@ smol = ["dep:blocking", "dep:futures-io"]
 # Use `tokio`'s IO threadpool for making blocking IO async
 tokio = ["dep:tokio"]
 
+# Run blocking Futures on the async executor that should be run in an async threadpool
+# (not recommended, intended for simple executors like pollster/swait)
+blocking-in-async = []
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
