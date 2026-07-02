@@ -267,19 +267,15 @@ fn build_device_info(
         speed: None,
         manufacturer_string: non_null_string(dev.get_manufacturer_name(env)?),
         product_string: non_null_string(dev.get_product_name(env)?),
-        serial_number: if android_api_level() < 29 {
-            non_null_string(dev.get_serial_number(env)?)
-        } else {
-            // See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
-            match dev.get_serial_number(env) {
-                Ok(ser) => non_null_string(ser),
-                Err(_) => {
-                    // usually `java.lang.SecurityException: User has not given permission...`
-                    let _ = env.exception_catch();
-                    None
-                }
-            }
-        },
+        serial_number: dev
+            .get_serial_number(env)
+            .inspect_err(|_| {
+                // See <https://developer.android.com/about/versions/10/privacy/changes?hl=en#usb-serial>.
+                // This is usually `java.lang.SecurityException: User has not given permission...`.
+                let _ = env.exception_catch();
+            })
+            .ok()
+            .and_then(non_null_string),
         interfaces: {
             let cnt_interfaces = dev.get_interface_count(env)? as u8;
             let mut interfaces: Vec<InterfaceInfo> = Vec::new();
@@ -356,9 +352,9 @@ pub fn request_permission(dev_info: &DeviceInfo) -> impl MaybeFuture<Output = Re
     }
 }
 
-/// Android will only show one permission request dialog at a time. This
-/// receiver is used to wait for the completion of the permission request, and
-/// if already set, we won't start a new one.
+/// Android will only show one permission request dialog at a time; forced cancellation
+/// of the previous request dialog is not possible. This receiver is used to wait for the
+/// completion of the permission request, and if already set, we won't start a new one.
 static PENDING_PERMISSION_RECEIVER: Mutex<Option<BroadcastReceiver>> = Mutex::new(None);
 
 /// Represents an ongoing permission request.
@@ -394,9 +390,6 @@ impl PermissionRequest {
             .log_debug());
         }
 
-        let action_usb_permission =
-            format!("{}.{}", android_app_package_name(), ACTION_USB_PERMISSION);
-
         let inner = Arc::new(PermissionRequestInner {
             notify: Notify::new(),
             result: OnceLock::new(),
@@ -408,7 +401,13 @@ impl PermissionRequest {
             let receiver = BroadcastReceiver::build(move |env, _, intent| {
                 Self::on_receive(&inner_weak, &dev_info_2, env, intent)
             })?;
-            receiver.register_for_action(&action_usb_permission)?;
+            receiver.register_for_action(&Self::action_usb_permission())?;
+            receiver.register_for_action(
+                jni_with_env(|env| {
+                    AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env).map(|s| s.to_string())
+                })?
+                .trim(),
+            )?;
             receiver
         };
 
@@ -417,7 +416,7 @@ impl PermissionRequest {
         jni_with_env(|env| {
             let context = env.as_cast::<AndroidContext>(android_context())?;
             let intent = {
-                let str_perm = JString::new(env, action_usb_permission)?;
+                let str_perm = JString::new(env, Self::action_usb_permission())?;
                 let package_name = JString::new(env, android_app_package_name())?;
                 let intent = Intent::new_with_action(env, str_perm)?;
                 intent.set_package(env, package_name)?;
@@ -461,7 +460,7 @@ impl PermissionRequest {
     }
 
     /// Returns the result if it is received or otherwise determined.
-    fn get_result(&self) -> Option<Result<bool, Error>> {
+    fn check_result(&self) -> Option<Result<bool, Error>> {
         if !self.device_info().check_connection() {
             let res = Err(Error::new(ErrorKind::Disconnected, "device disconnected"));
             self.inner.set_result(res.clone());
@@ -481,31 +480,56 @@ impl PermissionRequest {
         env: &mut Env<'a>,
         intent: Intent<'a>,
     ) -> Result<(), jni::errors::Error> {
-        let dev_id = get_extra_device_id(env, &intent)?;
-        debug!("Received permission request result of device {dev_id:?}");
-        if dev_id == dev_expected.id() {
-            drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
-            let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
-            let granted = intent
-                .get_boolean_extra(env, extra_name, false)
-                .map_err(|_| {
-                    env.exception_clear();
-                    Error::new(ErrorKind::Other, "failed to get EXTRA_PERMISSION_GRANTED")
-                });
-            let Some(inner) = inner_weak.upgrade() else {
-                return Ok(());
+        if intent.get_action(env)?.to_string().trim() == &Self::action_usb_permission() {
+            let dev_id = get_extra_device_id(env, &intent)?;
+            debug!("Received permission request result of device {dev_id:?}");
+            if dev_id == dev_expected.id() {
+                let Some(inner) = inner_weak.upgrade() else {
+                    // The Rust-side request was aborted previously; still,
+                    // the actual request needs to be treated as completed.
+                    drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
+                    return Ok(());
+                };
+                let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
+                let granted = intent
+                    .get_boolean_extra(env, extra_name, false)
+                    .map_err(|_| {
+                        env.exception_clear();
+                        Error::new(ErrorKind::Other, "failed to get EXTRA_PERMISSION_GRANTED")
+                    });
+                inner.set_result(granted);
+            }
+        } else if !dev_expected.check_connection() {
+            debug!("Received disconnection event in `PermissionRequest::on_receive`");
+            if let Some(inner) = inner_weak.upgrade() {
+                inner.set_result(Err(Error::new(
+                    ErrorKind::Disconnected,
+                    "device disconnected",
+                )));
+            } else {
+                drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
             };
-            debug!("notifying for `PermissionRequest` with value `{granted:?}`");
-            inner.set_result(granted);
-            inner.notify.take_notify_state().notify();
         }
         Ok(())
+    }
+
+    fn action_usb_permission() -> String {
+        format!("{}.{}", android_app_package_name(), ACTION_USB_PERMISSION)
     }
 }
 
 impl PermissionRequestInner {
+    /// The result should be set for once when it is received or otherwise determined.
+    /// * When it is set, the actual request is treated as completed, thus the
+    ///   `PENDING_PERMISSION_RECEIVER` is cleared to make possible of a new request.
+    ///   Then the outer `PermissionRequest` is notified.
+    /// * If the result is already set, this should be a no-op.
     fn set_result(&self, res: Result<bool, Error>) {
-        let _ = self.result.set(res);
+        if self.result.set(res.clone()).is_ok() {
+            debug!("notifying for `PermissionRequest` with value `{res:?}`");
+            drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
+            self.notify.take_notify_state().notify();
+        }
     }
 }
 
@@ -516,10 +540,8 @@ impl std::future::Future for PermissionRequest {
         self: std::pin::Pin<&mut Self>,
         cx: &mut task::Context<'_>,
     ) -> task::Poll<Self::Output> {
-        // It is assumed that Android always sends a false result on disconnection,
-        // so that `on_receive` can notify for it to make sure it is polled here.
         self.inner.notify.subscribe(cx);
-        if let Some(result) = self.get_result() {
+        if let Some(result) = self.check_result() {
             task::Poll::Ready(result)
         } else {
             task::Poll::Pending
@@ -529,7 +551,7 @@ impl std::future::Future for PermissionRequest {
 
 impl MaybeFuture for PermissionRequest {
     fn wait(self) -> Self::Output {
-        self.inner.notify.wait(|| self.get_result())
+        self.inner.notify.wait(|| self.check_result())
     }
 }
 
@@ -565,10 +587,7 @@ pub fn open_device(dev: &DeviceInfo) -> impl MaybeFuture<Output = Result<Arc<Lin
             use std::os::fd::*;
             debug!("Wrapping fd {raw_fd} as usbfs device");
             let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd as RawFd) };
-            let linux_dev = LinuxDevice::create_inner(owned_fd).inspect_err(|_| {
-                let _ = conn.close(env);
-            });
-            Ok(linux_dev)
+            Ok(LinuxDevice::create_inner(owned_fd))
         })?
     })
 }
