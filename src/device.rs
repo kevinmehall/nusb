@@ -22,6 +22,12 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_arch = "wasm32")]
+use web_sys::UsbDevice;
+
+#[cfg(all(docsrs, not(target_arch = "wasm32")))]
+struct UsbDevice();
+
 /// An opened USB device.
 ///
 /// Obtain a `Device` by calling [`DeviceInfo::open`]:
@@ -64,7 +70,7 @@ impl Device {
     /// etc.
     ///
     /// *Supported on Linux and Android only.*
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(docsrs, target_os = "android", target_os = "linux"))]
     pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
         platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
     }
@@ -72,8 +78,8 @@ impl Device {
     /// Wrap a [`web_sys::UsbDevice`] object obtained from JS.
     ///
     /// *Supported on wasm only.*
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_js(device: web_sys::UsbDevice) -> impl MaybeFuture<Output = Result<Device, Error>> {
+    #[cfg(any(docsrs, target_arch = "wasm32"))]
+    pub fn from_js(device: UsbDevice) -> impl MaybeFuture<Output = Result<Device, Error>> {
         platform::Device::from_js(device).map(|d| d.map(Device::wrap))
     }
 
@@ -317,6 +323,7 @@ impl Device {
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
     #[cfg(any(
+        docsrs,
         target_os = "linux",
         target_os = "macos",
         target_os = "android",
@@ -359,6 +366,7 @@ impl Device {
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
     #[cfg(any(
+        docsrs,
         target_os = "linux",
         target_os = "macos",
         target_os = "android",

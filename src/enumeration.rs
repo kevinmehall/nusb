@@ -1,9 +1,15 @@
-#[cfg(target_os = "windows")]
+#[cfg(any(docsrs, target_os = "windows"))]
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use crate::platform::SysfsPath;
+
+#[cfg(target_os = "windows")]
+use crate::platform::DevInst;
+
+#[cfg(all(docsrs, not(target_os = "windows")))]
+struct DevInst();
 
 use crate::{Device, Error, MaybeFuture};
 
@@ -42,7 +48,7 @@ pub struct DeviceInfo {
     pub(crate) port_number: u32,
 
     #[cfg(target_os = "windows")]
-    pub(crate) devinst: crate::platform::DevInst,
+    pub(crate) devinst: DevInst,
 
     #[cfg(target_os = "windows")]
     pub(crate) driver: Option<String>,
@@ -129,7 +135,7 @@ impl DeviceInfo {
     }
 
     /// *(Linux-only)* Sysfs path for the device.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(docsrs, target_os = "linux"))]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
     }
@@ -137,31 +143,31 @@ impl DeviceInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(any(target_os = "linux"))]
+    #[cfg(any(docsrs, target_os = "linux"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
 
     /// *(Windows-only)* Instance ID path of this device
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn instance_id(&self) -> &OsStr {
         &self.instance_id
     }
 
     /// *(Windows-only)* Location paths property
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn location_paths(&self) -> &[OsString] {
         &self.location_paths
     }
 
     /// *(Windows-only)* Instance ID path of the parent hub
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn parent_instance_id(&self) -> &OsStr {
         &self.parent_instance_id
     }
 
     /// *(Windows-only)* Port number
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn port_number(&self) -> u32 {
         self.port_number
     }
@@ -173,37 +179,52 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
+    #[cfg(any(
+        docsrs,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
 
     /// *(Windows-only)* Driver associated with the device as a whole
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn driver(&self) -> Option<&str> {
         self.driver.as_deref()
     }
 
     /// *(macOS-only)* IOKit Location ID
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn location_id(&self) -> u32 {
         self.location_id
     }
 
     /// *(macOS-only)* IOKit [Registry Entry ID](https://developer.apple.com/documentation/iokit/1514719-ioregistryentrygetregistryentryi?language=objc)
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn registry_entry_id(&self) -> u64 {
         self.registry_id
     }
 
     /// Identifier for the bus / host controller where the device is connected.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
+    #[cfg(any(
+        docsrs,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
 
     /// Number identifying the device within the bus.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        docsrs,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     pub fn device_address(&self) -> u8 {
         self.device_address
     }
@@ -223,6 +244,7 @@ impl DeviceInfo {
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
     #[cfg(any(
+        docsrs,
         target_os = "linux",
         target_os = "macos",
         target_os = "windows",
@@ -259,7 +281,12 @@ impl DeviceInfo {
     }
 
     /// Connection speed
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        docsrs,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     pub fn speed(&self) -> Option<Speed> {
         self.speed
     }
@@ -522,7 +549,12 @@ impl UsbControllerType {
 /// * Linux: `path`, `busnum`, `root_hub`
 /// * Windows: `instance_id`, `parent_instance_id`, `location_paths`, `devinst`, `root_hub_description`
 /// * macOS: `registry_id`, `location_id`, `name`, `provider_class_name`, `class_name`
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    docsrs,
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 pub struct BusInfo {
     #[cfg(any(target_os = "linux"))]
     pub(crate) path: SysfsPath,
@@ -541,7 +573,7 @@ pub struct BusInfo {
     pub(crate) location_paths: Vec<OsString>,
 
     #[cfg(target_os = "windows")]
-    pub(crate) devinst: crate::platform::DevInst,
+    pub(crate) devinst: DevInst,
 
     #[cfg(target_os = "windows")]
     pub(crate) root_hub_description: String,
@@ -573,10 +605,15 @@ pub struct BusInfo {
     pub(crate) controller_type: Option<UsbControllerType>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    docsrs,
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 impl BusInfo {
     /// *(Linux-only)* Sysfs path for the bus.
-    #[cfg(any(target_os = "linux"))]
+    #[cfg(any(docsrs, target_os = "linux"))]
     pub fn sysfs_path(&self) -> &std::path::Path {
         &self.path.0
     }
@@ -584,67 +621,67 @@ impl BusInfo {
     /// *(Linux-only)* Bus number.
     ///
     /// On Linux, the `bus_id` is an integer and this provides the value as `u8`.
-    #[cfg(any(target_os = "linux"))]
+    #[cfg(any(docsrs, target_os = "linux"))]
     pub fn busnum(&self) -> u8 {
         self.busnum
     }
 
     /// *(Linux-only)* The root hub [`DeviceInfo`] representing the bus.
-    #[cfg(any(target_os = "linux"))]
+    #[cfg(any(docsrs, target_os = "linux"))]
     pub fn root_hub(&self) -> &DeviceInfo {
         &self.root_hub
     }
 
     /// *(Windows-only)* Instance ID path of this device
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn instance_id(&self) -> &OsStr {
         &self.instance_id
     }
 
     /// *(Windows-only)* Instance ID path of the parent device
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn parent_instance_id(&self) -> &OsStr {
         &self.parent_instance_id
     }
 
     /// *(Windows-only)* Location paths property
-    #[cfg(target_os = "windows")]
+    #[cfg(any(docsrs, target_os = "windows"))]
     pub fn location_paths(&self) -> &[OsString] {
         &self.location_paths
     }
 
     /// *(Windows-only)* Device Instance ID
-    #[cfg(target_os = "windows")]
-    pub fn devinst(&self) -> crate::platform::DevInst {
+    #[cfg(any(docsrs, target_os = "windows"))]
+    pub fn devinst(&self) -> DevInst {
         self.devinst
     }
 
     /// *(macOS-only)* IOKit Location ID
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn location_id(&self) -> u32 {
         self.location_id
     }
 
     /// *(macOS-only)* IOKit [Registry Entry ID](https://developer.apple.com/documentation/iokit/1514719-ioregistryentrygetregistryentryi?language=objc)
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn registry_entry_id(&self) -> u64 {
         self.registry_id
     }
 
     /// *(macOS-only)* IOKit provider class name
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn provider_class_name(&self) -> &str {
         &self.provider_class_name
     }
 
     /// *(macOS-only)* IOKit class name
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn class_name(&self) -> &str {
         &self.class_name
     }
 
     /// *(macOS-only)* Name of the bus
-    #[cfg(target_os = "macos")]
+    #[cfg(any(docsrs, target_os = "macos"))]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -696,7 +733,12 @@ impl BusInfo {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    docsrs,
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 impl std::fmt::Debug for BusInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("BusInfo");

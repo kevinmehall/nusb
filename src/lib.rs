@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg(hide(docsrs))))]
 #![warn(missing_docs)]
 //! A new library for cross-platform low-level access to USB devices.
 //!
@@ -236,6 +238,7 @@ pub use device::{Device, Endpoint, Interface};
 pub mod transfer;
 
 #[cfg(any(
+    docsrs,
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
@@ -264,6 +267,7 @@ pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 ///     .expect("device not connected");
 /// ```
 #[cfg(any(
+    docsrs,
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
@@ -341,7 +345,12 @@ pub fn request_device(
 ///     })
 ///     .collect();
 /// ```
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    docsrs,
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     platform::list_buses()
 }
@@ -382,6 +391,7 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 ///     and claiming an interface when receiving a `Connected` event,
 ///     you should retry after a short delay if opening or claiming fails.
 #[cfg(any(
+    docsrs,
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",

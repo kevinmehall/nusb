@@ -18,7 +18,7 @@ fn main() {
     let device = di.open().wait().unwrap();
 
     // Linux can make control transfers without claiming an interface
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(docsrs, target_os = "linux", target_os = "macos"))]
     {
         let result = device
             .control_out(

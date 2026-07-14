@@ -58,3 +58,12 @@ jobs:
         cargo check --target ${{ matrix.target }} --features tokio
         cargo check --target ${{ matrix.target }} --features smol
         cargo check --target ${{ matrix.target }} --all-features
+
+  rustdoc:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      uses: dtolnay/rust-toolchain@nightly
+    - name: rustdoc
+      run: RUSTDOCFLAGS=--cfg=docsrs cargo +nightly doc --all-features --no-deps
