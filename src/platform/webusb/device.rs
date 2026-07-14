@@ -125,6 +125,22 @@ impl WebusbDevice {
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<WebusbInterface>, Error>> {
         WebFuture(async move {
+            let Some(configuration) = self.device.configuration() else {
+                return Err(Error::new(ErrorKind::NotFound, "no active configuration"));
+            };
+
+            let Some(interface) = configuration
+                .interfaces()
+                .into_iter()
+                .find(|i| i.interface_number() == interface_number)
+            else {
+                return Err(Error::new(ErrorKind::NotFound, "interface not found"));
+            };
+
+            if interface.claimed() {
+                return Err(Error::new(ErrorKind::Busy, "interface already claimed"));
+            }
+
             JsFuture::from(self.device.claim_interface(interface_number))
                 .await
                 .map_err(js_value_to_error)?;
@@ -196,6 +212,12 @@ impl WebusbDevice {
             let res: UsbOutTransferResult = JsCast::unchecked_from_js(res.into());
             webusb_status_to_nusb_transfer_error(res.status())
         })
+    }
+}
+
+impl Drop for WebusbInterface {
+    fn drop(&mut self) {
+        let _ = self.device.device.release_interface(self.interface_number);
     }
 }
 
