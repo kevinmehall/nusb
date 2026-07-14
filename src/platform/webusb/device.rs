@@ -34,7 +34,7 @@ use super::{
 
 pub(crate) struct WebusbDevice {
     pub device: UsbDevice,
-    device_descriptor: Vec<u8>,
+    device_descriptor: DeviceDescriptor,
     config_descriptors: Vec<Vec<u8>>,
 }
 
@@ -61,6 +61,10 @@ impl WebusbDevice {
                 Duration::from_millis(500),
             )
             .await?;
+
+            let device_descriptor = DeviceDescriptor::new(&device_descriptor)
+                .ok_or_else(|| Error::new(ErrorKind::Other, "invalid device descriptor"))?;
+
             let config_descriptors = extract_descriptors(&device).await?;
 
             #[allow(clippy::arc_with_non_send_sync)]
@@ -73,7 +77,7 @@ impl WebusbDevice {
     }
 
     pub(crate) fn device_descriptor(&self) -> DeviceDescriptor {
-        DeviceDescriptor::new(&self.device_descriptor).unwrap()
+        self.device_descriptor.clone()
     }
 
     pub(crate) fn speed(&self) -> Option<Speed> {
@@ -85,7 +89,7 @@ impl WebusbDevice {
     ) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
         self.config_descriptors
             .iter()
-            .map(|d| ConfigurationDescriptor::new(&d[..]).unwrap())
+            .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
     pub(crate) fn active_configuration_value(&self) -> u8 {
@@ -211,7 +215,10 @@ async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> 
             Duration::from_millis(500),
         )
         .await?;
-        config_descriptors.push(data)
+
+        if ConfigurationDescriptor::new(&data[..]).is_some() {
+            config_descriptors.push(data)
+        }
     }
 
     Ok(config_descriptors)
@@ -231,7 +238,7 @@ pub async fn get_descriptor(
         web_sys::UsbRequestType::Standard,
         ((desc_type as u16) << 8) | (desc_index as u16),
     );
-    let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 4095))
+    let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 4096))
         .await
         .map_err(js_value_to_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
