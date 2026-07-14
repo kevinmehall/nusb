@@ -404,7 +404,7 @@ impl<'a> ConfigurationDescriptor<'a> {
         DescriptorIter(&self.0[self.0[0] as usize..])
     }
 
-    /// Iterate all interfaces and alternate settings settings of this configuration.
+    /// Iterate all interfaces and alternate settings of this configuration.
     pub fn interface_alt_settings(&self) -> impl Iterator<Item = InterfaceDescriptor<'a>> {
         self.descriptors()
             .split_by_type(DESCRIPTOR_TYPE_INTERFACE, DESCRIPTOR_LEN_INTERFACE)
@@ -663,7 +663,7 @@ descriptor_fields! {
 
         /// Get the raw value of the `wMaxPacketSize` descriptor field.
         ///
-        /// See [`max_macket_size`][Self::max_packet_size] and [`packets_per_microframe`][Self::packets_per_microframe]
+        /// See [`max_packet_size`][Self::max_packet_size] and [`packets_per_microframe`][Self::packets_per_microframe]
         /// for the parsed subfields.
         #[doc(alias = "wMaxPacketSize")]
         pub fn max_packet_size_raw at 4 -> u16;

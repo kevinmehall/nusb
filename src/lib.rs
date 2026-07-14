@@ -2,7 +2,7 @@
 //! A new library for cross-platform low-level access to USB devices.
 //!
 //! `nusb` supports Windows, macOS, and Linux, and provides both async and
-//!  blocking APIs for listing and watching USB devices, reading descriptor
+//! blocking APIs for listing and watching USB devices, reading descriptor
 //!  details, opening and managing devices and interfaces, and performing
 //!  transfers on control, bulk, and interrupt endpoints.
 //!

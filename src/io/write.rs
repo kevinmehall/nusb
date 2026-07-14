@@ -157,7 +157,7 @@ impl<EpType: BulkOrInterrupt> EndpointWrite<EpType> {
 
     /// Submit any buffered data to the OS immediately.
     ///
-    /// This submits the current buffer even if it not full, but does not wait
+    /// This submits the current buffer even if it is not full, but does not wait
     /// for the transfer to complete or confirm that it was successful (see
     /// [Write::flush]). If the buffer is empty, this does nothing.
     pub fn submit(&mut self) {
