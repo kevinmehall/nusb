@@ -70,7 +70,7 @@ impl Device {
         platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
     }
 
-    /// Open and use a [`web_sys::UsbDevice`] object from JS.
+    /// Wrap a [`web_sys::UsbDevice`] object obtained from JS.
     ///
     /// *Supported on wasm only.*
     #[cfg(target_arch = "wasm32")]

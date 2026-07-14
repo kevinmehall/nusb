@@ -157,6 +157,30 @@
 //! Users have access to USB devices by default, with no permission
 //! configuration needed. Devices with a kernel driver are not accessible.
 //!
+//! ### WebUSB
+//!
+//! `nusb` can be used from WebAssembly in browsers with [WebUSB] support.
+//!
+//! Only the async APIs are available since the browser event loop does not
+//! allow blocking.
+//!
+//! `web-sys` considers its WebUSB bindings unstable and [requires the root
+//! crate to opt in][web_sys_unstable]. Put the following in your
+//! `.cargo/config.toml`:
+//!
+//! ```toml
+//! [target.wasm32-unknown-unknown]
+//! rustflags = "--cfg=web_sys_unstable_apis"
+//! ```
+//!
+//! `nusb` does not yet wrap `requestDevice()`. You must call it yourself via JS
+//! or `web-sys` and pass the resulting device to `Device::from_js()`. Once
+//! permissions are granted by the user, the device will appear in
+//! [`list_devices`] as well.
+//!
+//! [WebUSB]: https://wicg.github.io/webusb/
+//! [web_sys_unstable]: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
+//!
 //! ## Async support
 //!
 //! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
