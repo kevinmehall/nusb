@@ -162,7 +162,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
 
     /// Set the timeout for an individual transfer for the blocking `read` APIs.
     ///
-    /// See [Self::set_read_timeout] -- this is for method chaining with `EndpointWrite::new()`.
+    /// See [Self::set_read_timeout] -- this is for method chaining with `EndpointRead::new()`.
     pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
         self.set_read_timeout(timeout);
         self
@@ -174,7 +174,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
     /// transfers will be submitted. Any data buffered before the transfers are cancelled
     /// can be read, and then the read methods will return 0 bytes (EOF).
     ///
-    /// Call [`num_transfers`](Self::set_num_transfers) with a non-zero value
+    /// Call [`set_num_transfers`](Self::set_num_transfers) with a non-zero value
     /// to resume receiving data.
     pub fn cancel_all(&mut self) {
         self.num_transfers = 0;
@@ -397,7 +397,7 @@ impl<EpType: BulkOrInterrupt> futures_io::AsyncBufRead for EndpointRead<EpType> 
 
 /// Adapter for [`EndpointRead`] that ends after a short or zero-length packet.
 ///
-/// This can be obtained from [`EndpointRead::until_short_packet()`]. It does
+/// This can be obtained from [`EndpointRead::until_short_packet()`]. It does not
 /// have any state other than that of the underlying [`EndpointRead`], so
 /// dropping and re-creating with another call to
 /// [`EndpointRead::until_short_packet()`] has no effect.

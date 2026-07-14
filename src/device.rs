@@ -33,7 +33,6 @@ use std::{
 ///     .expect("device not connected");
 ///
 /// let device = device_info.open().wait().expect("failed to open device");
-/// let interface = device.claim_interface(0);
 /// ```
 ///
 /// This type is reference-counted with an [`Arc`] internally, and can be cloned cheaply for
@@ -273,7 +272,7 @@ impl Device {
     /// Reset the device, forcing it to re-enumerate.
     ///
     /// This `Device` will no longer be usable, and you should drop it and call
-    /// [`list_devices`][`super::list_devices`] to find and re-open it again.
+    /// [`list_devices`][`super::list_devices`] to find and re-open it.
     ///
     /// ### Platform-specific details
     /// * Not supported on Windows
@@ -695,7 +694,7 @@ impl<EpType: BulkOrInterrupt> Endpoint<EpType, Out> {
 
 impl<EpType: BulkOrInterrupt> Endpoint<EpType, In> {
     /// Create an [`EndpointRead`] wrapping the given endpoint to provide a
-    /// high-level buffered API implementing [`std::io::Read`] and  async
+    /// high-level buffered API implementing [`std::io::Read`] and async
     /// equivalents.
     ///
     /// See [`EndpointRead::new`][`crate::io::EndpointRead::new`] for details.
