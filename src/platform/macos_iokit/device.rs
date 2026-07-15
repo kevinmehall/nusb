@@ -294,8 +294,7 @@ impl MacDevice {
         TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |t| {
             drop(self); // ensure device stays alive
             t.status()?;
-            let t = ManuallyDrop::new(t);
-            Ok(unsafe { Vec::from_raw_parts(t.buf, t.actual_len as usize, t.capacity as usize) })
+            Ok(take_completed_vec(t))
         })
     }
 
@@ -682,5 +681,67 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
         (*transfer).actual_len = len;
         (*transfer).status = result;
         notify_completion::<TransferData>(transfer)
+    }
+}
+
+/// Extract the completed `control_in` buffer, letting the transfer handle drop
+/// so the boxed `TransferInner` (and its completion `Notify`) is freed.
+///
+/// Wrapping the whole `Idle<TransferData>` in `ManuallyDrop` to steal the
+/// buffer leaks the `TransferInner` allocation (including a pthread mutex in
+/// its `Notify`) on every successful `control_in`. Swap the buffer fields out
+/// instead — the same pattern as `TransferData::take_completion` — and let the
+/// transfer drop normally.
+fn take_completed_vec(mut t: crate::transfer::internal::Idle<TransferData>) -> Vec<u8> {
+    let mut empty = ManuallyDrop::new(Vec::new());
+    let buf = std::mem::replace(&mut t.buf, empty.as_mut_ptr());
+    let capacity = std::mem::replace(&mut t.capacity, 0);
+    let actual_len = std::mem::replace(&mut t.actual_len, 0);
+    unsafe { Vec::from_raw_parts(buf, actual_len as usize, capacity as usize) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transfer::internal::{Idle, Notify};
+
+    /// The transfer node (`TransferInner`) holds one strong reference to its
+    /// completion `Notify`, so the Arc's strong count is a hardware-free leak
+    /// detector: after extracting the buffer the count must return to 1.
+    /// The previous `ManuallyDrop` extraction leaked the node and kept the
+    /// count at 2 — this test fails against that implementation.
+    #[test]
+    fn control_in_extraction_frees_the_transfer_inner() {
+        let notify = Arc::new(Notify::new());
+        let dyn_notify: Arc<dyn AsRef<Notify> + Send + Sync> = notify.clone();
+
+        // A "completed" 8-of-64-byte read, built exactly like control_in does.
+        // The kernel would have written the first actual_len bytes; fill them
+        // here so the Vec reconstructed by take_completed_vec never claims
+        // uninitialized memory (Vec::from_raw_parts requires len initialized).
+        let mut v = ManuallyDrop::new(Vec::<u8>::with_capacity(64));
+        unsafe { v.as_mut_ptr().write_bytes(0xAB, 8) };
+        let mut td = unsafe { TransferData::from_raw(v.as_mut_ptr(), 64, v.capacity() as u32) };
+        td.actual_len = 8;
+        let t = Idle::new(dyn_notify, td);
+        assert_eq!(
+            Arc::strong_count(&notify),
+            2,
+            "the transfer node holds one Notify ref"
+        );
+
+        let buf = take_completed_vec(t);
+
+        assert_eq!(
+            buf, [0xAB; 8],
+            "extraction returns the actual_len bytes the kernel wrote"
+        );
+        assert_eq!(
+            Arc::strong_count(&notify),
+            1,
+            "the transfer node must be freed after buffer extraction — the \
+             ManuallyDrop pattern leaks it (and one pthread mutex) on every \
+             successful control_in"
+        );
     }
 }
