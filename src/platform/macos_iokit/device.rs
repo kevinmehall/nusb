@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     ffi::c_void,
-    mem::ManuallyDrop,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -274,10 +273,9 @@ impl MacDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
-        let mut v = ManuallyDrop::new(Vec::with_capacity(data.length as usize));
-        let t = unsafe {
-            TransferData::from_raw(v.as_mut_ptr(), data.length as u32, v.capacity() as u32)
-        };
+
+        let mut t = TransferData::new();
+        t.put_buffer(Buffer::new(data.length as usize), Direction::In);
 
         let req = IOUSBDevRequestTO {
             bmRequestType: data.request_type(),
@@ -291,11 +289,11 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |mut t| {
             drop(self); // ensure device stays alive
-            t.status()?;
-            let t = ManuallyDrop::new(t);
-            Ok(unsafe { Vec::from_raw_parts(t.buf, t.actual_len as usize, t.capacity as usize) })
+            let c = unsafe { t.take_completion(Direction::In) };
+            c.status?;
+            Ok(c.buffer.into_vec())
         })
     }
 
@@ -305,9 +303,9 @@ impl MacDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let timeout = timeout.as_millis().try_into().expect("timeout too long");
-        let mut v = ManuallyDrop::new(data.data.to_vec());
-        let t =
-            unsafe { TransferData::from_raw(v.as_mut_ptr(), v.len() as u32, v.capacity() as u32) };
+
+        let mut t = TransferData::new();
+        t.put_buffer(Buffer::from(data.data), Direction::Out);
 
         let req = IOUSBDevRequestTO {
             bmRequestType: data.request_type(),
@@ -321,10 +319,10 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(move |t| {
+        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(move |mut t| {
             drop(self); // ensure device stays alive
-            t.status()?;
-            Ok(())
+            let c = unsafe { t.take_completion(Direction::Out) };
+            c.status
         })
     }
 
@@ -354,7 +352,7 @@ impl MacDevice {
             unsafe {
                 // Complete the transfer in the place of the callback
                 (*ptr).status = res;
-                notify_completion::<super::TransferData>(ptr);
+                notify_completion::<TransferData>(ptr);
             }
         }
 
@@ -533,17 +531,8 @@ impl MacEndpoint {
         let mut transfer = self
             .idle_transfer
             .take()
-            .unwrap_or_else(|| Idle::new(self.inner.clone(), super::TransferData::new()));
-
-        let buffer = ManuallyDrop::new(buffer);
-        transfer.buf = buffer.ptr;
-        transfer.capacity = buffer.capacity;
-        transfer.actual_len = 0;
-        let req_len = match Direction::from_address(self.inner.address) {
-            Direction::Out => buffer.len,
-            Direction::In => buffer.requested_len,
-        };
-        transfer.requested_len = req_len;
+            .unwrap_or_else(|| Idle::new(self.inner.clone(), TransferData::new()));
+        transfer.put_buffer(buffer, Direction::from_address(self.inner.address));
         transfer
     }
 
@@ -591,7 +580,7 @@ impl MacEndpoint {
             unsafe {
                 // Complete the transfer in the place of the callback
                 (*ptr).status = res;
-                notify_completion::<super::TransferData>(ptr);
+                notify_completion::<TransferData>(ptr);
             }
         }
 
