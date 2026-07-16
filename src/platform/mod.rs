@@ -15,3 +15,9 @@ mod macos_iokit;
 
 #[cfg(target_os = "macos")]
 pub use macos_iokit::*;
+
+#[cfg(target_arch = "wasm32")]
+mod webusb;
+
+#[cfg(target_arch = "wasm32")]
+pub use webusb::*;

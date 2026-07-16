@@ -176,6 +176,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
     ///
     /// Call [`set_num_transfers`](Self::set_num_transfers) with a non-zero value
     /// to resume receiving data.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn cancel_all(&mut self) {
         self.num_transfers = 0;
         self.endpoint.cancel_all();
@@ -247,6 +248,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait(&mut self) -> Result<bool, std::io::Error> {
         if self.start_read() {
             let c = self.endpoint.wait_next_complete(self.read_timeout);
@@ -309,6 +311,7 @@ impl<EpType: BulkOrInterrupt> EndpointRead<EpType> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<EpType: BulkOrInterrupt> Read for EndpointRead<EpType> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
@@ -319,6 +322,7 @@ impl<EpType: BulkOrInterrupt> Read for EndpointRead<EpType> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<EpType: BulkOrInterrupt> BufRead for EndpointRead<EpType> {
     #[inline]
     fn fill_buf(&mut self) -> Result<&[u8], std::io::Error> {
@@ -450,6 +454,7 @@ impl<EpType: BulkOrInterrupt> EndpointReadUntilShortPacket<'_, EpType> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<EpType: BulkOrInterrupt> Read for EndpointReadUntilShortPacket<'_, EpType> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
@@ -460,6 +465,7 @@ impl<EpType: BulkOrInterrupt> Read for EndpointReadUntilShortPacket<'_, EpType> 
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<EpType: BulkOrInterrupt> BufRead for EndpointReadUntilShortPacket<'_, EpType> {
     #[inline]
     fn fill_buf(&mut self) -> Result<&[u8], std::io::Error> {

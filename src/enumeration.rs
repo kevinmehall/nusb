@@ -52,14 +52,14 @@ pub struct DeviceInfo {
     #[cfg(target_os = "macos")]
     pub(crate) location_id: u32,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
     pub(crate) bus_id: String,
 
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
     ))]
     pub(crate) device_address: u8,
 
@@ -69,7 +69,12 @@ pub struct DeviceInfo {
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub(crate) device_version: u16,
 
     pub(crate) usb_version: u16,
@@ -77,6 +82,12 @@ pub struct DeviceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
 
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android",
+    ))]
     pub(crate) speed: Option<Speed>,
 
     pub(crate) manufacturer_string: Option<String>,
@@ -84,6 +95,9 @@ pub struct DeviceInfo {
     pub(crate) serial_number: Option<String>,
 
     pub(crate) interfaces: Vec<InterfaceInfo>,
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) device: crate::platform::UsbDevice,
 }
 
 impl DeviceInfo {
@@ -105,6 +119,11 @@ impl DeviceInfo {
         #[cfg(target_os = "macos")]
         {
             DeviceId(self.registry_id)
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            DeviceId(crate::platform::DeviceId::from_device(&self.device))
         }
     }
 
@@ -153,7 +172,7 @@ impl DeviceInfo {
     ///
     /// Since USB SuperSpeed is a separate topology from USB 2.0 speeds, a
     /// physical port may be identified differently depending on speed.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
     pub fn port_chain(&self) -> &[u8] {
         &self.port_chain
     }
@@ -177,7 +196,7 @@ impl DeviceInfo {
     }
 
     /// Identifier for the bus / host controller where the device is connected.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows",))]
     pub fn bus_id(&self) -> &str {
         &self.bus_id
     }
@@ -202,7 +221,12 @@ impl DeviceInfo {
 
     /// The device version, normally encoded as BCD, from the `bcdDevice` device descriptor field.
     #[doc(alias = "bcdDevice")]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_arch = "wasm32"
+    ))]
     pub fn device_version(&self) -> u16 {
         self.device_version
     }
@@ -297,12 +321,18 @@ impl std::fmt::Debug for DeviceInfo {
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         s.field("bus_id", &self.bus_id)
             .field("device_address", &self.device_address)
-            .field("port_chain", &format_args!("{:?}", self.port_chain));
+            .field("port_chain", &format_args!("{:?}", self.port_chain))
+            .field("speed", &self.speed);
 
         s.field("vendor_id", &format_args!("0x{:04X}", self.vendor_id))
             .field("product_id", &format_args!("0x{:04X}", self.product_id));
 
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows",
+            target_arch = "wasm32"
+        ))]
         s.field(
             "device_version",
             &format_args!("0x{:04X}", self.device_version),
@@ -312,7 +342,6 @@ impl std::fmt::Debug for DeviceInfo {
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
-            .field("speed", &self.speed)
             .field("manufacturer_string", &self.manufacturer_string)
             .field("product_string", &self.product_string)
             .field("serial_number", &self.serial_number);
@@ -640,6 +669,11 @@ impl BusInfo {
         #[cfg(target_os = "macos")]
         {
             self.name.as_deref()
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
         }
     }
 }

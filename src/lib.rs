@@ -173,6 +173,30 @@
 //! }
 //! ```
 //!
+//! ### WebUSB
+//!
+//! `nusb` can be used from WebAssembly in browsers with [WebUSB] support.
+//!
+//! Only the async APIs are available since the browser event loop does not
+//! allow blocking.
+//!
+//! `web-sys` considers its WebUSB bindings unstable and [requires the root
+//! crate to opt in][web_sys_unstable]. Put the following in your
+//! `.cargo/config.toml`:
+//!
+//! ```toml
+//! [target.wasm32-unknown-unknown]
+//! rustflags = "--cfg=web_sys_unstable_apis"
+//! ```
+//!
+//! `nusb` does not yet wrap `requestDevice()`. You must call it yourself via JS
+//! or `web-sys` and pass the resulting device to `Device::from_js()`. Once
+//! permissions are granted by the user, the device will appear in
+//! [`list_devices`] as well.
+//!
+//! [WebUSB]: https://wicg.github.io/webusb/
+//! [web_sys_unstable]: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
+//!
 //! ## Async support
 //!
 //! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
@@ -208,7 +232,12 @@ pub use device::{Device, Endpoint, Interface};
 
 pub mod transfer;
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
 pub mod hotplug;
 
 mod maybe_future;
@@ -231,7 +260,12 @@ pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 /// ```
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
     platform::list_devices()
@@ -296,7 +330,12 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 ///     when the `Connected` event is emitted. If you are immediately opening the device
 ///     and claiming an interface when receiving a `Connected` event,
 ///     you should retry after a short delay if opening or claiming fails.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_arch = "wasm32"
+))]
 pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
     Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
 }

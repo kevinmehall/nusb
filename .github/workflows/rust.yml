@@ -41,15 +41,20 @@ jobs:
         cargo test --verbose --features smol
         cargo test --verbose --features smol,tokio
 
-  build_android:
+  check:
+    strategy:
+      matrix:
+        target: [aarch64-linux-android, armv7-linux-androideabi, wasm32-unknown-unknown]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        targets: 'aarch64-linux-android, armv7-linux-androideabi'
-    - name: build
+        targets: ${{ matrix.target }}
+    - name: check
       run: |
-        cargo build --target aarch64-linux-android --all-features
-        cargo build --target armv7-linux-androideabi --all-features
+        cargo check --target ${{ matrix.target }}
+        cargo check --target ${{ matrix.target }} --features tokio
+        cargo check --target ${{ matrix.target }} --features smol
+        cargo check --target ${{ matrix.target }} --all-features
