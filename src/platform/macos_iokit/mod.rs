@@ -22,6 +22,7 @@ pub(crate) use hotplug::MacHotplugWatch as HotplugWatch;
 mod iokit;
 mod iokit_c;
 mod iokit_usb;
+mod termination;
 
 /// Device ID is the registry entry ID
 pub type DeviceId = u64;

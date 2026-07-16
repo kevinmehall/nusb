@@ -31,11 +31,16 @@ use super::{
     iokit::call_iokit_function,
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
+    termination::{self, TerminationRegistration},
     TransferData,
 };
 
 pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
+    /// Registration for the device-terminated sweep that completes pending
+    /// transfers when the user client dies (see `termination`). `None` if
+    /// interest registration failed at open (pre-fix behavior).
+    termination: Option<TerminationRegistration>,
     pub(super) device: IoKitDevice,
     device_descriptor: DeviceDescriptor,
     config_descriptors: Vec<Vec<u8>>,
@@ -72,6 +77,10 @@ impl MacDevice {
                     .log_error()
             })?;
             let _event_registration = add_event_source(event_source);
+            // Best-effort: sweeps pending transfers with kIOReturnAborted if
+            // the service is terminated mid-flight (unplug / re-enumeration),
+            // because the dying user client delivers no further completions.
+            let termination = termination::register(&service);
 
             let opened = device
                 .open()
@@ -121,6 +130,7 @@ impl MacDevice {
 
             Ok(Arc::new(MacDevice {
                 _event_registration,
+                termination,
                 device,
                 device_descriptor,
                 config_descriptors,
@@ -338,17 +348,29 @@ impl MacDevice {
         let t = t.pre_submit();
         let ptr = t.as_ptr();
 
-        let res = unsafe {
-            call_iokit_function!(
-                self.device.raw,
-                DeviceRequestAsyncTO(&mut req, Some(transfer_callback), ptr as *mut c_void)
-            )
+        // Register BEFORE submitting so the completion callback always
+        // observes the entry; a closed registry means the service already
+        // terminated, so don't submit at all.
+        let device_key = self
+            .termination
+            .as_ref()
+            .map(TerminationRegistration::device_key);
+        let res = if termination::try_add_pending(device_key, ptr) {
+            unsafe {
+                call_iokit_function!(
+                    self.device.raw,
+                    DeviceRequestAsyncTO(&mut req, Some(transfer_callback), ptr as *mut c_void)
+                )
+            }
+        } else {
+            io_kit_sys::ret::kIOReturnAborted
         };
 
         if res == kIOReturnSuccess {
             debug!("Submitted control {dir:?} {ptr:?}");
         } else {
             error!("Failed to submit control {dir:?} {ptr:?}: {res:x}");
+            termination::remove_pending(ptr);
             unsafe {
                 // Complete the transfer in the place of the callback
                 (*ptr).status = res;
@@ -667,6 +689,9 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
     let transfer: *mut TransferData = refcon.cast();
     debug!("Completion for transfer {transfer:?}, status={result:x}, len={len}");
 
+    // Runs on the same run loop as the termination sweep, so this remove
+    // and the sweep's drain cannot race. No-op for endpoint transfers.
+    termination::remove_pending(transfer);
     unsafe {
         (*transfer).actual_len = len;
         (*transfer).status = result;
