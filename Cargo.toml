@@ -45,6 +45,11 @@ smol = ["dep:blocking", "dep:futures-io"]
 # Use `tokio`'s IO threadpool for making blocking IO async
 tokio = ["dep:tokio"]
 
+[target.'cfg(target_os="illumos")'.dependencies]
+rustix = { version = "1", features = ["fs", "event", "net"] }
+devinfo = "0.1.0"
+libc = { version = "0.2.185" }
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
