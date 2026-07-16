@@ -106,10 +106,19 @@ pub mod blocking {
             Self(tokio::task::spawn_blocking(f))
         }
 
+        #[cfg(feature = "blocking-in-async")]
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
-        fn spawn(_f: impl FnOnce() -> R + Send + 'static) -> Self {
-            panic!("Awaiting blocking syscall without an async runtime: enable the `smol` or `tokio` feature of nusb.");
+        fn spawn(f: impl FnOnce() -> R + Send + 'static) -> Self {
+            Self(Some(f()))
         }
+
+        #[cfg(not(any(feature = "smol", feature = "tokio", feature = "blocking-in-async")))]
+        compile_error!(concat!(
+            "Would await blocking syscall without an async runtime: ",
+            "enable nusb's `smol` or `tokio` feature to run blocking IO on an async threadpool, ",
+            "or `blocking-in-async` to run blocking IO directly on the async executor ",
+            "(not recommended unless you're intentionally minimizing dependencies)."
+        ));
     }
 
     impl<R> Unpin for BlockingTask<R> {}
@@ -133,7 +142,13 @@ pub mod blocking {
             }
         }
 
+        #[cfg(feature = "blocking-in-async")]
         #[cfg(not(any(feature = "smol", feature = "tokio")))]
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(self.get_mut().0.take().expect("polled after completion"))
+        }
+
+        #[cfg(not(any(feature = "smol", feature = "tokio", feature = "blocking-in-async")))]
         fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
             unreachable!()
         }
