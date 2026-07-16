@@ -2,7 +2,7 @@ use std::mem::{self, ManuallyDrop};
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 
-use crate::transfer::{Allocator, Buffer, Completion, Direction, TransferError};
+use crate::transfer::{Allocator, Buffer, Completion, Direction};
 
 pub struct TransferData {
     pub(super) buf: *mut u8,
@@ -21,28 +21,32 @@ impl Drop for TransferData {
 impl TransferData {
     pub(super) fn new() -> TransferData {
         let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
-        unsafe { Self::from_raw(empty.as_mut_ptr(), 0, 0) }
-    }
-
-    pub(super) unsafe fn from_raw(buf: *mut u8, requested_len: u32, capacity: u32) -> TransferData {
         TransferData {
-            buf,
-            capacity,
-            requested_len,
+            buf: empty.as_mut_ptr(),
+            capacity: 0,
+            requested_len: 0,
             actual_len: 0,
             status: kIOReturnSuccess,
         }
     }
 
-    #[inline]
-    pub fn status(&self) -> Result<(), TransferError> {
-        super::status_to_transfer_result(self.status)
+    pub fn put_buffer(&mut self, buffer: Buffer, direction: Direction) {
+        // Assumes that there is no previous buffer; this would leak it
+        debug_assert!(self.capacity == 0);
+        let buffer = ManuallyDrop::new(buffer);
+        self.buf = buffer.ptr;
+        self.capacity = buffer.capacity;
+        self.actual_len = 0;
+        self.requested_len = match direction {
+            Direction::Out => buffer.len,
+            Direction::In => buffer.requested_len,
+        };
     }
 
     /// # Safety
     /// The transfer must have been completed to initialize the buffer. The direction must be correct.
     pub unsafe fn take_completion(&mut self, direction: Direction) -> Completion {
-        let status = self.status();
+        let status = super::status_to_transfer_result(self.status);
 
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
