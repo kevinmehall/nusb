@@ -179,7 +179,7 @@ pub fn reset<Fd: AsFd>(fd: Fd) -> io::Result<()> {
 }
 
 const USBDEVFS_URB_SHORT_NOT_OK: c_uint = 0x01;
-const USBDEVFS_URB_ISO_ASAP: c_uint = 0x02;
+pub const USBDEVFS_URB_ISO_ASAP: c_uint = 0x02;
 const USBDEVFS_URB_BULK_CONTINUATION: c_uint = 0x04;
 const USBDEVFS_URB_ZERO_PACKET: c_uint = 0x40;
 const USBDEVFS_URB_NO_INTERRUPT: c_uint = 0x80;
@@ -188,6 +188,19 @@ pub const USBDEVFS_URB_TYPE_ISO: c_uchar = 0;
 pub const USBDEVFS_URB_TYPE_INTERRUPT: c_uchar = 1;
 pub const USBDEVFS_URB_TYPE_CONTROL: c_uchar = 2;
 pub const USBDEVFS_URB_TYPE_BULK: c_uchar = 3;
+
+/// ISO packet descriptor for isochronous transfers.
+/// Each packet in an isochronous transfer has its own status and length.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IsoPacketDesc {
+    /// Expected packet length (for OUT) or maximum expected length (for IN)
+    pub length: c_uint,
+    /// Actual number of bytes transferred
+    pub actual_length: c_uint,
+    /// Per-packet status (0 = success, negative = error)
+    pub status: c_uint,
+}
 
 #[repr(C)]
 #[derive(Debug)]

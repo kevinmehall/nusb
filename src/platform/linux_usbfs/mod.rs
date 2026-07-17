@@ -3,6 +3,7 @@ use std::io;
 use std::num::NonZeroU32;
 
 use rustix::io::Errno;
+pub(crate) use transfer::IsoTransferData;
 pub(crate) use transfer::TransferData;
 mod usbfs;
 
@@ -24,6 +25,7 @@ mod device;
 pub(crate) use device::LinuxDevice as Device;
 pub(crate) use device::LinuxEndpoint as Endpoint;
 pub(crate) use device::LinuxInterface as Interface;
+pub(crate) use device::LinuxIsoEndpoint as IsoEndpoint;
 
 use crate::transfer::TransferError;
 use crate::ErrorKind;
