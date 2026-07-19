@@ -9,23 +9,21 @@ use crate::{
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex, OnceLock, Weak,
-    },
+    sync::{Arc, Mutex, OnceLock, Weak},
     task::{self, Poll, Waker},
+    time::{Duration, Instant},
 };
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 
 use jni::{
-    objects::{Global, JMap, JString},
+    objects::{Global, JMap, JObject, JString},
     refs::Reference,
     Env,
 };
 use jni_min_helper::{
     android_api_level, android_app_package_name, android_context, jni_with_env, BroadcastReceiver,
-    Intent,
+    DynamicProxy, Intent,
 };
 
 pub type DeviceId = i32;
@@ -34,14 +32,41 @@ pub type JniGlobal = Arc<Global<AndroidUsbDevice<'static>>>;
 const ACTION_USB_PERMISSION: &str = "rust.nusb.USB_PERMISSION";
 
 jni::bind_java_type! {
+    JHashMap => "java.util.HashMap",
+    is_instance_of = {
+        JMap,
+    }
+}
+
+jni::bind_java_type! {
     AndroidContext => "android.content.Context",
+    type_map = {
+        AndroidApplication => "android.app.Application",
+    },
     fields {
         #[allow(non_snake_case)]
         static USB_SERVICE { sig = JString, get = USB_SERVICE },
     },
     methods {
         fn get_system_service(name: JString) -> JObject,
+        non_null fn get_application_context() -> AndroidContext,
     }
+}
+
+jni::bind_java_type! {
+    AndroidApplication => "android.app.Application",
+    type_map = {
+        AndroidApplication => "android.app.Application",
+        AndroidLifecycleCallbacks => "android.app.Application$ActivityLifecycleCallbacks",
+    },
+    methods {
+        fn register_activity_lifecycle_callbacks(callbacks: AndroidLifecycleCallbacks),
+        fn unregister_activity_lifecycle_callbacks(callbacks: AndroidLifecycleCallbacks),
+    }
+}
+
+jni::bind_java_type! {
+    AndroidLifecycleCallbacks => "android.app.Application$ActivityLifecycleCallbacks",
 }
 
 jni::bind_java_type! {
@@ -71,13 +96,6 @@ jni::bind_java_type! {
             name = "requestPermission", sig = (device: AndroidUsbDevice, pi: PendingIntent),
         },
         fn open_device(device: AndroidUsbDevice) -> AndroidUsbDeviceConnection,
-    }
-}
-
-jni::bind_java_type! {
-    JHashMap => "java.util.HashMap",
-    is_instance_of = {
-        JMap,
     }
 }
 
@@ -353,9 +371,9 @@ pub fn request_permission(dev_info: &DeviceInfo) -> impl MaybeFuture<Output = Re
 }
 
 /// Android will only show one permission request dialog at a time; forced cancellation
-/// of the previous request dialog is not possible. This receiver is used to wait for the
+/// of the previous request dialog is not possible. This tracker is used to wait for the
 /// completion of the permission request, and if already set, we won't start a new one.
-static PENDING_PERMISSION_RECEIVER: Mutex<Option<BroadcastReceiver>> = Mutex::new(None);
+static PENDING_REQUEST_TRACKER: Mutex<Option<PermissionRequestTracker>> = Mutex::new(None);
 
 /// Represents an ongoing permission request.
 struct PermissionRequest {
@@ -380,9 +398,9 @@ impl PermissionRequest {
             return Ok(Self::build_dummy(dev_info, Ok(true)));
         }
 
-        let mut receiver_lock = PENDING_PERMISSION_RECEIVER.lock().unwrap();
+        let mut tracker_lock = PENDING_REQUEST_TRACKER.lock().unwrap();
 
-        if receiver_lock.is_some() {
+        if tracker_lock.is_some() {
             return Err(Error::new(
                 ErrorKind::Other,
                 "another permission request is already pending",
@@ -395,28 +413,14 @@ impl PermissionRequest {
             result: OnceLock::new(),
         });
 
-        let receiver = {
-            let inner_weak = Arc::downgrade(&inner);
-            let dev_info_2 = dev_info.clone();
-            let receiver = BroadcastReceiver::build(move |env, _, intent| {
-                Self::on_receive(&inner_weak, &dev_info_2, env, intent)
-            })?;
-            receiver.register_for_action(&Self::action_usb_permission())?;
-            receiver.register_for_action(
-                jni_with_env(|env| {
-                    AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env).map(|s| s.to_string())
-                })?
-                .trim(),
-            )?;
-            receiver
-        };
+        let tracker = PermissionRequestTracker::build(&inner, dev_info)?;
 
         let usb_man = usb_manager()?;
-
         jni_with_env(|env| {
             let context = env.as_cast::<AndroidContext>(android_context())?;
             let intent = {
-                let str_perm = JString::new(env, Self::action_usb_permission())?;
+                let str_perm =
+                    JString::new(env, PermissionRequestTracker::action_usb_permission())?;
                 let package_name = JString::new(env, android_app_package_name())?;
                 let intent = Intent::new_with_action(env, str_perm)?;
                 intent.set_package(env, package_name)?;
@@ -431,7 +435,7 @@ impl PermissionRequest {
             usb_man.request_permission(env, dev_info.jni_global_ref.as_ref(), pending_intent)
         })?;
 
-        *receiver_lock = Some(receiver);
+        *tracker_lock = Some(tracker);
         log::debug!(
             "requested user permission for device {}",
             dev_info.device_id
@@ -472,65 +476,6 @@ impl PermissionRequest {
         }
         self.inner.result.get().cloned()
     }
-
-    /// Called when a permission request result is received.
-    fn on_receive<'a>(
-        inner_weak: &Weak<PermissionRequestInner>,
-        dev_expected: &DeviceInfo,
-        env: &mut Env<'a>,
-        intent: Intent<'a>,
-    ) -> Result<(), jni::errors::Error> {
-        if intent.get_action(env)?.to_string().trim() == &Self::action_usb_permission() {
-            let dev_id = get_extra_device_id(env, &intent)?;
-            debug!("Received permission request result of device {dev_id:?}");
-            if dev_id == dev_expected.id() {
-                let Some(inner) = inner_weak.upgrade() else {
-                    // The Rust-side request was aborted previously; still,
-                    // the actual request needs to be treated as completed.
-                    drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
-                    return Ok(());
-                };
-                let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
-                let granted = intent
-                    .get_boolean_extra(env, extra_name, false)
-                    .map_err(|_| {
-                        env.exception_clear();
-                        Error::new(ErrorKind::Other, "failed to get EXTRA_PERMISSION_GRANTED")
-                    });
-                inner.set_result(granted);
-            }
-        } else if !dev_expected.check_connection() {
-            debug!("Received disconnection event in `PermissionRequest::on_receive`");
-            if let Some(inner) = inner_weak.upgrade() {
-                inner.set_result(Err(Error::new(
-                    ErrorKind::Disconnected,
-                    "device disconnected",
-                )));
-            } else {
-                drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
-            };
-        }
-        Ok(())
-    }
-
-    fn action_usb_permission() -> String {
-        format!("{}.{}", android_app_package_name(), ACTION_USB_PERMISSION)
-    }
-}
-
-impl PermissionRequestInner {
-    /// The result should be set for once when it is received or otherwise determined.
-    /// * When it is set, the actual request is treated as completed, thus the
-    ///   `PENDING_PERMISSION_RECEIVER` is cleared to make possible of a new request.
-    ///   Then the outer `PermissionRequest` is notified.
-    /// * If the result is already set, this should be a no-op.
-    fn set_result(&self, res: Result<bool, Error>) {
-        if self.result.set(res.clone()).is_ok() {
-            debug!("notifying for `PermissionRequest` with value `{res:?}`");
-            drop(PENDING_PERMISSION_RECEIVER.lock().unwrap().take());
-            self.notify.take_notify_state().notify();
-        }
-    }
 }
 
 impl std::future::Future for PermissionRequest {
@@ -552,6 +497,200 @@ impl std::future::Future for PermissionRequest {
 impl MaybeFuture for PermissionRequest {
     fn wait(self) -> Self::Output {
         self.inner.notify.wait(|| self.check_result())
+    }
+}
+
+struct PermissionRequestTracker {
+    #[allow(unused)]
+    result_receiver: BroadcastReceiver,
+    activity_lifecycle_watcher: DynamicProxy,
+    app_context: Global<AndroidApplication<'static>>,
+}
+
+struct ResumeEventMark {
+    tp_resume: Instant,
+    resumed_activity_class: String,
+}
+
+impl PermissionRequestTracker {
+    fn build(
+        inner_weak: &Arc<PermissionRequestInner>,
+        dev_expected: &DeviceInfo,
+    ) -> Result<Self, Error> {
+        let inner_weak = Arc::downgrade(inner_weak);
+        let inner_weak_2 = inner_weak.clone();
+
+        let exp_dev = dev_expected.clone();
+        let receiver = BroadcastReceiver::build(move |env, _, intent| {
+            Self::on_receive(&inner_weak, &exp_dev, env, intent)
+        })?;
+        receiver.register_for_action(&Self::action_usb_permission())?;
+        receiver.register_for_action(
+            jni_with_env(|env| {
+                AndroidUsbManager::ACTION_USB_DEVICE_DETACHED(env).map(|s| s.to_string())
+            })?
+            .trim(),
+        )?;
+
+        let exp_dev = dev_expected.clone();
+        let resume_mark_arc = Arc::new(Mutex::new(None));
+
+        let (app_context, watcher) = jni_with_env(move |env| {
+            let context = env.as_cast::<AndroidContext>(android_context())?;
+            let app_context = context.get_application_context(env)?;
+            let app_context = env.new_cast_global_ref::<AndroidApplication>(app_context)?;
+            let watcher = DynamicProxy::build(
+                env,
+                &jni::refs::LoaderContext::None,
+                [jni::jni_str!(
+                    "android.app.Application$ActivityLifecycleCallbacks"
+                )],
+                move |env, method, args| {
+                    let callback_name = method.get_name(env)?.to_string();
+                    let activity = args.get_element(env, 0)?;
+                    Self::on_activity_lifecycle_callback(
+                        &inner_weak_2,
+                        &exp_dev,
+                        &resume_mark_arc,
+                        env,
+                        callback_name,
+                        activity,
+                    )
+                },
+            )?;
+            let callbacks = env.as_cast::<AndroidLifecycleCallbacks>(watcher.as_ref())?;
+            app_context.register_activity_lifecycle_callbacks(env, callbacks)?;
+            Ok((app_context, watcher))
+        })?;
+
+        Ok(Self {
+            result_receiver: receiver,
+            activity_lifecycle_watcher: watcher,
+            app_context,
+        })
+    }
+
+    /// Called when a permission request result is received.
+    fn on_receive<'a>(
+        inner_weak: &Weak<PermissionRequestInner>,
+        dev_expected: &DeviceInfo,
+        env: &mut Env<'a>,
+        intent: Intent<'a>,
+    ) -> Result<(), jni::errors::Error> {
+        if intent.get_action(env)?.to_string().trim() == Self::action_usb_permission() {
+            let dev_id = get_extra_device_id(env, &intent)?;
+            debug!("Received permission request result of device {dev_id:?}");
+            if dev_id == dev_expected.id() {
+                let Some(inner) = inner_weak.upgrade() else {
+                    // The Rust-side request was aborted previously; still,
+                    // the actual request needs to be treated as completed.
+                    drop(PENDING_REQUEST_TRACKER.lock().unwrap().take());
+                    return Ok(());
+                };
+                let extra_name = AndroidUsbManager::EXTRA_PERMISSION_GRANTED(env)?;
+                let granted = intent
+                    .get_boolean_extra(env, extra_name, false)
+                    .map_err(|_| {
+                        env.exception_clear();
+                        Error::new(ErrorKind::Other, "failed to get EXTRA_PERMISSION_GRANTED")
+                    });
+                inner.set_result(granted);
+            }
+        } else if !dev_expected.check_connection() {
+            debug!("Received disconnection event in `PermissionRequest::on_receive`");
+            if let Some(inner) = inner_weak.upgrade() {
+                inner.set_result(Err(Error::new(
+                    ErrorKind::Disconnected,
+                    "device disconnected",
+                )));
+            } else {
+                drop(PENDING_REQUEST_TRACKER.lock().unwrap().take());
+            };
+        }
+        Ok(())
+    }
+
+    fn on_activity_lifecycle_callback<'a>(
+        inner_weak: &Weak<PermissionRequestInner>,
+        dev_expected: &DeviceInfo,
+        resume_event_mark: &Arc<Mutex<Option<ResumeEventMark>>>,
+        env: &mut Env<'a>,
+        callback_name: String,
+        activity: JObject<'a>,
+    ) -> Result<JObject<'a>, jni::errors::Error> {
+        let class_name = env.get_object_class(activity)?.get_name(env)?.to_string();
+        debug!("{callback_name} of {class_name} received");
+        match callback_name.trim() {
+            "onActivityResumed" => {
+                // If any Activity is resumed for a moment, it is known that the dialog
+                // has disappeared now; just set the result as the current permission
+                // state in case of the permission result broadcast can't be received.
+                resume_event_mark.lock().unwrap().replace(ResumeEventMark {
+                    tp_resume: Instant::now(),
+                    resumed_activity_class: class_name.clone(),
+                });
+                let inner_weak = inner_weak.clone();
+                let dev_expected = dev_expected.clone();
+                let resume_event_mark = resume_event_mark.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(1));
+                    // Ensure the activity is resumed for a while without pausing/stopping again.
+                    let mark_lock = resume_event_mark.lock().unwrap();
+                    if let Some(mark) = mark_lock.as_ref() {
+                        if mark.resumed_activity_class == class_name {
+                            drop(mark_lock);
+                            if let Some(inner) = inner_weak.upgrade() {
+                                inner.set_result(dev_expected.has_permission());
+                            } else {
+                                drop(PENDING_REQUEST_TRACKER.lock().unwrap().take());
+                            }
+                        }
+                    }
+                });
+            }
+            "onActivityPaused" | "onActivityStopped" => {
+                let mut mark_lock = resume_event_mark.lock().unwrap();
+                if let Some(prev_mark) = mark_lock.as_ref() {
+                    if prev_mark.resumed_activity_class == class_name {
+                        let _ = mark_lock.take();
+                    }
+                }
+            }
+            _ => (),
+        }
+        Ok(JObject::null())
+    }
+
+    fn action_usb_permission() -> String {
+        format!("{}.{}", android_app_package_name(), ACTION_USB_PERMISSION)
+    }
+}
+
+impl Drop for PermissionRequestTracker {
+    fn drop(&mut self) {
+        if let Err(e) = jni_with_env(|env| {
+            let watcher =
+                env.as_cast::<AndroidLifecycleCallbacks>(self.activity_lifecycle_watcher.as_ref())?;
+            self.app_context
+                .unregister_activity_lifecycle_callbacks(env, watcher)
+        }) {
+            info!("failed to unregister activity lifecycle callbacks: {e:?}");
+        }
+    }
+}
+
+impl PermissionRequestInner {
+    /// The result should be set for once when it is received or otherwise determined.
+    /// * When it is set, the actual request is treated as completed, thus the
+    ///   `PENDING_REQUEST_TRACKER` is cleared to make possible of a new request.
+    ///   Then the outer `PermissionRequest` is notified.
+    /// * If the result is already set, this should be a no-op.
+    fn set_result(&self, res: Result<bool, Error>) {
+        if self.result.set(res.clone()).is_ok() {
+            debug!("notifying for `PermissionRequest` with value `{res:?}`");
+            drop(PENDING_REQUEST_TRACKER.lock().unwrap().take());
+            self.notify.take_notify_state().notify();
+        }
     }
 }
 
