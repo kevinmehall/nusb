@@ -173,6 +173,24 @@
 //! }
 //! ```
 //!
+//! ### Android
+//!
+//! `nusb` uses the Android `UsbManager` API via JNI for listing and opening
+//! devices. The Linux usbfs backend is then used once a device is opened.
+//!
+//! The Android application must have the `android.hardware.usb.host` feature.
+//! [Opening a device][DeviceInfo::open] requires user permission and may
+//! prompt the user if necessary.
+//!
+//! Please make sure the [ndk-context] is configured correctly, unless you have a
+//! native activity application based on [android-activity] or a similar glue crate.
+//! See <https://cjycode.com/flutter_rust_bridge/guides/how-to/ndk-init>.
+//!
+//! Note that a few fields are not available in [DeviceInfo].
+//!
+//! [android-activity]: https://docs.rs/android-activity
+//! [ndk-context]: https://docs.rs/ndk-context
+//!
 //! ## Async support
 //!
 //! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
@@ -208,7 +226,12 @@ pub use device::{Device, Endpoint, Interface};
 
 pub mod transfer;
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "android"
+))]
 pub mod hotplug;
 
 mod maybe_future;
@@ -231,7 +254,12 @@ pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
 ///     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
 ///     .expect("device not connected");
 /// ```
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "android"
+))]
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
     platform::list_devices()
@@ -256,6 +284,10 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
 ///     })
 ///     .collect();
 /// ```
+///
+/// ### Platform-specific notes:
+///
+///   * On Android, this is currently unavailable.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = BusInfo>, Error>> {
     platform::list_buses()
@@ -296,7 +328,12 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
 ///     when the `Connected` event is emitted. If you are immediately opening the device
 ///     and claiming an interface when receiving a `Connected` event,
 ///     you should retry after a short delay if opening or claiming fails.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "android"
+))]
 pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
     Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
 }

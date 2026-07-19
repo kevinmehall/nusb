@@ -27,11 +27,11 @@ pub enum NotifyState {
 }
 
 impl NotifyState {
-    fn take(&mut self) -> Self {
+    pub fn take(&mut self) -> Self {
         std::mem::replace(self, NotifyState::None)
     }
 
-    fn notify(self) {
+    pub fn notify(self) {
         match self {
             NotifyState::None => {}
             NotifyState::Waker(waker) => waker.wake(),
@@ -83,7 +83,7 @@ impl Notify {
         }
     }
 
-    fn take_notify_state(&self) -> NotifyState {
+    pub fn take_notify_state(&self) -> NotifyState {
         self.state.lock().unwrap().take()
     }
 }
