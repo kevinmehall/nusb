@@ -2,7 +2,7 @@
 //! A new library for cross-platform low-level access to USB devices.
 //!
 //! `nusb` supports Windows, macOS, and Linux, and provides both async and
-//!  blocking APIs for listing and watching USB devices, reading descriptor
+//! blocking APIs for listing and watching USB devices, reading descriptor
 //!  details, opening and managing devices and interfaces, and performing
 //!  transfers on control, bulk, and interrupt endpoints.
 //!
@@ -156,6 +156,22 @@
 //!
 //! Users have access to USB devices by default, with no permission
 //! configuration needed. Devices with a kernel driver are not accessible.
+//!
+//! Unlike other platforms, macOS will only set a configuration automatically
+//! for devices with composite class (bDeviceClass = 0x00) or those with a
+//! known driver. For vendor class devices, you may need to set a
+//! configuration after opening the device:
+//!
+//! ```no_run
+//! # use nusb::{self, MaybeFuture};
+//! # let device_info = nusb::list_devices().wait().unwrap()
+//! #     .find(|dev| dev.vendor_id() == 0xAAAA && dev.product_id() == 0xBBBB)
+//! #     .expect("device not connected");
+//! let device = device_info.open().wait().expect("failed to open device");
+//! if device.active_configuration().is_err() {
+//!     device.set_configuration(1).wait().expect("failed to set configuration");
+//! }
+//! ```
 //!
 //! ### Android
 //!
