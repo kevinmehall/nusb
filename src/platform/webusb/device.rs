@@ -24,13 +24,36 @@ use crate::{
         ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor,
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_DEVICE,
     },
-    transfer::{Buffer, Completion, ControlIn, ControlOut, Direction, TransferError},
+    transfer::{
+        Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
+    },
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
 
 use super::{
     js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error, WebFuture,
 };
+
+impl From<ControlType> for web_sys::UsbRequestType {
+    fn from(value: ControlType) -> Self {
+        match value {
+            ControlType::Standard => web_sys::UsbRequestType::Standard,
+            ControlType::Class => web_sys::UsbRequestType::Class,
+            ControlType::Vendor => web_sys::UsbRequestType::Vendor,
+        }
+    }
+}
+
+impl From<Recipient> for web_sys::UsbRecipient {
+    fn from(value: Recipient) -> Self {
+        match value {
+            Recipient::Device => web_sys::UsbRecipient::Device,
+            Recipient::Interface => web_sys::UsbRecipient::Interface,
+            Recipient::Endpoint => web_sys::UsbRecipient::Endpoint,
+            Recipient::Other => web_sys::UsbRecipient::Other,
+        }
+    }
+}
 
 pub(crate) struct WebusbDevice {
     pub device: UsbDevice,
