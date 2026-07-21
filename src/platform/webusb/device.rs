@@ -238,6 +238,13 @@ impl WebusbDevice {
     }
 }
 
+impl Drop for WebusbDevice {
+    fn drop(&mut self) {
+        // This returns a promise, so fire and forget. Best effort close.
+        let _ = self.device.close();
+    }
+}
+
 impl Drop for WebusbInterface {
     fn drop(&mut self) {
         let _ = self.device.device.release_interface(self.interface_number);
