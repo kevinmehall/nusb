@@ -9,7 +9,8 @@ use std::{
 };
 
 use wasm_bindgen_futures::{
-    js_sys::Promise,
+    js_sys::{Promise, Reflect},
+    spawn_local,
     wasm_bindgen::{JsCast, JsValue},
     JsFuture,
 };
@@ -76,26 +77,49 @@ impl WebusbDevice {
                 .await
                 .map_err(js_value_to_error)?;
 
-            let device_descriptor = get_descriptor(
-                &device,
-                DESCRIPTOR_TYPE_DEVICE,
-                0,
-                0,
-                Duration::from_millis(500),
-            )
-            .await?;
+            inc_open_count(&device);
 
-            let device_descriptor = DeviceDescriptor::new(&device_descriptor)
-                .ok_or_else(|| Error::new(ErrorKind::Other, "invalid device descriptor"))?;
+            // Any error past this point must balance the open() above.
+            let built = async {
+                let device_descriptor = get_descriptor(
+                    &device,
+                    DESCRIPTOR_TYPE_DEVICE,
+                    0,
+                    0,
+                    Duration::from_millis(500),
+                )
+                .await?;
 
-            let config_descriptors = extract_descriptors(&device).await?;
+                let device_descriptor = match DeviceDescriptor::new(&device_descriptor)
+                    .ok_or_else(|| Error::new(ErrorKind::Other, "invalid device descriptor"))
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        dec_and_maybe_close(&device);
+                        return Err(e);
+                    }
+                };
 
-            #[allow(clippy::arc_with_non_send_sync)]
-            Ok(Arc::new(Self {
-                device,
-                device_descriptor,
-                config_descriptors,
-            }))
+                let config_descriptors = extract_descriptors(&device).await?;
+                Ok::<_, Error>((device_descriptor, config_descriptors))
+            }
+            .await;
+
+            match built {
+                Ok((device_descriptor, config_descriptors)) =>
+                {
+                    #[allow(clippy::arc_with_non_send_sync)]
+                    Ok(Arc::new(Self {
+                        device,
+                        device_descriptor,
+                        config_descriptors,
+                    }))
+                }
+                Err(e) => {
+                    dec_and_maybe_close(&device);
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -238,10 +262,47 @@ impl WebusbDevice {
     }
 }
 
+/// Property key for the open count we stash on the JS `USBDevice`.
+const OPEN_COUNT_KEY: &str = "__nusb_open_count";
+
+fn open_count(device: &UsbDevice) -> f64 {
+    Reflect::get(device.as_ref(), &JsValue::from_str(OPEN_COUNT_KEY))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+}
+
+fn inc_open_count(device: &UsbDevice) {
+    let n = open_count(device) + 1.0;
+    let _ = Reflect::set(
+        device.as_ref(),
+        &JsValue::from_str(OPEN_COUNT_KEY),
+        &JsValue::from_f64(n),
+    );
+    log::debug!("nusb webusb: open count -> {n}");
+}
+
+/// Drop one open reference; close the JS device if it was the last.
+fn dec_and_maybe_close(device: &UsbDevice) {
+    let n = open_count(device) - 1.0;
+    let _ = Reflect::set(
+        device.as_ref(),
+        &JsValue::from_str(OPEN_COUNT_KEY),
+        &JsValue::from_f64(n),
+    );
+    log::debug!("nusb webusb: open count -> {n}");
+    if n <= 0.0 {
+        log::debug!("nusb webusb: last handle dropped, closing device");
+        let promise = device.close();
+        spawn_local(async move {
+            let _ = JsFuture::from(promise).await;
+        });
+    }
+}
+
 impl Drop for WebusbDevice {
     fn drop(&mut self) {
-        // This returns a promise, so fire and forget. Best effort close.
-        let _ = self.device.close();
+        dec_and_maybe_close(&self.device);
     }
 }
 
