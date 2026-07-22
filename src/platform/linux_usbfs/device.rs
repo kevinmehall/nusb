@@ -719,6 +719,18 @@ impl LinuxInterface {
             idle_transfer: None,
         })
     }
+
+    pub fn release(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            if let Some(this) = Arc::into_inner(self) {
+                // USBDEVFS_RELEASEINTERFACE only fails on invalid argument, so no need to get a result out of drop.
+                drop(this);
+                Ok(())
+            } else {
+                return Err(Error::new(ErrorKind::Busy, "interface is still in use"));
+            }
+        })
+    }
 }
 
 impl Drop for LinuxInterface {

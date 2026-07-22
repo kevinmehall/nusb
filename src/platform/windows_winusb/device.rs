@@ -807,6 +807,18 @@ impl WindowsInterface {
             }
         }
     }
+
+    pub fn release(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            if let Some(this) = Arc::into_inner(self) {
+                // WinUSB_Free is infallible, so just drop from the the threadpool.
+                drop(this);
+                Ok(())
+            } else {
+                return Err(Error::new(ErrorKind::Busy, "interface is still in use"));
+            }
+        })
+    }
 }
 
 pub(crate) struct WindowsEndpoint {

@@ -474,6 +474,19 @@ impl MacInterface {
             idle_transfer: None,
         })
     }
+
+    pub fn release(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            if let Some(this) = Arc::into_inner(self) {
+                // USBInterfaceClose only fails on disconnected devices, but we'll ignore
+                // those errors to match the behavior of other platforms.
+                drop(this);
+                Ok(())
+            } else {
+                return Err(Error::new(ErrorKind::Busy, "interface is still in use"));
+            }
+        })
+    }
 }
 
 impl Drop for MacInterface {

@@ -175,6 +175,7 @@ impl WebusbDevice {
                     endpoints_used: Default::default(),
                 })),
                 interface_number,
+                released: false,
                 device: self.clone(),
             }))
         })
@@ -238,12 +239,6 @@ impl WebusbDevice {
     }
 }
 
-impl Drop for WebusbInterface {
-    fn drop(&mut self) {
-        let _ = self.device.device.release_interface(self.interface_number);
-    }
-}
-
 async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> {
     let num_configurations = device.configurations().length() as usize;
     let mut config_descriptors = Vec::with_capacity(num_configurations);
@@ -295,6 +290,7 @@ pub async fn get_descriptor(
 
 pub(crate) struct WebusbInterface {
     pub interface_number: u8,
+    released: bool,
     pub(crate) device: Arc<WebusbDevice>,
     state: Arc<Mutex<InterfaceState>>,
 }
@@ -380,6 +376,28 @@ impl WebusbInterface {
             max_packet_size,
             pending: VecDeque::new(),
         })
+    }
+
+    pub fn release(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        WebFuture(async move {
+            if let Some(mut this) = Arc::into_inner(self) {
+                this.released = true;
+                JsFuture::from(this.device.device.release_interface(this.interface_number))
+                    .await
+                    .map_err(js_value_to_error)?;
+                Ok(())
+            } else {
+                return Err(Error::new(ErrorKind::Busy, "interface is still in use"));
+            }
+        })
+    }
+}
+
+impl Drop for WebusbInterface {
+    fn drop(&mut self) {
+        if !self.released {
+            let _ = self.device.device.release_interface(self.interface_number);
+        }
     }
 }
 

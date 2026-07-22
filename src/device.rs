@@ -554,6 +554,19 @@ impl Interface {
             ep_dir: PhantomData,
         })
     }
+
+    /// Release the interface.
+    ///
+    /// Returns an error (`ErrorKind::Busy`) if any other reference to this
+    /// `Interface` still exists, including those from `Endpoint`s or their
+    /// pending transfers. Errors from disconnected devices are silently
+    /// ignored.
+    ///
+    /// This is the same as what occurs on `Drop` of the last clone of the
+    /// `Interface`, but allows it to be called asynchronously.
+    pub fn release(self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend.release()
+    }
 }
 
 impl Debug for Interface {
