@@ -74,7 +74,8 @@ impl MacDevice {
             let _event_registration = add_event_source(event_source);
 
             let opened = device
-                .open()
+                .open_seize()
+                .or_else(|_| device.open())
                 .inspect_err(|err| {
                     log::debug!("Could not open device for exclusive access: 0x{err:08x}");
                 })
@@ -152,10 +153,21 @@ impl MacDevice {
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
+    /// Capture the device (device-wide): terminate all its kernel drivers so a claim can succeed.
+    /// Needs root or the `com.apple.vm.device-access` entitlement. `interface` is ignored.
+    pub(crate) fn detach_kernel_driver(&self, _interface: u8) -> Result<(), Error> {
+        self.device.reenumerate_capture().map_err(|e| {
+            Error::new_os(ErrorKind::Other, "USBDeviceReEnumerate(capture) failed", e)
+        })?;
+        let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
+        *is_open_exclusive = self.device.open_seize().or_else(|_| self.device.open()).is_ok();
+        Ok(())
+    }
+
     fn require_open_exclusive(&self) -> Result<(), Error> {
         let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
         if !*is_open_exclusive {
-            self.device.open().map_err(|e| match e {
+            self.device.open_seize().or_else(|_| self.device.open()).map_err(|e| match e {
                 io_kit_sys::ret::kIOReturnNoDevice => {
                     Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
                 }
@@ -217,6 +229,15 @@ impl MacDevice {
         self: Arc<Self>,
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
+        self.claim_interface_inner(interface_number, false)
+    }
+
+    /// Claim an interface, `seize`ing it from a kernel driver if set.
+    fn claim_interface_inner(
+        self: Arc<Self>,
+        interface_number: u8,
+        seize: bool,
+    ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         Blocking::new(move || {
             let intf_service = self
                 .device
@@ -237,7 +258,12 @@ impl MacDevice {
             })?;
             let _event_registration = add_event_source(source);
 
-            interface.open().map_err(|e| match e {
+            let opened = if seize {
+                interface.open_seize()
+            } else {
+                interface.open()
+            };
+            opened.map_err(|e| match e {
                 io_kit_sys::ret::kIOReturnExclusiveAccess => Error::new_os(
                     ErrorKind::Busy,
                     "could not open interface for exclusive access",
@@ -264,7 +290,7 @@ impl MacDevice {
         self: Arc<Self>,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
-        self.claim_interface(interface)
+        self.claim_interface_inner(interface, true)
     }
 
     pub fn control_in(

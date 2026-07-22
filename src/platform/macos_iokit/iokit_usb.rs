@@ -121,6 +121,11 @@ impl IoKitDevice {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceOpen())) }
     }
 
+    /// Open the device with seize, forcing a driver holding it to close.
+    pub(crate) fn open_seize(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceOpenSeize())) }
+    }
+
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), IOReturn> {
         unsafe {
             check_iokit_return(call_iokit_function!(
@@ -132,6 +137,13 @@ impl IoKitDevice {
 
     pub(crate) fn reset(&self) -> Result<(), IOReturn> {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceReEnumerate(0))) }
+    }
+
+    /// Re-enumerate with `kUSBReEnumerateCaptureDeviceMask`: terminate every kernel driver on the
+    /// device and its interfaces so a claim can succeed. Needs root or an entitlement; re-open after.
+    pub(crate) fn reenumerate_capture(&self) -> Result<(), IOReturn> {
+        const CAPTURE_MASK: u32 = 1 << 30;
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceReEnumerate(CAPTURE_MASK))) }
     }
 
     pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, IOReturn> {
@@ -266,6 +278,11 @@ impl IoKitInterface {
 
     pub(crate) fn open(&mut self) -> Result<(), IOReturn> {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBInterfaceOpen())) }
+    }
+
+    /// Open the interface with seize, forcing a kernel driver holding it to close.
+    pub(crate) fn open_seize(&mut self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBInterfaceOpenSeize())) }
     }
 
     pub(crate) fn close(&mut self) -> Result<(), IOReturn> {

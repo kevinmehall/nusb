@@ -91,8 +91,8 @@ impl Device {
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// the same effect as [`claim_interface`][`Device::claim_interface`].
+    /// Linux detaches the driver then claims. macOS opens the interface with seize (evicts a
+    /// matched kernel driver). Windows has no effect beyond [`claim_interface`][`Device::claim_interface`].
     pub fn detach_and_claim_interface(
         &self,
         interface: u8,
@@ -106,10 +106,11 @@ impl Device {
     /// Detach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// Linux detaches the given interface's driver. macOS captures the whole device, terminating
+    /// all its kernel drivers (needs root or the `com.apple.vm.device-access` entitlement). No
+    /// effect on other platforms.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.detach_kernel_driver(interface)?;
         let _ = interface;
 
