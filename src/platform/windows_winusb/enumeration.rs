@@ -92,8 +92,9 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let mut interfaces =
         list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default();
 
-    if driver.eq_ignore_ascii_case("usbccgp") {
+    if !driver.eq_ignore_ascii_case("winusb") {
         // Populate interface descriptor strings when available from child device nodes.
+        // Works for usbccgp, dg_ssudbus (Samsung), and any OEM composite parent.
         devinst
             .children()
             .flat_map(|intf| {
