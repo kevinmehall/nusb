@@ -24,6 +24,26 @@ pub trait MaybeFuture: IntoFuture<IntoFuture: NonWasmSend> + NonWasmSend {
             func: f,
         }
     }
+
+    /// Maps the output's success value to a different value.
+    fn map_ok<C, T, U, E>(self, c: C) -> impl MaybeFuture<Output = Result<U, E>>
+    where
+        Self: MaybeFuture<Output = Result<T, E>>,
+        C: FnOnce(T) -> U + Unpin + NonWasmSend,
+        Self: Sized,
+    {
+        self.map(|res| res.map(c))
+    }
+
+    /// Maps the output's error value to a different value.
+    fn map_err<C, T, E, F>(self, c: C) -> impl MaybeFuture<Output = Result<T, F>>
+    where
+        Self: MaybeFuture<Output = Result<T, E>>,
+        C: FnOnce(E) -> F + Unpin + NonWasmSend,
+        Self: Sized,
+    {
+        self.map(|res| res.map_err(c))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
