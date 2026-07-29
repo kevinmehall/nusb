@@ -1,10 +1,7 @@
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
 
-use crate::{
-    enumeration::{DeviceSelector, FilterRule},
-    DeviceInfo, Error, InterfaceInfo, MaybeFuture,
-};
+use crate::{enumeration::DeviceSelector, DeviceInfo, Error, InterfaceInfo, MaybeFuture};
 
 use super::{js_value_to_error, WebFuture};
 
@@ -57,16 +54,15 @@ pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
     }
 }
 
-pub fn request_devices(
-    selector: &DeviceSelector,
-) -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>> {
-    let filters = selector_to_filters(selector);
+pub fn request_device(
+    selectors: &[DeviceSelector],
+) -> impl MaybeFuture<Output = Result<Option<DeviceInfo>, Error>> + use<'_> {
+    let filters = selector_to_filters(selectors);
     WebFuture(async move {
         let usb = super::usb()?;
         let device = if filters.is_empty() {
             // WebUSB treats an empty filter list as matching all devices, but
-            // contradicting `.and_xxx()` calls will result in an empty list,
-            // so we don't want that behavior.
+            // we'll go with the behavior of `.iter().any()` that makes more sense.
             None
         } else {
             JsFuture::from(usb.request_device(&UsbDeviceRequestOptions::new(&filters)))
@@ -76,17 +72,16 @@ pub fn request_devices(
                 .map(device_to_info)
         };
 
-        Ok(device.into_iter())
+        Ok(device)
     })
 }
 
-fn selector_to_filters(selector: &DeviceSelector) -> Vec<UsbDeviceFilter> {
-    selector
-        .rules
+fn selector_to_filters(selectors: &[DeviceSelector]) -> Vec<UsbDeviceFilter> {
+    selectors
         .iter()
         .map(|rule| {
             let filter = UsbDeviceFilter::new();
-            let FilterRule {
+            let DeviceSelector {
                 vendor_id,
                 product_id,
                 class,

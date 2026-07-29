@@ -309,24 +309,20 @@ impl DeviceInfo {
     }
 
     /// Check whether this device matches a [`DeviceSelector`].
-    ///
-    /// Returns `true` if any of the selector's rules match this device.
-    pub fn matches(&self, selector: &DeviceSelector) -> bool {
-        selector.rules.iter().any(|f| {
-            f.vendor_id.is_none_or(|id| self.vendor_id == id)
-                && f.product_id.is_none_or(|id| self.product_id == id)
-                && f.serial_number
-                    .as_ref()
-                    .is_none_or(|s| self.serial_number.as_deref() == Some(s))
-                && ((f.class.is_none_or(|c| self.class == c)
-                    && f.subclass.is_none_or(|s| self.subclass == s)
-                    && f.protocol.is_none_or(|p| self.protocol == p))
-                    || self.interfaces().any(|i| {
-                        f.class.is_none_or(|c| i.class == c)
-                            && f.subclass.is_none_or(|s| i.subclass == s)
-                            && f.protocol.is_none_or(|p| i.protocol == p)
-                    }))
-        })
+    pub fn matches(&self, s: &DeviceSelector) -> bool {
+        s.vendor_id.is_none_or(|id| self.vendor_id == id)
+            && s.product_id.is_none_or(|id| self.product_id == id)
+            && s.serial_number
+                .as_ref()
+                .is_none_or(|s| self.serial_number.as_deref() == Some(s))
+            && ((s.class.is_none_or(|c| self.class == c)
+                && s.subclass.is_none_or(|s| self.subclass == s)
+                && s.protocol.is_none_or(|p| self.protocol == p))
+                || self.interfaces().any(|i| {
+                    s.class.is_none_or(|c| i.class == c)
+                        && s.subclass.is_none_or(|s| i.subclass == s)
+                        && s.protocol.is_none_or(|p| i.protocol == p)
+                }))
     }
 
     /// Open the device
@@ -738,286 +734,151 @@ impl std::fmt::Debug for BusInfo {
     }
 }
 
-/// A filter for matching devices in [`request_devices`][crate::request_devices].
+/// A filter for matching devices in [`request_device`][crate::request_device].
 ///
 /// ## Example
 ///
 /// ```no_run
 /// use nusb::{DeviceSelector, MaybeFuture};
-/// let selector = DeviceSelector::any([
-///     DeviceSelector::by_vid_pid(0x1234, 0x5678),
-///     DeviceSelector::by_vid_pid(0x1111, 0x2222),
-/// ]).and_serial_number("ABCDEF".into());
 ///
-/// let devices = nusb::request_devices(&selector).wait().unwrap();
+/// let devices = nusb::request_device(&[
+///     DeviceSelector::all().with_vid_pid(0x1234, 0x5678),
+///     DeviceSelector::all().with_vid_pid(0x1111, 0x2222),
+/// ]).wait().unwrap();
 /// ```
-#[derive(Clone)]
-pub struct DeviceSelector {
-    pub(crate) rules: Vec<FilterRule>,
-}
-
 #[derive(Default, Clone)]
-pub(crate) struct FilterRule {
-    pub vendor_id: Option<u16>,
-    pub product_id: Option<u16>,
-    pub class: Option<u8>,
-    pub subclass: Option<u8>,
-    pub protocol: Option<u8>,
-    pub serial_number: Option<String>,
+pub struct DeviceSelector {
+    pub(crate) vendor_id: Option<u16>,
+    pub(crate) product_id: Option<u16>,
+    pub(crate) class: Option<u8>,
+    pub(crate) subclass: Option<u8>,
+    pub(crate) protocol: Option<u8>,
+    pub(crate) serial_number: Option<String>,
 }
 
 impl DeviceSelector {
-    fn one(rule: FilterRule) -> DeviceSelector {
-        DeviceSelector { rules: vec![rule] }
-    }
-
     /// A selector that matches all devices.
-    pub fn all() -> DeviceSelector {
-        Self::one(FilterRule::default())
-    }
-
-    /// A selector that matches a device if it matches any of the given selectors.
-    pub fn any(selectors: impl IntoIterator<Item = DeviceSelector>) -> DeviceSelector {
+    pub const fn all() -> DeviceSelector {
         DeviceSelector {
-            rules: selectors
-                .into_iter()
-                .flat_map(|f| f.rules.into_iter())
-                .collect(),
+            vendor_id: None,
+            product_id: None,
+            class: None,
+            subclass: None,
+            protocol: None,
+            serial_number: None,
         }
     }
 
-    /// A selector that matches devices by their vendor ID.
-    pub fn by_vid(vendor_id: u16) -> DeviceSelector {
-        Self::one(FilterRule {
-            vendor_id: Some(vendor_id),
-            ..Default::default()
-        })
-    }
-
     /// Narrow the selector to only match devices with the given vendor ID.
-    pub fn and_vid(mut self, vendor_id: u16) -> DeviceSelector {
-        self.rules
-            .retain_mut(|f| *f.vendor_id.get_or_insert(vendor_id) == vendor_id);
+    pub const fn with_vid(mut self, vendor_id: u16) -> DeviceSelector {
+        self.vendor_id = Some(vendor_id);
         self
-    }
-
-    /// A selector that matches devices by their vendor ID and product ID.
-    pub fn by_vid_pid(vendor_id: u16, product_id: u16) -> DeviceSelector {
-        Self::one(FilterRule {
-            vendor_id: Some(vendor_id),
-            product_id: Some(product_id),
-            ..Default::default()
-        })
     }
 
     /// Narrow the selector to only match devices with the given vendor ID and product ID.
-    pub fn and_vid_pid(mut self, vendor_id: u16, product_id: u16) -> DeviceSelector {
-        self.rules.retain_mut(|f| {
-            *f.vendor_id.get_or_insert(vendor_id) == vendor_id
-                && *f.product_id.get_or_insert(product_id) == product_id
-        });
+    pub const fn with_vid_pid(mut self, vendor_id: u16, product_id: u16) -> DeviceSelector {
+        self.vendor_id = Some(vendor_id);
+        self.product_id = Some(product_id);
         self
-    }
-
-    /// A selector that matches devices by their class code.
-    pub fn by_class(class_code: u8) -> DeviceSelector {
-        Self::one(FilterRule {
-            class: Some(class_code),
-            ..Default::default()
-        })
     }
 
     /// Narrow the selector to only match devices with the given class code.
-    pub fn and_class(mut self, class_code: u8) -> DeviceSelector {
-        self.rules
-            .retain_mut(|f| *f.class.get_or_insert(class_code) == class_code);
+    pub const fn with_class(mut self, class_code: u8) -> DeviceSelector {
+        self.class = Some(class_code);
         self
-    }
-
-    /// A selector that matches devices by their class and subclass.
-    pub fn by_class_subclass(class_code: u8, subclass_code: u8) -> DeviceSelector {
-        Self::one(FilterRule {
-            class: Some(class_code),
-            subclass: Some(subclass_code),
-            ..Default::default()
-        })
     }
 
     /// Narrow the selector to only match devices with the given class and subclass.
-    pub fn and_class_subclass(mut self, class_code: u8, subclass_code: u8) -> DeviceSelector {
-        self.rules.retain_mut(|f| {
-            *f.class.get_or_insert(class_code) == class_code
-                && *f.subclass.get_or_insert(subclass_code) == subclass_code
-        });
+    pub const fn with_class_subclass(
+        mut self,
+        class_code: u8,
+        subclass_code: u8,
+    ) -> DeviceSelector {
+        self.class = Some(class_code);
+        self.subclass = Some(subclass_code);
         self
     }
 
-    /// A selector that matches devices by their class, subclass, and protocol.
-    pub fn by_class_subclass_protocol(
-        class_code: u8,
-        subclass_code: u8,
-        protocol_code: u8,
-    ) -> DeviceSelector {
-        Self::one(FilterRule {
-            class: Some(class_code),
-            subclass: Some(subclass_code),
-            protocol: Some(protocol_code),
-            ..Default::default()
-        })
-    }
-
     /// Narrow the selector to only match devices with the given class, subclass, and protocol.
-    pub fn and_class_subclass_protocol(
+    pub const fn with_class_subclass_protocol(
         mut self,
         class_code: u8,
         subclass_code: u8,
         protocol_code: u8,
     ) -> DeviceSelector {
-        self.rules.retain_mut(|f| {
-            *f.class.get_or_insert(class_code) == class_code
-                && *f.subclass.get_or_insert(subclass_code) == subclass_code
-                && *f.protocol.get_or_insert(protocol_code) == protocol_code
-        });
+        self.class = Some(class_code);
+        self.subclass = Some(subclass_code);
+        self.protocol = Some(protocol_code);
         self
-    }
-
-    /// A selector that matches devices by their serial number.
-    pub fn by_serial_number(serial_number: String) -> DeviceSelector {
-        Self::one(FilterRule {
-            serial_number: Some(serial_number),
-            ..Default::default()
-        })
     }
 
     /// Narrow the selector to only match devices with the given serial number.
-    pub fn and_serial_number(mut self, serial_number: String) -> DeviceSelector {
-        self.rules
-            .retain_mut(|f| *f.serial_number.get_or_insert(serial_number.clone()) == serial_number);
+    pub fn with_serial_number(mut self, serial_number: String) -> DeviceSelector {
+        self.serial_number = Some(serial_number);
         self
+    }
+
+    /// Vendor ID, or `None` if not filtered by vendor ID.
+    pub fn vendor_id(&self) -> Option<u16> {
+        self.vendor_id
+    }
+
+    /// Product ID, or `None` if not filtered by product ID.
+    pub fn product_id(&self) -> Option<u16> {
+        self.product_id
+    }
+
+    /// Class code, or `None` if not filtered by class.
+    pub fn class(&self) -> Option<u8> {
+        self.class
+    }
+
+    /// Subclass code, or `None` if not filtered by subclass.
+    pub fn subclass(&self) -> Option<u8> {
+        self.subclass
+    }
+
+    /// Protocol code, or `None` if not filtered by protocol.
+    pub fn protocol(&self) -> Option<u8> {
+        self.protocol
+    }
+
+    /// Serial number, or `None` if not filtered by serial number.
+    pub fn serial_number(&self) -> Option<&str> {
+        self.serial_number.as_deref()
     }
 }
 
 impl Debug for DeviceSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct FormatRule<'a>(&'a FilterRule);
+        let DeviceSelector {
+            vendor_id,
+            product_id,
+            class,
+            subclass,
+            protocol,
+            ref serial_number,
+        } = *self;
 
-        impl Debug for FormatRule<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let FilterRule {
-                    vendor_id,
-                    product_id,
-                    class,
-                    subclass,
-                    protocol,
-                    ref serial_number,
-                } = *self.0;
-
-                if vendor_id.is_none()
-                    && product_id.is_none()
-                    && class.is_none()
-                    && subclass.is_none()
-                    && protocol.is_none()
-                    && serial_number.is_none()
-                {
-                    f.write_str("DeviceSelector::all()")
-                } else {
-                    let mut s = f.debug_struct("DeviceSelector");
-                    if let Some(vendor_id) = vendor_id {
-                        s.field("vendor_id", &format_args!("0x{vendor_id:04X}"));
-                    }
-                    if let Some(product_id) = product_id {
-                        s.field("product_id", &format_args!("0x{product_id:04X}"));
-                    }
-                    if let Some(class) = class {
-                        s.field("class", &format_args!("0x{class:02X}"));
-                    }
-                    if let Some(subclass) = subclass {
-                        s.field("subclass", &format_args!("0x{subclass:02X}"));
-                    }
-                    if let Some(protocol) = protocol {
-                        s.field("protocol", &format_args!("0x{protocol:02X}"));
-                    }
-                    if let Some(ref serial_number) = serial_number {
-                        s.field("serial_number", serial_number);
-                    }
-                    s.finish()
-                }
-            }
+        let mut s = f.debug_struct("DeviceSelector");
+        if let Some(vendor_id) = vendor_id {
+            s.field("vendor_id", &format_args!("0x{vendor_id:04X}"));
         }
-
-        if self.rules.len() == 1 {
-            write!(f, "{:?}", FormatRule(&self.rules[0]))
-        } else {
-            write!(f, "DeviceSelector::any(")?;
-            f.debug_list()
-                .entries(self.rules.iter().map(FormatRule))
-                .finish()?;
-            write!(f, ")")
+        if let Some(product_id) = product_id {
+            s.field("product_id", &format_args!("0x{product_id:04X}"));
         }
+        if let Some(class) = class {
+            s.field("class", &format_args!("0x{class:02X}"));
+        }
+        if let Some(subclass) = subclass {
+            s.field("subclass", &format_args!("0x{subclass:02X}"));
+        }
+        if let Some(protocol) = protocol {
+            s.field("protocol", &format_args!("0x{protocol:02X}"));
+        }
+        if let Some(ref serial_number) = serial_number {
+            s.field("serial_number", serial_number);
+        }
+        s.finish()
     }
-}
-
-#[test]
-fn test_device_selector_debug() {
-    assert_eq!(
-        format!("{:?}", DeviceSelector::all()),
-        "DeviceSelector::all()"
-    );
-
-    assert_eq!(
-        format!("{:?}", DeviceSelector::by_vid(0x1234)),
-        "DeviceSelector { vendor_id: 0x1234 }"
-    );
-
-    assert_eq!(
-        format!("{:?}", DeviceSelector::by_vid_pid(0x1234, 0x5678)),
-        "DeviceSelector { vendor_id: 0x1234, product_id: 0x5678 }"
-    );
-
-    assert_eq!(
-        format!("{:?}", DeviceSelector::by_class(0xFF)),
-        "DeviceSelector { class: 0xFF }"
-    );
-
-    assert_eq!(
-        format!("{:?}", DeviceSelector::by_class_subclass(0xFF, 0x01)),
-        "DeviceSelector { class: 0xFF, subclass: 0x01 }"
-    );
-
-    assert_eq!(
-        format!("{:?}", DeviceSelector::by_serial_number("serial".into())),
-        "DeviceSelector { serial_number: \"serial\" }"
-    );
-
-    assert_eq!(
-        format!(
-            "{:?}",
-            DeviceSelector::by_class_subclass_protocol(0xFF, 0x01, 0x02)
-        ),
-        "DeviceSelector { class: 0xFF, subclass: 0x01, protocol: 0x02 }"
-    );
-
-    let sel2 = DeviceSelector::any([
-        DeviceSelector::by_vid_pid(0x1234, 0x5678),
-        DeviceSelector::by_vid_pid(0x1111, 0x2222),
-    ]);
-    assert_eq!(
-        format!("{:?}", sel2),
-        "DeviceSelector::any([DeviceSelector { vendor_id: 0x1234, product_id: 0x5678 }, DeviceSelector { vendor_id: 0x1111, product_id: 0x2222 }])"
-    );
-    assert_eq!(
-        format!("{:#?}", sel2),
-        "DeviceSelector::any([\n    DeviceSelector {\n        vendor_id: 0x1234,\n        product_id: 0x5678,\n    },\n    DeviceSelector {\n        vendor_id: 0x1111,\n        product_id: 0x2222,\n    },\n])"
-    );
-
-    let sel3 = DeviceSelector::any([
-        DeviceSelector::by_vid_pid(0x1234, 0x5678),
-        DeviceSelector::by_serial_number("1234".into()),
-    ]);
-    let sel4 = sel3.and_serial_number("ABCD".into());
-
-    assert_eq!(
-        format!("{:?}", sel4),
-        "DeviceSelector { vendor_id: 0x1234, product_id: 0x5678, serial_number: \"ABCD\" }"
-    );
 }

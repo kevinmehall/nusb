@@ -190,7 +190,7 @@
 //! ```
 //!
 //! WebUSB requires a user permission request to access a device. Use
-//! [`request_devices`] to prompt the user and get the selected device. Once
+//! [`request_device`] to prompt the user and get the selected device. Once
 //! permissions are granted, the device will appear in [`list_devices`] as well.
 //! Alternatively, use `Device::from_js` to wrap a `web_sys::UsbDevice` you
 //! obtain yourself.
@@ -274,31 +274,30 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
     platform::list_devices()
 }
 
-/// List devices that match a [`DeviceSelector`] and request user permission if necessary.
+/// Get a device that matches any of the provided [`DeviceSelector`]s and request user permission if necessary.
 ///
 /// ### Example
 ///
 /// ```no_run
 /// use nusb::{self, DeviceSelector};
-/// # async{
-/// let device = nusb::request_devices(&DeviceSelector::by_vid_pid(0xAAAA, 0xBBBB))
+/// # async {
+/// let device = nusb::request_device(&[DeviceSelector::all()])
 ///     .await
 ///     .unwrap()
-///     .next()
-///     .expect("device not connected");
+///     .expect("no device found or permission denied");
 /// # };
 /// ```
 ///
 /// Platform-specific notes:
 ///
 /// * **WebUSB**: This prompts the user for permission to access matching
-/// devices. If approved, the single device selected by the user will be
-/// returned. If cancelled, the iterator will be empty. The browser requires
+/// devices. If approved, the device selected by the user will be
+/// returned. If cancelled, returns `Ok(None)`. The browser requires
 /// [Transient User Activation] for this call: it must be called in response to
 /// a user action, not unprompted on page load.
 ///
-/// * On other platforms, this calls [`list_devices`] and filters for devices
-/// matching the selector.
+/// * On other platforms, this calls [`list_devices`] and finds an arbitrary
+/// device that matches the selector, returning `Ok(None)` if no matching device is found.
 ///
 /// [Transient User Activation]: https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/User_activation
 #[cfg(any(
@@ -307,18 +306,19 @@ pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = D
     target_os = "windows",
     target_arch = "wasm32"
 ))]
-pub fn request_devices(
-    selector: &DeviceSelector,
-) -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo> + use<'_>, Error>> + use<'_>
-{
+pub fn request_device(
+    selectors: &[DeviceSelector],
+) -> impl MaybeFuture<Output = Result<Option<DeviceInfo>, Error>> + use<'_> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        list_devices().map(|r| r.map(|devices| devices.filter(|dev| dev.matches(selector))))
+        list_devices().map(|r| {
+            r.map(|mut devices| devices.find(|dev| selectors.iter().any(|s| dev.matches(s))))
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
     {
-        platform::request_devices(selector)
+        platform::request_device(selectors)
     }
 }
 
