@@ -58,7 +58,7 @@ impl Device {
     }
 
     pub(crate) fn open(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Device, Error>> {
-        platform::Device::from_device_info(d).map(|d| d.map(Device::wrap))
+        platform::Device::from_device_info(d).map_ok(Device::wrap)
     }
 
     /// Wrap a usbdevfs file descriptor that is already open.
@@ -72,7 +72,7 @@ impl Device {
     /// *Supported on Linux and Android only.*
     #[cfg(any(docsrs, target_os = "android", target_os = "linux"))]
     pub fn from_fd(fd: std::os::fd::OwnedFd) -> impl MaybeFuture<Output = Result<Device, Error>> {
-        platform::Device::from_fd(fd).map(|d| d.map(Device::wrap))
+        platform::Device::from_fd(fd).map_ok(Device::wrap)
     }
 
     /// Wrap a [`web_sys::UsbDevice`] object obtained from JS.
@@ -80,7 +80,7 @@ impl Device {
     /// *Supported on wasm only.*
     #[cfg(any(docsrs, target_arch = "wasm32"))]
     pub fn from_js(device: UsbDevice) -> impl MaybeFuture<Output = Result<Device, Error>> {
-        platform::Device::from_js(device).map(|d| d.map(Device::wrap))
+        platform::Device::from_js(device).map_ok(Device::wrap)
     }
 
     /// Open an interface of the device and claim it for exclusive use.
@@ -91,7 +91,7 @@ impl Device {
         self.backend
             .clone()
             .claim_interface(interface)
-            .map(|i| i.map(Interface::wrap))
+            .map_ok(Interface::wrap)
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -106,7 +106,7 @@ impl Device {
         self.backend
             .clone()
             .detach_and_claim_interface(interface)
-            .map(|i| i.map(Interface::wrap))
+            .map_ok(Interface::wrap)
     }
 
     /// Detach kernel drivers for the specified interface.
@@ -208,7 +208,7 @@ impl Device {
             self.backend
                 .clone()
                 .get_descriptor(desc_type, desc_index, language_id)
-                .map(|r| r.map_err(GetDescriptorError::Transfer))
+                .map_err(GetDescriptorError::Transfer)
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -227,7 +227,7 @@ impl Device {
                 },
                 timeout,
             )
-            .map(|r| r.map_err(GetDescriptorError::Transfer))
+            .map_err(GetDescriptorError::Transfer)
         }
     }
 
