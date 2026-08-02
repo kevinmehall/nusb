@@ -76,14 +76,8 @@ impl WebusbDevice {
                 .await
                 .map_err(js_value_to_error)?;
 
-            let device_descriptor = get_descriptor(
-                &device,
-                DESCRIPTOR_TYPE_DEVICE,
-                0,
-                0,
-                Duration::from_millis(500),
-            )
-            .await?;
+            let device_descriptor =
+                get_descriptor(&device, DESCRIPTOR_TYPE_DEVICE, 0, 0, 18).await?;
 
             let device_descriptor = DeviceDescriptor::new(&device_descriptor)
                 .ok_or_else(|| Error::new(ErrorKind::Other, "invalid device descriptor"))?;
@@ -249,14 +243,18 @@ async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> 
         let language_id = 0;
         let desc_type = DESCRIPTOR_TYPE_CONFIGURATION;
         let desc_index = i as u8;
-        let data = get_descriptor(
-            device,
-            desc_type,
-            desc_index,
-            language_id,
-            Duration::from_millis(500),
-        )
-        .await?;
+
+        // Initial read to get just the configuration descriptor with `wTotalLength`
+        let data = get_descriptor(device, desc_type, desc_index, language_id, 9).await?;
+
+        let total_len = if let Some(total_len) = data.get(2..4) {
+            u16::from_le_bytes(total_len.try_into().unwrap())
+        } else {
+            continue;
+        };
+
+        // Read the full set of descriptors
+        let data = get_descriptor(device, desc_type, desc_index, language_id, total_len).await?;
 
         if ConfigurationDescriptor::new(&data[..]).is_some() {
             config_descriptors.push(data)
@@ -266,12 +264,12 @@ async fn extract_descriptors(device: &UsbDevice) -> Result<Vec<Vec<u8>>, Error> 
     Ok(config_descriptors)
 }
 
-pub async fn get_descriptor(
+async fn get_descriptor(
     device: &UsbDevice,
     desc_type: u8,
     desc_index: u8,
     language_id: u16,
-    _timeout: Duration,
+    length: u16,
 ) -> Result<Vec<u8>, Error> {
     let setup = UsbControlTransferParameters::new(
         language_id,
@@ -280,7 +278,7 @@ pub async fn get_descriptor(
         web_sys::UsbRequestType::Standard,
         ((desc_type as u16) << 8) | (desc_index as u16),
     );
-    let res = wasm_bindgen_futures::JsFuture::from(device.control_transfer_in(&setup, 4096))
+    let res = JsFuture::from(device.control_transfer_in(&setup, length))
         .await
         .map_err(js_value_to_error)?;
     let res: UsbInTransferResult = JsCast::unchecked_from_js(res.into());
