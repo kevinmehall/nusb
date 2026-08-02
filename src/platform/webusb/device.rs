@@ -421,18 +421,6 @@ enum Pending {
     },
 }
 
-// `JsFuture` contains an `Rc<RefCell<...>>`, so it is neither `Send` nor
-// `Sync`. The cross-platform `Endpoint` API requires its backend to be both
-// (so users can pass endpoints into Send-bounded async runtimes, the same
-// reason `wasm-bindgen` itself unsafe-impls `Send`/`Sync` for `JsValue`).
-// wasm32 is single-threaded by default, and even with the threads proposal
-// JS objects can't transit between worker contexts, so this is sound in
-// practice.
-#[cfg(not(target_feature = "atomics"))]
-unsafe impl Send for Pending {}
-#[cfg(not(target_feature = "atomics"))]
-unsafe impl Sync for Pending {}
-
 pub(crate) struct WebusbEndpoint {
     inner: Arc<EndpointInner>,
 
