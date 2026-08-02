@@ -4,6 +4,7 @@ use crate::{
         DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
     },
     io::{EndpointRead, EndpointWrite},
+    maybe_future::{NonWasmSend, NonWasmSync},
     platform,
     transfer::{
         Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
@@ -819,7 +820,9 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// ## Panics
     /// * if there are no transfers pending (that is, if [`Self::pending()`]
     ///   would return 0).
-    pub fn next_complete(&mut self) -> impl Future<Output = Completion> + Send + Sync + '_ {
+    pub fn next_complete(
+        &mut self,
+    ) -> impl Future<Output = Completion> + NonWasmSend + NonWasmSync + '_ {
         poll_fn(|cx| self.poll_next_complete(cx))
     }
 

@@ -54,6 +54,14 @@ pub trait NonWasmSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T> NonWasmSend for T {}
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::marker::Sync as NonWasmSync;
+
+#[cfg(target_arch = "wasm32")]
+pub trait NonWasmSync {}
+#[cfg(target_arch = "wasm32")]
+impl<T> NonWasmSync for T {}
+
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
