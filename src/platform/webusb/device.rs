@@ -224,11 +224,13 @@ impl WebusbDevice {
             control.control_type.into(),
             control.value,
         );
-        let mut data = control.data.to_vec();
+        // `controlTransferOut` won't accept a view of a `SharedArrayBuffer` linear memory,
+        // so expliclity copy to a non-shared `Uint8Array`.
+        let data = Uint8Array::from(control.data);
         WebFuture(async move {
             let res = JsFuture::from(
                 self.device
-                    .control_transfer_out_with_u8_slice(&setup, &mut data)
+                    .control_transfer_out_with_u8_array(&setup, &data)
                     .map_err(js_value_to_transfer_error)?,
             )
             .await
