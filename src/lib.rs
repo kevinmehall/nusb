@@ -247,7 +247,7 @@ pub mod transfer;
 pub mod hotplug;
 
 mod maybe_future;
-pub use maybe_future::MaybeFuture;
+pub use maybe_future::{ready, MaybeFuture};
 
 mod bitset;
 
