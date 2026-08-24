@@ -4,7 +4,10 @@
 //! licensed under MIT OR Apache-2.0.
 
 use core_foundation_sys::uuid::CFUUIDBytes;
-use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
+use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
+use io_kit_sys::{
+    kIOServiceInteractionAllowed, IOIteratorNext, IOObjectRelease, IOServiceAuthorize,
+};
 
 use super::iokit_c::{self, CFUUIDGetUUIDBytes, IOCFPlugInInterface};
 
@@ -37,6 +40,11 @@ impl IoService {
     }
     pub fn get(&self) -> u32 {
         self.0 .0
+    }
+
+    /// Ask IOKit to authorize this process to open the service.
+    pub(crate) fn authorize(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(IOServiceAuthorize(self.get(), kIOServiceInteractionAllowed)) }
     }
 }
 
@@ -112,9 +120,10 @@ pub(crate) fn usb_interface_type_id() -> CFUUIDBytes {
     unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID700()) }
 }
 
+#[allow(non_upper_case_globals)]
 pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), IOReturn> {
     match r {
-        io_kit_sys::ret::kIOReturnSuccess => Ok(()),
+        kIOReturnSuccess => Ok(()),
         e => Err(e),
     }
 }

@@ -98,8 +98,8 @@ impl Device {
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// the same effect as [`claim_interface`][`Device::claim_interface`].
+    /// Linux detaches the driver then claims. macOS opens the interface with seize (evicts a
+    /// matched kernel driver). Windows has no effect beyond [`claim_interface`][`Device::claim_interface`].
     pub fn detach_and_claim_interface(
         &self,
         interface: u8,
@@ -113,10 +113,12 @@ impl Device {
     /// Detach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// Linux detaches the given interface's driver. macOS captures the whole device, terminating
+    /// all its kernel drivers and removing mounted volumes without unmounting them; this requires
+    /// root or the `com.apple.vm.device-access` entitlement. macOS returns [`ErrorKind::Busy`]
+    /// while any interface is claimed. No effect on other platforms.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.detach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -126,10 +128,13 @@ impl Device {
     /// Attach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// Linux attaches the driver for the given interface. On macOS, any interface number releases
+    /// the whole previously-captured device back to the operating system; it returns
+    /// [`ErrorKind::Busy`] if an interface remains claimed or the device was not captured. The
+    /// release re-enumerates the device, disconnecting this `Device`; open the new
+    /// [`DeviceInfo`]. No effect on other platforms.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.attach_kernel_driver(interface)?;
         let _ = interface;
 
