@@ -224,6 +224,9 @@
 
 mod platform;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod backend;
+
 pub mod descriptors;
 mod enumeration;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

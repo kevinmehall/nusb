@@ -98,7 +98,8 @@ impl TransferData {
             Direction::Out => buf.len as i32,
             Direction::In => buf.requested_len as i32,
         };
-        self.allocator = buf.allocator;
+        // SAFETY: `buf` is not dropped, and every other owned field is transferred above.
+        self.allocator = unsafe { std::ptr::read(&buf.allocator) };
     }
 
     pub fn take_completion(&mut self) -> Completion {
