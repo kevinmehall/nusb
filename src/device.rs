@@ -1,3 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::backend;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::maybe_future::blocking::Blocking;
 use crate::{
     descriptors::{
         decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
@@ -50,12 +54,59 @@ struct UsbDevice();
 /// transfers.
 #[derive(Clone)]
 pub struct Device {
-    backend: Arc<crate::platform::Device>,
+    #[cfg(target_arch = "wasm32")]
+    backend: Arc<platform::Device>,
+    #[cfg(not(target_arch = "wasm32"))]
+    backend: Arc<dyn backend::Device>,
+    #[cfg(not(target_arch = "wasm32"))]
+    device_descriptor: DeviceDescriptor,
+    #[cfg(not(target_arch = "wasm32"))]
+    configuration_descriptors: Arc<[Vec<u8>]>,
+    #[cfg(not(target_arch = "wasm32"))]
+    speed: Option<Speed>,
 }
 
 impl Device {
     pub(crate) fn wrap(backend: Arc<platform::Device>) -> Device {
-        Device { backend }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Device { backend }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::from_backend_unchecked(Arc::new(backend::NativeDevice(backend)))
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_backend_unchecked(backend: Arc<dyn backend::Device>) -> Device {
+        let device_descriptor = backend.device_descriptor();
+        let configuration_descriptors = backend.configuration_descriptors().into();
+        let speed = backend.speed();
+        Device {
+            backend,
+            device_descriptor,
+            configuration_descriptors,
+            speed,
+        }
+    }
+
+    /// Open a device whose raw USB operations are supplied by an external backend.
+    ///
+    /// This is intended for a privilege-separated transport. The backend supplies cached
+    /// descriptors and performs only low-level device, interface, control, and endpoint work.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_backend(backend: Arc<dyn backend::Device>) -> Result<Device, Error> {
+        let configurations = backend.configuration_descriptors();
+        backend::validate_configurations(&configurations)?;
+        let device_descriptor = backend.device_descriptor();
+        let speed = backend.speed();
+        Ok(Device {
+            backend,
+            device_descriptor,
+            configuration_descriptors: configurations.into(),
+            speed,
+        })
     }
 
     pub(crate) fn open(d: &DeviceInfo) -> impl MaybeFuture<Output = Result<Device, Error>> {
@@ -89,10 +140,23 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend
-            .clone()
-            .claim_interface(interface)
-            .map_ok(Interface::wrap)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend
+                .clone()
+                .claim_interface(interface)
+                .map_ok(Interface::wrap)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            let device = self.clone();
+            Blocking::new(move || {
+                backend
+                    .claim_interface(interface)
+                    .map(|interface| Interface::wrap(interface, device))
+            })
+        }
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -104,10 +168,23 @@ impl Device {
         &self,
         interface: u8,
     ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend
-            .clone()
-            .detach_and_claim_interface(interface)
-            .map_ok(Interface::wrap)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend
+                .clone()
+                .detach_and_claim_interface(interface)
+                .map_ok(Interface::wrap)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            let device = self.clone();
+            Blocking::new(move || {
+                backend
+                    .detach_and_claim_interface(interface)
+                    .map(|interface| Interface::wrap(interface, device))
+            })
+        }
     }
 
     /// Detach kernel drivers for the specified interface.
@@ -118,8 +195,9 @@ impl Device {
     /// root or the `com.apple.vm.device-access` entitlement. macOS returns [`ErrorKind::Busy`]
     /// while any interface is claimed. No effect on other platforms.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(not(target_arch = "wasm32"))]
         self.backend.detach_kernel_driver(interface)?;
+        #[cfg(target_arch = "wasm32")]
         let _ = interface;
 
         Ok(())
@@ -134,8 +212,9 @@ impl Device {
     /// release re-enumerates the device, disconnecting this `Device`; open the new
     /// [`DeviceInfo`]. No effect on other platforms.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(not(target_arch = "wasm32"))]
         self.backend.attach_kernel_driver(interface)?;
+        #[cfg(target_arch = "wasm32")]
         let _ = interface;
 
         Ok(())
@@ -145,12 +224,26 @@ impl Device {
     ///
     /// This returns cached data and does not perform IO.
     pub fn device_descriptor(&self) -> DeviceDescriptor {
-        self.backend.device_descriptor()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.device_descriptor()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.device_descriptor.clone()
+        }
     }
 
     /// Get the device's connection speed.
     pub fn speed(&self) -> Option<Speed> {
-        self.backend.speed()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.speed()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.speed
+        }
     }
 
     /// Get information about the active configuration.
@@ -174,7 +267,16 @@ impl Device {
     ///
     /// This returns cached data and does not perform IO.
     pub fn configurations(&self) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
-        self.backend.configuration_descriptors()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.configuration_descriptors()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.configuration_descriptors
+                .iter()
+                .filter_map(|descriptor| ConfigurationDescriptor::new(descriptor))
+        }
     }
 
     /// Set the device configuration.
@@ -189,7 +291,15 @@ impl Device {
         &self,
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
-        self.backend.clone().set_configuration(configuration)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().set_configuration(configuration)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            Blocking::new(move || backend.set_configuration(configuration))
+        }
     }
 
     /// Request a descriptor from the device.
@@ -210,11 +320,11 @@ impl Device {
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, GetDescriptorError>> {
         #[cfg(target_os = "windows")]
         {
-            let _ = timeout;
-            self.backend
-                .clone()
-                .get_descriptor(desc_type, desc_index, language_id)
-                .map_err(GetDescriptorError::Transfer)
+            crate::maybe_future::Ready(
+                self.backend
+                    .get_descriptor(desc_type, desc_index, language_id, timeout)
+                    .map_err(GetDescriptorError::Transfer),
+            )
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -297,7 +407,15 @@ impl Device {
     /// ### Platform-specific details
     /// * Not supported on Windows
     pub fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
-        self.backend.clone().reset()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().reset()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            Blocking::new(move || backend.reset())
+        }
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.
@@ -340,7 +458,15 @@ impl Device {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        self.backend.clone().control_in(data, timeout)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().control_in(data, timeout)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            Blocking::new(move || backend.control_in(data, timeout))
+        }
     }
 
     /// Submit a single **OUT (host-to-device)** transfer on the default **control** endpoint.
@@ -383,7 +509,33 @@ impl Device {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        self.backend.clone().control_out(data, timeout)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().control_out(data, timeout)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            let control_type = data.control_type;
+            let recipient = data.recipient;
+            let request = data.request;
+            let value = data.value;
+            let index = data.index;
+            let bytes = data.data.to_vec();
+            Blocking::new(move || {
+                backend.control_out(
+                    ControlOut {
+                        control_type,
+                        recipient,
+                        request,
+                        value,
+                        index,
+                        data: &bytes,
+                    },
+                    timeout,
+                )
+            })
+        }
     }
 }
 
@@ -402,12 +554,23 @@ impl Debug for Device {
 /// associated [`Endpoint`]s are dropped.
 #[derive(Clone)]
 pub struct Interface {
+    #[cfg(target_arch = "wasm32")]
     backend: Arc<platform::Interface>,
+    #[cfg(not(target_arch = "wasm32"))]
+    backend: Arc<dyn backend::Interface>,
+    #[cfg(not(target_arch = "wasm32"))]
+    device: Device,
 }
 
 impl Interface {
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn wrap(backend: Arc<platform::Interface>) -> Self {
         Interface { backend }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wrap(backend: Arc<dyn backend::Interface>, device: Device) -> Self {
+        Interface { backend, device }
     }
 
     /// Select the alternate setting of this interface.
@@ -419,7 +582,15 @@ impl Interface {
     /// You must not have any pending transfers or open `Endpoints` on this interface when changing
     /// the alternate setting.
     pub fn set_alt_setting(&self, alt_setting: u8) -> impl MaybeFuture<Output = Result<(), Error>> {
-        self.backend.clone().set_alt_setting(alt_setting)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().set_alt_setting(alt_setting)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            Blocking::new(move || backend.set_alt_setting(alt_setting))
+        }
     }
 
     /// Get the current alternate setting of this interface.
@@ -462,7 +633,15 @@ impl Interface {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        self.backend.clone().control_in(data, timeout)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().control_in(data, timeout)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            Blocking::new(move || backend.control_in(data, timeout))
+        }
     }
 
     /// Submit a single **OUT (host-to-device)** transfer on the default
@@ -501,30 +680,72 @@ impl Interface {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        self.backend.clone().control_out(data, timeout)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clone().control_out(data, timeout)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let backend = self.backend.clone();
+            let control_type = data.control_type;
+            let recipient = data.recipient;
+            let request = data.request;
+            let value = data.value;
+            let index = data.index;
+            let bytes = data.data.to_vec();
+            Blocking::new(move || {
+                backend.control_out(
+                    ControlOut {
+                        control_type,
+                        recipient,
+                        request,
+                        value,
+                        index,
+                        data: &bytes,
+                    },
+                    timeout,
+                )
+            })
+        }
     }
 
     /// Get the interface number.
     pub fn interface_number(&self) -> u8 {
-        self.backend.interface_number
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.interface_number
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.backend.interface_number()
+        }
     }
 
     /// Get the interface descriptors for the alternate settings of this interface.
     ///
     /// This returns cached data and does not perform IO.
     pub fn descriptors(&self) -> impl Iterator<Item = InterfaceDescriptor<'_>> {
+        #[cfg(target_arch = "wasm32")]
         let active = self.backend.device.active_configuration_value();
+        #[cfg(not(target_arch = "wasm32"))]
+        let active = self.device.backend.active_configuration_value();
 
+        #[cfg(target_arch = "wasm32")]
         let configuration = self
             .backend
             .device
             .configuration_descriptors()
             .find(|c| c.configuration_value() == active);
+        #[cfg(not(target_arch = "wasm32"))]
+        let configuration = self
+            .device
+            .configurations()
+            .find(|c| c.configuration_value() == active);
 
         configuration
             .into_iter()
             .flat_map(|i| i.interface_alt_settings())
-            .filter(|g| g.interface_number() == self.backend.interface_number)
+            .filter(|g| g.interface_number() == self.interface_number())
     }
 
     /// Get the interface descriptor for the current alternate setting.
@@ -579,14 +800,21 @@ impl Interface {
     /// This is the same as what occurs on `Drop` of the last clone of the
     /// `Interface`, but allows it to be called asynchronously.
     pub fn release(self) -> impl MaybeFuture<Output = Result<(), Error>> {
-        self.backend.release()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.release()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Blocking::new(move || self.backend.release())
+        }
     }
 }
 
 impl Debug for Interface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Interface")
-            .field("number", &self.backend.interface_number)
+            .field("number", &self.interface_number())
             .finish()
     }
 }
@@ -690,7 +918,10 @@ impl Debug for Interface {
 /// # Ok(()) }
 /// ```
 pub struct Endpoint<EpType, Dir> {
+    #[cfg(target_arch = "wasm32")]
     backend: platform::Endpoint,
+    #[cfg(not(target_arch = "wasm32"))]
+    backend: Box<dyn backend::Endpoint>,
     ep_type: PhantomData<EpType>,
     ep_dir: PhantomData<Dir>,
 }
@@ -707,7 +938,14 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// Transfers can consist of multiple packets, but are split into packets
     /// of this size on the bus.
     pub fn max_packet_size(&self) -> usize {
-        self.backend.max_packet_size
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.max_packet_size
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.backend.max_packet_size()
+        }
     }
 
     /// Get the number of transfers that have been submitted with `submit` that
@@ -902,7 +1140,15 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     ///
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
-        self.backend.clear_halt()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.backend.clear_halt()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let result = self.backend.clear_halt();
+            crate::maybe_future::Ready(result)
+        }
     }
 }
 

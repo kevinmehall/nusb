@@ -11,7 +11,8 @@ pub struct Error {
 }
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind, message: &'static str) -> Self {
+    /// Construct an error reported by an external raw-USB backend.
+    pub fn new(kind: ErrorKind, message: &'static str) -> Self {
         Self {
             kind,
             code: None,
@@ -26,6 +27,7 @@ impl Error {
     }
 
     #[track_caller]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub(crate) fn log_debug(self) -> Self {
         log::debug!("{}", self);
         self
