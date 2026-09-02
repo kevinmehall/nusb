@@ -11,9 +11,8 @@ pub(crate) use control::{request_type, SETUP_PACKET_SIZE};
 pub use control::{ControlIn, ControlOut, ControlType, Direction, Recipient};
 
 mod buffer;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use buffer::Allocator;
-pub use buffer::{Buffer, ExternalBufferOwner};
+pub use buffer::Buffer;
 
 pub(crate) mod internal;
 

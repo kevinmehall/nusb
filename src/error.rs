@@ -11,8 +11,7 @@ pub struct Error {
 }
 
 impl Error {
-    /// Construct an error reported by an external raw-USB backend.
-    pub fn new(kind: ErrorKind, message: &'static str) -> Self {
+    pub(crate) fn new(kind: ErrorKind, message: &'static str) -> Self {
         Self {
             kind,
             code: None,

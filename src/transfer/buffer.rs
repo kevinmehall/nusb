@@ -2,29 +2,13 @@ use std::{
     fmt::Debug,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut},
-    ptr::NonNull,
-    sync::Arc,
 };
 
+#[derive(Copy, Clone)]
 pub(crate) enum Allocator {
     Default,
     #[cfg(any(target_os = "linux", target_os = "android"))]
     Mmap,
-    External(Arc<dyn ExternalBufferOwner>),
-}
-
-/// Owns memory exposed as a [`Buffer`] by an external raw-USB backend.
-///
-/// The owner keeps the allocation mapped and returns it to its producer when the buffer is
-/// dropped. This permits a completion to refer directly to shared memory.
-pub trait ExternalBufferOwner: Send + Sync {
-    /// Release one externally allocated buffer.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` and `capacity` are the exact values previously passed to
-    /// [`Buffer::from_external_parts`].
-    unsafe fn release(&self, ptr: NonNull<u8>, capacity: usize);
 }
 
 /// Buffer for bulk and interrupt transfers.
@@ -82,37 +66,6 @@ impl Buffer {
             requested_len: len_u32,
             capacity: vec.capacity().try_into().expect("capacity overflow"),
             allocator: Allocator::Default,
-        }
-    }
-
-    /// Wrap initialized memory owned by an external raw-USB backend.
-    ///
-    /// The returned buffer reads directly from `ptr`. Dropping it invokes `owner.release` with the
-    /// same pointer and capacity.
-    ///
-    /// # Safety
-    ///
-    /// `ptr..ptr + capacity` must remain mapped and initialized for reads through the lifetime of
-    /// the returned buffer. No writer may modify those bytes until `owner.release` is invoked.
-    /// `len` and `requested_len` must not exceed `capacity`.
-    pub unsafe fn from_external_parts(
-        ptr: NonNull<u8>,
-        len: usize,
-        requested_len: usize,
-        capacity: usize,
-        owner: Arc<dyn ExternalBufferOwner>,
-    ) -> Self {
-        assert!(len <= capacity, "length exceeds capacity");
-        assert!(
-            requested_len <= capacity,
-            "requested length exceeds capacity"
-        );
-        Buffer {
-            ptr: ptr.as_ptr(),
-            len: len.try_into().expect("length overflow"),
-            requested_len: requested_len.try_into().expect("requested length overflow"),
-            capacity: capacity.try_into().expect("capacity overflow"),
-            allocator: Allocator::External(owner),
         }
     }
 
@@ -228,7 +181,7 @@ impl Buffer {
 
     /// Returns whether the buffer is specially-allocated for zero-copy IO.
     pub fn is_zero_copy(&self) -> bool {
-        !matches!(&self.allocator, Allocator::Default)
+        !matches!(self.allocator, Allocator::Default)
     }
 
     /// Convert the buffer into a `Vec<u8>`.
@@ -237,7 +190,7 @@ impl Buffer {
     /// (if [`is_zero_copy()`][Self::is_zero_copy] returns false), otherwise it will copy the data
     /// into a new `Vec<u8>`.
     pub fn into_vec(self) -> Vec<u8> {
-        match &self.allocator {
+        match self.allocator {
             Allocator::Default => {
                 let buf = ManuallyDrop::new(self);
                 unsafe { Vec::from_raw_parts(buf.ptr, buf.len as usize, buf.capacity as usize) }
@@ -325,7 +278,7 @@ impl Debug for Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        match &self.allocator {
+        match self.allocator {
             Allocator::Default => unsafe {
                 drop(Vec::from_raw_parts(
                     self.ptr,
@@ -337,48 +290,6 @@ impl Drop for Buffer {
             Allocator::Mmap => unsafe {
                 rustix::mm::munmap(self.ptr as *mut _, self.capacity as usize).unwrap();
             },
-            Allocator::External(owner) => unsafe {
-                // SAFETY: construction stored the exact external pointer, capacity, and owner.
-                owner.release(NonNull::new_unchecked(self.ptr), self.capacity as usize);
-            },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    struct TestOwner {
-        _bytes: Box<[u8; 4]>,
-        expected: usize,
-        releases: AtomicUsize,
-    }
-
-    impl ExternalBufferOwner for TestOwner {
-        unsafe fn release(&self, ptr: NonNull<u8>, capacity: usize) {
-            assert_eq!(ptr.as_ptr() as usize, self.expected);
-            assert_eq!(capacity, 4);
-            self.releases.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    #[test]
-    fn external_buffer_reads_owned_memory_and_releases_once() {
-        let mut bytes = Box::new([1, 2, 3, 4]);
-        let ptr = NonNull::from(&mut bytes[0]);
-        let owner = Arc::new(TestOwner {
-            _bytes: bytes,
-            expected: ptr.as_ptr() as usize,
-            releases: AtomicUsize::new(0),
-        });
-        // SAFETY: `owner` retains the exact four-byte allocation until release.
-        let buffer = unsafe { Buffer::from_external_parts(ptr, 3, 4, 4, owner.clone()) };
-        assert_eq!(&buffer[..], &[1, 2, 3]);
-        assert_eq!(buffer.requested_len(), 4);
-        drop(buffer);
-        assert_eq!(owner.releases.load(Ordering::Relaxed), 1);
     }
 }
