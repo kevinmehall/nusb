@@ -81,23 +81,84 @@ pub(crate) fn usb() -> Result<Usb, Error> {
     }
 }
 
+fn rejection_field(value: &JsValue, field: &str) -> Option<String> {
+    Reflect::get(value, &JsValue::from_str(field))
+        .ok()
+        .and_then(|value| value.as_string())
+        .filter(|value| !value.is_empty())
+}
+
 pub fn js_value_to_error(value: JsValue) -> Error {
-    let err: js_sys::Error = value
-        .dyn_into()
-        .unwrap_or_else(|_| js_sys::Error::new("error could not be constructed"));
-    let msg = err.message().as_string().unwrap_or_default();
-    log::warn!("WebUSB error: {msg}");
-    Error::new(ErrorKind::Other, "WebUSB error (see logs)")
+    // DOMException is not a JavaScript Error in every browser. Read the standard
+    // fields without assuming a constructor or retaining a thread-bound JsValue.
+    let name = rejection_field(&value, "name");
+    let message = rejection_field(&value, "message").or_else(|| value.as_string());
+    let detail = match (name, message) {
+        (Some(name), Some(message)) => format!("{name}: {message}"),
+        (Some(name), None) => name,
+        (None, Some(message)) => message,
+        (None, None) => format!("{value:?}"),
+    };
+    Error::new(ErrorKind::Other, format!("WebUSB error: {detail}")).log_debug()
 }
 
 pub fn js_value_to_transfer_error(value: JsValue) -> TransferError {
-    let err: js_sys::Error = value
-        .dyn_into()
-        .unwrap_or_else(|_| js_sys::Error::new("error could not be constructed"));
-    log::warn!("WebUSB transfer error: {:?}", err);
-    match err.name().as_string().as_deref() {
+    log::warn!(
+        "WebUSB transfer error: {}",
+        js_value_to_error(value.clone())
+    );
+    match rejection_field(&value, "name").as_deref() {
         Some("NetworkError") => TransferError::Disconnected,
         _ => TransferError::Fault,
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn preserves_error_dom_exception_and_string_rejections() {
+        let error = js_sys::Error::new("claim failed");
+        assert_eq!(
+            js_value_to_error(error.into()).to_string(),
+            "WebUSB error: Error: claim failed"
+        );
+        let exception =
+            js_sys::eval("new DOMException('device left while claiming', 'NetworkError')").unwrap();
+        let owned = js_value_to_error(exception.clone());
+        assert_eq!(
+            owned.to_string(),
+            "WebUSB error: NetworkError: device left while claiming"
+        );
+        assert_eq!(owned.clone().to_string(), owned.to_string());
+        assert!(matches!(
+            js_value_to_transfer_error(exception),
+            TransferError::Disconnected
+        ));
+        assert_eq!(
+            js_value_to_error(JsValue::from_str("permission denied")).to_string(),
+            "WebUSB error: permission denied"
+        );
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<Error>();
+    }
+
+    #[wasm_bindgen_test]
+    fn unusual_rejections_do_not_panic_or_erase_available_fields() {
+        let error =
+            js_sys::eval("({message:'retained', get name() {throw new Error('getter')}})").unwrap();
+        assert_eq!(
+            js_value_to_error(error).to_string(),
+            "WebUSB error: retained"
+        );
+        assert!(js_value_to_error(JsValue::NULL)
+            .to_string()
+            .starts_with("WebUSB error:"));
+        assert!(js_value_to_error(JsValue::UNDEFINED)
+            .to_string()
+            .starts_with("WebUSB error:"));
     }
 }
 
