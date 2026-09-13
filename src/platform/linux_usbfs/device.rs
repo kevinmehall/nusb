@@ -45,8 +45,8 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient,
-        TransferError,
+        request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction,
+        IsoCompletion, IsoTransfer, Recipient, TransferError,
     },
     DeviceInfo, Error, ErrorKind, Speed,
 };
@@ -477,8 +477,9 @@ impl LinuxDevice {
         })
     }
 
-    pub(crate) fn submit(&self, transfer: Idle<TransferData>) -> Pending<TransferData> {
+    pub(crate) fn submit(&self, mut transfer: Idle<TransferData>) -> Pending<TransferData> {
         let len = transfer.urb().buffer_length;
+        transfer.mark_iso_submitting();
         let pending = transfer.pre_submit();
         let urb = pending.urb_ptr();
 
@@ -492,6 +493,7 @@ impl LinuxDevice {
                 // and can write to the URB and complete it in place of the handler.
                 let u = &mut *urb;
                 debug!("Failed to submit URB {urb:?}: {len} bytes on ep {ep:x}: {e} {u:?}");
+                (*pending.as_ptr()).mark_iso_submit_failed();
                 u.actual_length = 0;
                 u.status = e.raw_os_error();
                 notify_completion::<super::TransferData>(pending.as_ptr().cast());
@@ -802,6 +804,24 @@ impl LinuxEndpoint {
             .push_back(self.inner.interface.device.submit(transfer));
     }
 
+    pub(crate) fn submit_iso(
+        &mut self,
+        transfer: IsoTransfer,
+    ) -> Result<(), (IsoTransfer, TransferError)> {
+        let mut pending_transfer = self.get_transfer();
+        if let Err((_layout_error, transfer)) = pending_transfer.set_iso_transfer(transfer) {
+            self.idle_transfer = Some(pending_transfer);
+            // Public IsoLayout construction already validates all portable
+            // size limits. A target-specific URB allocation layout rejection
+            // is therefore reported as a synchronous invalid argument while
+            // returning ownership of the transfer.
+            return Err((transfer, TransferError::InvalidArgument));
+        }
+        self.pending
+            .push_back(self.inner.interface.device.submit(pending_transfer));
+        Ok(())
+    }
+
     pub(crate) fn submit_err(&mut self, data: Buffer, error: TransferError) {
         assert_eq!(error, TransferError::InvalidArgument);
         let mut transfer = self.get_transfer();
@@ -821,10 +841,31 @@ impl LinuxEndpoint {
         }
     }
 
+    pub(crate) fn poll_next_complete_iso(&mut self, cx: &mut Context) -> Poll<IsoCompletion> {
+        self.inner.notify.subscribe(cx);
+        if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
+            let completion = transfer.take_iso_completion();
+            self.idle_transfer = Some(transfer);
+            Poll::Ready(completion)
+        } else {
+            Poll::Pending
+        }
+    }
+
     pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.inner.notify.wait_timeout(timeout, || {
             take_completed_from_queue(&mut self.pending).map(|mut transfer| {
                 let completion = transfer.take_completion();
+                self.idle_transfer = Some(transfer);
+                completion
+            })
+        })
+    }
+
+    pub(crate) fn wait_next_complete_iso(&mut self, timeout: Duration) -> Option<IsoCompletion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending).map(|mut transfer| {
+                let completion = transfer.take_iso_completion();
                 self.idle_transfer = Some(transfer);
                 completion
             })
