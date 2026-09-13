@@ -6,10 +6,12 @@ use std::{collections::BTreeMap, fmt::Debug, iter, num::NonZeroU8, ops::Deref};
 
 use log::warn;
 
-use crate::transfer::Direction;
+use crate::{transfer::Direction, Speed};
 
 pub(crate) const DESCRIPTOR_TYPE_DEVICE: u8 = 0x01;
 pub(crate) const DESCRIPTOR_LEN_DEVICE: u8 = 18;
+const DESCRIPTOR_TYPE_SUPERSPEED_ENDPOINT_COMPANION: u8 = 0x30;
+const DESCRIPTOR_TYPE_SUPERSPEEDPLUS_ISO_ENDPOINT_COMPANION: u8 = 0x31;
 
 pub(crate) const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 0x02;
 pub(crate) const DESCRIPTOR_LEN_CONFIGURATION: u8 = 9;
@@ -647,6 +649,68 @@ impl<'a> EndpointDescriptor<'a> {
     pub fn packets_per_microframe(&self) -> u8 {
         ((self.max_packet_size_raw() >> 11) & 0b11) as u8 + 1
     }
+
+    /// Maximum isochronous payload in one service interval at `speed`.
+    ///
+    /// Returns `None` for malformed, contradictory, speed-ambiguous, or
+    /// incomplete descriptors. In particular, SuperSpeed endpoints require a
+    /// SuperSpeed endpoint companion descriptor (`bDescriptorType = 0x30`).
+    pub fn max_iso_payload_per_interval(&self, speed: Option<Speed>) -> Option<usize> {
+        if self.transfer_type() != TransferType::Isochronous {
+            return None;
+        }
+
+        if matches!(speed, Some(Speed::SuperPlus))
+            && self.descriptors().any(|descriptor| {
+                descriptor.descriptor_type()
+                    == DESCRIPTOR_TYPE_SUPERSPEEDPLUS_ISO_ENDPOINT_COMPANION
+            })
+        {
+            // The extension's 32-bit dwBytesPerInterval supersedes the
+            // SuperSpeed companion's 16-bit value. Supporting it requires a
+            // separate public/platform capacity audit.
+            return None;
+        }
+
+        let raw = self.max_packet_size_raw();
+        let packet_size = self.max_packet_size();
+        if packet_size == 0 {
+            return None;
+        }
+
+        match speed {
+            Some(Speed::Low) => None,
+            Some(Speed::Full) => (raw & !0x07ff == 0 && packet_size <= 1023).then_some(packet_size),
+            Some(Speed::High) => {
+                let transactions = (raw >> 11) & 0b11;
+                if raw & 0xe000 != 0 || transactions == 0b11 || packet_size > 1024 {
+                    return None;
+                }
+                packet_size.checked_mul(transactions as usize + 1)
+            }
+            Some(Speed::Super | Speed::SuperPlus) => {
+                if raw & !0x07ff != 0 || packet_size > 1024 {
+                    return None;
+                }
+                let companion = self.descriptors().find(|descriptor| {
+                    descriptor.descriptor_type() == DESCRIPTOR_TYPE_SUPERSPEED_ENDPOINT_COMPANION
+                })?;
+                if companion.descriptor_len() < 6 {
+                    return None;
+                }
+                let max_burst = companion[2] as usize + 1;
+                let attributes = companion[3];
+                if attributes & !0x03 != 0 || attributes & 0x03 == 0x03 {
+                    return None;
+                }
+                let mult = (attributes & 0x03) as usize + 1;
+                let declared = u16::from_le_bytes([companion[4], companion[5]]) as usize;
+                let computed = packet_size.checked_mul(max_burst)?.checked_mul(mult)?;
+                (declared != 0 && declared <= computed).then_some(declared)
+            }
+            None => (raw & !0x07ff == 0 && packet_size <= 1023).then_some(packet_size),
+        }
+    }
 }
 
 descriptor_fields! {
@@ -820,6 +884,107 @@ fn test_empty_config() {
 fn test_malformed() {
     let c = ConfigurationDescriptor(&[9, 2, 0, 0, 0, 1, 0, 0, 2, 5, 250, 0, 0, 0]);
     assert!(c.interfaces().next().is_none());
+}
+
+#[test]
+fn iso_payload_capacity_respects_speed_and_companion_descriptor() {
+    let fs = EndpointDescriptor(&[7, 5, 0x81, 1, 0xff, 0x03, 1]);
+    assert_eq!(
+        fs.max_iso_payload_per_interval(Some(Speed::Full)),
+        Some(1023)
+    );
+
+    let hs_one = EndpointDescriptor(&[7, 5, 0x81, 1, 0x20, 0x03, 1]);
+    let hs_two = EndpointDescriptor(&[7, 5, 0x81, 1, 0x20, 0x0b, 1]);
+    let hs_three = EndpointDescriptor(&[7, 5, 0x81, 1, 0x20, 0x13, 1]);
+    assert_eq!(
+        hs_one.max_iso_payload_per_interval(Some(Speed::High)),
+        Some(800)
+    );
+    assert_eq!(
+        hs_two.max_iso_payload_per_interval(Some(Speed::High)),
+        Some(1600)
+    );
+    assert_eq!(
+        hs_three.max_iso_payload_per_interval(Some(Speed::High)),
+        Some(2400)
+    );
+
+    let ss = EndpointDescriptor(&[
+        7, 5, 0x81, 1, 0x00, 0x04, 1, // endpoint
+        6, 0x30, 1, 1, 0x00, 0x10, // 2 bursts * 2 mult * 1024 = 4096
+    ]);
+    assert_eq!(
+        ss.max_iso_payload_per_interval(Some(Speed::Super)),
+        Some(4096)
+    );
+}
+
+#[test]
+fn iso_payload_capacity_rejects_malformed_or_ambiguous_descriptors() {
+    let low_speed_iso = EndpointDescriptor(&[7, 5, 0x81, 1, 0x40, 0x00, 1]);
+    assert_eq!(
+        low_speed_iso.max_iso_payload_per_interval(Some(Speed::Low)),
+        None
+    );
+
+    let full_speed_too_large = EndpointDescriptor(&[7, 5, 0x81, 1, 0x00, 0x04, 1]);
+    assert_eq!(
+        full_speed_too_large.max_iso_payload_per_interval(Some(Speed::Full)),
+        None
+    );
+
+    let hs_bits_at_full_speed = EndpointDescriptor(&[7, 5, 0x81, 1, 0x20, 0x0b, 1]);
+    assert_eq!(
+        hs_bits_at_full_speed.max_iso_payload_per_interval(Some(Speed::Full)),
+        None
+    );
+
+    let ss_without_companion = EndpointDescriptor(&[7, 5, 0x81, 1, 0x00, 0x04, 1]);
+    assert_eq!(
+        ss_without_companion.max_iso_payload_per_interval(Some(Speed::Super)),
+        None
+    );
+
+    let contradictory_ss =
+        EndpointDescriptor(&[7, 5, 0x81, 1, 0x00, 0x04, 1, 6, 0x30, 0, 0, 0x01, 0x08]);
+    assert_eq!(
+        contradictory_ss.max_iso_payload_per_interval(Some(Speed::Super)),
+        None
+    );
+
+    let reserved_hs_multiplier = EndpointDescriptor(&[7, 5, 0x81, 1, 0x20, 0x1b, 1]);
+    assert_eq!(
+        reserved_hs_multiplier.max_iso_payload_per_interval(Some(Speed::High)),
+        None
+    );
+
+    let reserved_ss_mult =
+        EndpointDescriptor(&[7, 5, 0x81, 1, 0x00, 0x04, 1, 6, 0x30, 0, 3, 0x00, 0x10]);
+    assert_eq!(
+        reserved_ss_mult.max_iso_payload_per_interval(Some(Speed::Super)),
+        None
+    );
+
+    let reserved_ss_attribute =
+        EndpointDescriptor(&[7, 5, 0x81, 1, 0x00, 0x04, 1, 6, 0x30, 0, 4, 0x00, 0x04]);
+    assert_eq!(
+        reserved_ss_attribute.max_iso_payload_per_interval(Some(Speed::Super)),
+        None
+    );
+
+    let unsupported_ssp_companion = EndpointDescriptor(&[
+        7, 5, 0x81, 1, 0x00, 0x04, 1, // endpoint
+        6, 0x30, 0, 0, 0x00, 0x04, // SuperSpeed endpoint companion
+        8, 0x31, 0, 0, 0x00, 0x00, 0x01, 0x00, // 65536 bytes per interval
+    ]);
+    assert_eq!(
+        unsupported_ssp_companion.max_iso_payload_per_interval(Some(Speed::SuperPlus)),
+        None
+    );
+
+    let bulk = EndpointDescriptor(&[7, 5, 0x81, 2, 0x00, 0x02, 0]);
+    assert_eq!(bulk.max_iso_payload_per_interval(Some(Speed::High)), None);
 }
 
 #[test]

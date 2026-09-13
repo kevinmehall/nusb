@@ -8,7 +8,8 @@ use crate::{
     platform,
     transfer::{
         Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
-        EndpointType, In, Out, TransferError,
+        EndpointType, In, IsoCompletion, IsoLayout, IsoSubmitError, IsoTransfer, Isochronous, Out,
+        TransferError,
     },
     ActiveConfigurationError, DeviceInfo, Error, ErrorKind, GetDescriptorError, MaybeFuture, Speed,
 };
@@ -18,10 +19,15 @@ use std::{
     future::{poll_fn, Future},
     marker::PhantomData,
     num::NonZeroU8,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
     time::Duration,
 };
+
+static NEXT_ENDPOINT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_arch = "wasm32")]
 use web_sys::UsbDevice;
@@ -556,9 +562,27 @@ impl Interface {
             return Err(Error::new(ErrorKind::Other, "incorrect endpoint type"));
         }
 
+        let (endpoint_id, max_payload_per_interval) =
+            if ep_desc.transfer_type() == crate::descriptors::TransferType::Isochronous {
+                let endpoint_id = NEXT_ENDPOINT_ID.fetch_add(1, Ordering::Relaxed);
+                assert_ne!(endpoint_id, 0, "endpoint identity space exhausted");
+                ep_desc
+                    .max_iso_payload_per_interval(self.backend.device.speed())
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::Other,
+                            "invalid or incomplete isochronous endpoint capabilities",
+                        )
+                    })
+                    .map(|capacity| (endpoint_id, capacity))?
+            } else {
+                (0, ep_desc.max_packet_size())
+            };
         let backend = self.backend.endpoint(ep_desc)?;
         Ok(Endpoint {
             backend,
+            endpoint_id,
+            max_payload_per_interval,
             ep_type: PhantomData,
             ep_dir: PhantomData,
         })
@@ -686,6 +710,8 @@ impl Debug for Interface {
 /// ```
 pub struct Endpoint<EpType, Dir> {
     backend: platform::Endpoint,
+    endpoint_id: u64,
+    max_payload_per_interval: usize,
     ep_type: PhantomData<EpType>,
     ep_dir: PhantomData<Dir>,
 }
@@ -722,6 +748,93 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn cancel_all(&mut self) {
         self.backend.cancel_all()
+    }
+}
+
+/// Methods for isochronous endpoints.
+impl<Dir: EndpointDirection> Endpoint<Isochronous, Dir> {
+    /// Maximum payload this endpoint descriptor permits in one service
+    /// interval.
+    ///
+    /// This includes the USB 2.0 high-bandwidth multiplier. SuperSpeed
+    /// companion-descriptor limits are not inferred when the descriptor is
+    /// absent; opening an incomplete ISO endpoint is rejected.
+    pub fn max_payload_per_interval(&self) -> usize {
+        self.max_payload_per_interval
+    }
+
+    /// Allocate and fully initialize a reusable isochronous transfer.
+    ///
+    /// The allocation is bound to this endpoint instance. Packet count belongs
+    /// to the transfer and may differ between allocations.
+    pub fn allocate_iso(&self, layout: IsoLayout) -> Result<IsoTransfer, Error> {
+        if layout.packet_size() > self.max_payload_per_interval {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "isochronous packet exceeds endpoint service-interval capacity",
+            ));
+        }
+
+        #[allow(unused_mut)]
+        let mut buffer = Buffer::new(layout.total_len());
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Ok(platform_buffer) = self.backend.allocate(layout.total_len()) {
+            buffer = platform_buffer;
+        }
+
+        Ok(IsoTransfer::new(self.endpoint_id, layout, buffer))
+    }
+
+    /// Submit an isochronous transfer without losing ownership on synchronous
+    /// validation or platform-support errors.
+    ///
+    /// Unlike bulk and interrupt submission, this returns a `Result` because
+    /// some platforms register the owned allocation during submission. If that
+    /// fails synchronously, [`IsoSubmitError`] returns the allocation so it can
+    /// be reused or dropped by the caller.
+    ///
+    /// On Windows 8.1 and later, the initial implementation permits one
+    /// pending isochronous transfer per endpoint. Submitting another before
+    /// consuming the first completion returns `InvalidArgument` and the owned
+    /// transfer in [`IsoSubmitError`].
+    pub fn submit(&mut self, transfer: IsoTransfer) -> Result<(), IsoSubmitError> {
+        if transfer.endpoint_id != self.endpoint_id {
+            return Err(IsoSubmitError::new(
+                TransferError::InvalidArgument,
+                transfer,
+            ));
+        }
+        if transfer.layout().packet_size() > self.max_payload_per_interval {
+            return Err(IsoSubmitError::new(
+                TransferError::InvalidArgument,
+                transfer,
+            ));
+        }
+
+        self.backend
+            .submit_iso(transfer)
+            .map_err(|(transfer, error)| IsoSubmitError::new(error, transfer))
+    }
+
+    /// Return a cancel-safe future for the oldest pending isochronous transfer.
+    ///
+    /// Dropping this future does not cancel device I/O.
+    pub fn next_complete(
+        &mut self,
+    ) -> impl Future<Output = IsoCompletion> + NonWasmSend + NonWasmSync + '_ {
+        poll_fn(|cx| self.poll_next_complete(cx))
+    }
+
+    /// Poll the oldest pending isochronous transfer.
+    pub fn poll_next_complete(&mut self, cx: &mut Context<'_>) -> Poll<IsoCompletion> {
+        self.backend.poll_next_complete_iso(cx)
+    }
+
+    /// Block until the oldest pending transfer completes or `timeout` elapses.
+    /// The transfer remains pending after a timeout.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_next_complete(&mut self, timeout: Duration) -> Option<IsoCompletion> {
+        self.backend.wait_next_complete_iso(timeout)
     }
 }
 
@@ -901,7 +1014,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     }
 }
 
-impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {
+impl<EpType: EndpointType, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
             .field(
@@ -914,9 +1027,10 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType,
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn assert_send_sync() {
-    use crate::transfer::{Bulk, In, Interrupt, Out};
+    use crate::transfer::{Bulk, In, Interrupt, Isochronous, Out};
 
     fn require_send_sync<T: Send + Sync>() {}
     require_send_sync::<Interface>();
@@ -925,4 +1039,8 @@ fn assert_send_sync() {
     require_send_sync::<Endpoint<Bulk, Out>>();
     require_send_sync::<Endpoint<Interrupt, In>>();
     require_send_sync::<Endpoint<Interrupt, Out>>();
+    require_send_sync::<Endpoint<Isochronous, In>>();
+    require_send_sync::<Endpoint<Isochronous, Out>>();
+    require_send_sync::<IsoTransfer>();
+    require_send_sync::<IsoCompletion>();
 }

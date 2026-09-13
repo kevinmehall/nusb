@@ -7,6 +7,9 @@ mod transfer;
 use io_kit_sys::ret::IOReturn;
 pub(crate) use transfer::TransferData;
 
+mod iso;
+pub(crate) use iso::IsoTransferState;
+
 mod enumeration;
 mod events;
 pub use enumeration::{list_buses, list_devices};

@@ -14,6 +14,14 @@ mod buffer;
 pub(crate) use buffer::Allocator;
 pub use buffer::Buffer;
 
+mod iso;
+#[cfg(not(all(target_os = "windows", target_vendor = "win7")))]
+pub(crate) use iso::IsoPacketResult;
+pub use iso::{
+    IsoCompletion, IsoLayout, IsoLayoutError, IsoPacketStatus, IsoPacketView, IsoSubmitError,
+    IsoTransfer, Isochronous,
+};
+
 pub(crate) mod internal;
 
 use crate::{descriptors::TransferType, platform};

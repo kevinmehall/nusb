@@ -327,6 +327,18 @@ impl IoKitInterface {
         }
     }
 
+    pub(crate) fn get_bus_frame_number(&self) -> Result<u64, IOReturn> {
+        unsafe {
+            let mut frame = 0;
+            let mut at_time = std::mem::zeroed();
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                GetBusFrameNumber(&mut frame, &mut at_time)
+            ))?;
+            Ok(frame)
+        }
+    }
+
     pub(crate) fn clear_pipe_stall_both_ends(&self, pipe_ref: u8) -> Result<(), IOReturn> {
         unsafe {
             check_iokit_return(call_iokit_function!(

@@ -20,7 +20,8 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        Buffer, Completion, ControlIn, ControlOut, Direction, TransferError,
+        Buffer, Completion, ControlIn, ControlOut, Direction, IsoCompletion, IsoTransfer,
+        TransferError,
     },
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
@@ -31,6 +32,7 @@ use super::{
     iokit::call_iokit_function,
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
+    iso::IsoTransferData,
     TransferData,
 };
 
@@ -470,7 +472,10 @@ impl MacInterface {
                 notify: Notify::new(),
             }),
             max_packet_size,
+            interval: descriptor.interval(),
+            next_frame: None,
             pending: VecDeque::new(),
+            pending_iso: VecDeque::new(),
             idle_transfer: None,
         })
     }
@@ -504,9 +509,13 @@ impl Drop for MacInterface {
 pub(crate) struct MacEndpoint {
     inner: Arc<EndpointInner>,
     pub(crate) max_packet_size: usize,
+    interval: u8,
+    next_frame: Option<u64>,
 
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<Pending<TransferData>>,
+
+    pending_iso: VecDeque<Pending<IsoTransferData>>,
 
     idle_transfer: Option<Idle<TransferData>>,
 }
@@ -524,10 +533,112 @@ impl MacEndpoint {
     }
 
     pub(crate) fn pending(&self) -> usize {
-        self.pending.len()
+        self.pending.len() + self.pending_iso.len()
+    }
+
+    pub(crate) fn submit_iso(
+        &mut self,
+        transfer: IsoTransfer,
+    ) -> Result<(), (IsoTransfer, TransferError)> {
+        let Some(speed) = self.inner.interface.device.speed() else {
+            return Err((transfer, TransferError::InvalidArgument));
+        };
+        let Some(frame_span) = super::iso::scheduled_frame_span(
+            speed,
+            self.interval,
+            transfer.layout().packet_count() as u32,
+        ) else {
+            return Err((transfer, TransferError::InvalidArgument));
+        };
+        let current_frame = match self.inner.interface.interface.get_bus_frame_number() {
+            Ok(frame) => frame,
+            Err(error) => {
+                let error = super::status_to_transfer_result(error)
+                    .err()
+                    .unwrap_or(TransferError::Unknown(error as u32));
+                return Err((transfer, error));
+            }
+        };
+        let Some(frame_start) = super::iso::choose_start_frame(current_frame, self.next_frame)
+        else {
+            return Err((transfer, TransferError::InvalidArgument));
+        };
+        let Some(next_frame) = frame_start.checked_add(frame_span) else {
+            return Err((transfer, TransferError::InvalidArgument));
+        };
+
+        let mut transfer = IsoTransferData::new(transfer)?;
+        transfer.prepare();
+        let (buffer, packet_count, frames) = transfer.submission_parts();
+        let transfer = Idle::new(self.inner.clone(), transfer).pre_submit();
+        let ptr = transfer.as_ptr();
+        let direction = Direction::from_address(self.inner.address);
+        let result = unsafe {
+            match direction {
+                Direction::In => call_iokit_function!(
+                    self.inner.interface.interface.raw,
+                    ReadIsochPipeAsync(
+                        self.inner.pipe_ref,
+                        buffer.cast::<c_void>(),
+                        frame_start,
+                        packet_count,
+                        frames,
+                        Some(iso_transfer_callback),
+                        ptr.cast::<c_void>()
+                    )
+                ),
+                Direction::Out => call_iokit_function!(
+                    self.inner.interface.interface.raw,
+                    WriteIsochPipeAsync(
+                        self.inner.pipe_ref,
+                        buffer.cast::<c_void>(),
+                        frame_start,
+                        packet_count,
+                        frames,
+                        Some(iso_transfer_callback),
+                        ptr.cast::<c_void>()
+                    )
+                ),
+            }
+        };
+
+        if result == kIOReturnSuccess {
+            self.next_frame = Some(next_frame);
+            debug!(
+                "Submitted ISO {direction:?} transfer {ptr:?} on endpoint {:02X}, frame_start={frame_start}, frames={packet_count}",
+                self.inner.address
+            );
+        } else {
+            error!(
+                "Failed to submit ISO {direction:?} transfer {ptr:?} on endpoint {:02X}: {result:x}",
+                self.inner.address
+            );
+            unsafe {
+                (*ptr).status = result;
+                notify_completion::<IsoTransferData>(ptr);
+            }
+        }
+
+        self.pending_iso.push_back(transfer);
+        Ok(())
+    }
+
+    pub(crate) fn poll_next_complete_iso(&mut self, cx: &mut Context) -> Poll<IsoCompletion> {
+        self.inner.notify.subscribe(cx);
+        take_completed_from_queue(&mut self.pending_iso)
+            .map(|mut transfer| Poll::Ready(transfer.take_completion()))
+            .unwrap_or(Poll::Pending)
+    }
+
+    pub(crate) fn wait_next_complete_iso(&mut self, timeout: Duration) -> Option<IsoCompletion> {
+        self.inner.notify.wait_timeout(timeout, || {
+            take_completed_from_queue(&mut self.pending_iso)
+                .map(|mut transfer| transfer.take_completion())
+        })
     }
 
     pub(crate) fn cancel_all(&mut self) {
+        self.next_frame = None;
         let r = unsafe {
             call_iokit_function!(
                 self.inner.interface.interface.raw,
@@ -651,11 +762,11 @@ impl MacEndpoint {
 
 impl Drop for MacEndpoint {
     fn drop(&mut self) {
-        if !self.pending.is_empty() {
+        if self.pending() != 0 {
             debug!(
                 "Dropping endpoint {:02x} with {} pending transfers",
                 self.inner.address,
-                self.pending.len()
+                self.pending()
             );
             self.cancel_all();
         }
@@ -684,5 +795,15 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
         (*transfer).actual_len = len;
         (*transfer).status = result;
         notify_completion::<TransferData>(transfer)
+    }
+}
+
+extern "C" fn iso_transfer_callback(refcon: *mut c_void, result: IOReturn, _arg0: *mut c_void) {
+    let transfer: *mut IsoTransferData = refcon.cast();
+    debug!("Completion for ISO transfer {transfer:?}, status={result:x}");
+
+    unsafe {
+        (*transfer).status = result;
+        notify_completion::<IsoTransferData>(transfer)
     }
 }
