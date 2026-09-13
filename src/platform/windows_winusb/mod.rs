@@ -10,6 +10,14 @@ pub(crate) use device::WindowsInterface as Interface;
 
 mod transfer;
 
+// WinUSB isochronous entry points were added in Windows 8.1. Keeping the
+// prototype in a cfg-gated module prevents Win7-target binaries from acquiring
+// static imports that would make even non-ISO programs fail at load time.
+#[cfg(not(target_vendor = "win7"))]
+mod iso;
+#[cfg(not(target_vendor = "win7"))]
+pub(crate) use iso::IsoTransferState;
+
 mod cfgmgr32;
 mod hub;
 mod registry;

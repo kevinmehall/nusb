@@ -15,12 +15,27 @@ use windows_sys::Win32::{
 use super::{threadpool::Timer, Interface};
 use crate::transfer::{Buffer, Completion, Direction, TransferError};
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum TransferKind {
+    Regular,
+    #[cfg(not(target_vendor = "win7"))]
+    Isochronous,
+}
+
+#[repr(C)]
+pub(crate) struct TransferHeader {
+    // Must remain first so the address passed as OVERLAPPED can be cast back
+    // to TransferHeader in the shared threadpool-I/O callback.
+    pub(crate) overlapped: OVERLAPPED,
+    pub(crate) kind: TransferKind,
+}
+
 #[repr(C)]
 pub struct TransferData {
-    // first member of repr(C) struct; can cast pointer between types
-    // overlapped.Internal contains the status
-    // overlapped.InternalHigh contains the number of bytes transferred
-    pub(crate) overlapped: OVERLAPPED,
+    // First member of a repr(C) struct. TransferHeader itself begins with
+    // OVERLAPPED, so all three pointers have the same address.
+    pub(crate) header: TransferHeader,
 
     pub(crate) buf: *mut u8,
     pub(crate) capacity: u32,
@@ -41,7 +56,10 @@ impl TransferData {
         let mut empty = ManuallyDrop::new(Vec::with_capacity(0));
 
         TransferData {
-            overlapped: unsafe { mem::zeroed() },
+            header: TransferHeader {
+                overlapped: unsafe { mem::zeroed() },
+                kind: TransferKind::Regular,
+            },
             buf: empty.as_mut_ptr(),
             capacity: 0,
             request_len: 0,
@@ -57,7 +75,7 @@ impl TransferData {
         let buf = ManuallyDrop::new(buf);
         self.capacity = buf.capacity;
         self.buf = buf.ptr;
-        self.overlapped.InternalHigh = 0;
+        self.header.overlapped.InternalHigh = 0;
         self.request_len = match Direction::from_address(self.endpoint) {
             Direction::Out => buf.len,
             Direction::In => buf.requested_len,
@@ -68,7 +86,9 @@ impl TransferData {
         let mut actual_len: u32 = 0;
 
         let status = self.error_from_submit.and_then(|()| {
-            unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
+            unsafe {
+                GetOverlappedResult(intf.handle, &self.header.overlapped, &mut actual_len, 0)
+            };
 
             match unsafe { GetLastError() } {
                 ERROR_SUCCESS => Ok(()),
@@ -92,7 +112,7 @@ impl TransferData {
             Direction::In => actual_len,
         };
         let requested_len = mem::replace(&mut self.request_len, 0);
-        self.overlapped.InternalHigh = 0;
+        self.header.overlapped.InternalHigh = 0;
 
         Completion {
             status,

@@ -43,7 +43,8 @@ use crate::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
-        Buffer, Completion, ControlIn, ControlOut, Direction, Recipient, TransferError,
+        Buffer, Completion, ControlIn, ControlOut, Direction, IsoCompletion, IsoTransfer,
+        Recipient, TransferError,
     },
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
@@ -54,10 +55,13 @@ use super::{
     },
     hub::HubPort,
     threadpool::Timer,
-    transfer::TransferData,
+    transfer::{TransferData, TransferHeader, TransferKind},
     util::{create_file, raw_handle, WCStr},
     DevInst,
 };
+
+#[cfg(not(target_vendor = "win7"))]
+use super::iso::IsoTransferData;
 
 pub(crate) struct WindowsDevice {
     device_descriptor: DeviceDescriptor,
@@ -420,22 +424,31 @@ unsafe extern "system" fn io_callback(
     bytes_transferred: usize,
     _io: PTP_IO,
 ) {
-    let t = overlapped as *mut TransferData;
-    {
-        let transfer = unsafe { &*t };
+    let header = unsafe { &*(overlapped as *const TransferHeader) };
+    match header.kind {
+        TransferKind::Regular => {
+            let t = overlapped as *mut TransferData;
+            {
+                let transfer = unsafe { &*t };
 
-        debug!(
-            "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
-            transfer.endpoint, result, bytes_transferred,
-        );
+                debug!(
+                    "Transfer {t:?} on endpoint {:02x} complete: status {}, {} bytes",
+                    transfer.endpoint, result, bytes_transferred,
+                );
 
-        if let Some(ref timer) = transfer.timeout {
-            // Cancel the timeout and wait for any callback to complete that may be concurrently
-            // accessing `transfer`.
-            timer.cancel_and_wait();
+                if let Some(ref timer) = transfer.timeout {
+                    // Cancel the timeout and wait for any callback to complete that may be
+                    // concurrently accessing `transfer`.
+                    timer.cancel_and_wait();
+                }
+            }
+            unsafe { notify_completion::<TransferData>(t) }
         }
+        #[cfg(not(target_vendor = "win7"))]
+        TransferKind::Isochronous => unsafe {
+            super::iso::complete_callback(overlapped, result, bytes_transferred)
+        },
     }
-    unsafe { notify_completion::<TransferData>(t) }
 }
 
 unsafe extern "system" fn timer_callback(
@@ -452,7 +465,7 @@ unsafe extern "system" fn timer_callback(
     // Wait until the transfer has been submitted before trying to cancel it
     let lock = transfer_data.intf.timeout_mutex.lock().unwrap();
     unsafe {
-        CancelIoEx(transfer_data.intf.handle, &transfer_data.overlapped);
+        CancelIoEx(transfer_data.intf.handle, &transfer_data.header.overlapped);
     }
     drop(lock);
 }
@@ -616,6 +629,26 @@ impl WindowsInterface {
         let address = descriptor.address();
         let max_packet_size = descriptor.max_packet_size();
 
+        #[cfg(target_vendor = "win7")]
+        if descriptor.transfer_type() == crate::descriptors::TransferType::Isochronous {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "WinUSB isochronous transfers require Windows 8.1 or later",
+            ));
+        }
+
+        #[cfg(not(target_vendor = "win7"))]
+        let iso_pipe =
+            if descriptor.transfer_type() == crate::descriptors::TransferType::Isochronous {
+                Some(super::iso::query_pipe(
+                    self,
+                    self.get_alt_setting(),
+                    address,
+                )?)
+            } else {
+                None
+            };
+
         let mut state = self.state.lock().unwrap();
 
         if state.endpoints.is_set(address) {
@@ -647,7 +680,11 @@ impl WindowsInterface {
                 notify: Notify::new(),
             }),
             max_packet_size,
+            #[cfg(not(target_vendor = "win7"))]
+            iso_pipe,
             pending: VecDeque::new(),
+            #[cfg(not(target_vendor = "win7"))]
+            pending_iso: VecDeque::new(),
             idle_transfer: None,
         })
     }
@@ -657,7 +694,7 @@ impl WindowsInterface {
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped = unsafe { mem::zeroed() };
+        t.header.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
@@ -703,7 +740,7 @@ impl WindowsInterface {
         let dir = Direction::from_address(endpoint);
         let len = t.request_len;
         let buf = t.buf;
-        t.overlapped = unsafe { mem::zeroed() };
+        t.header.overlapped = unsafe { mem::zeroed() };
         t.error_from_submit = Ok(());
 
         if pkt.RequestType & 0x1f == Recipient::Interface as u8
@@ -826,8 +863,14 @@ pub(crate) struct WindowsEndpoint {
 
     pub(crate) max_packet_size: usize,
 
+    #[cfg(not(target_vendor = "win7"))]
+    iso_pipe: Option<super::iso::IsoPipeInfo>,
+
     /// A queue of pending transfers, expected to complete in order
     pending: VecDeque<Pending<TransferData>>,
+
+    #[cfg(not(target_vendor = "win7"))]
+    pending_iso: VecDeque<Pending<IsoTransferData>>,
 
     idle_transfer: Option<Idle<TransferData>>,
 }
@@ -844,7 +887,76 @@ impl WindowsEndpoint {
     }
 
     pub(crate) fn pending(&self) -> usize {
-        self.pending.len()
+        self.pending.len() + {
+            #[cfg(not(target_vendor = "win7"))]
+            {
+                self.pending_iso.len()
+            }
+            #[cfg(target_vendor = "win7")]
+            {
+                0
+            }
+        }
+    }
+
+    pub(crate) fn submit_iso(
+        &mut self,
+        transfer: IsoTransfer,
+    ) -> Result<(), (IsoTransfer, TransferError)> {
+        #[cfg(not(target_vendor = "win7"))]
+        {
+            let Some(pipe) = self.iso_pipe else {
+                return Err((transfer, TransferError::InvalidArgument));
+            };
+            if !super::iso::can_submit_with_pending(self.pending_iso.len()) {
+                return Err((transfer, TransferError::InvalidArgument));
+            }
+            let transfer = match IsoTransferData::new(
+                self.inner.interface.clone(),
+                self.inner.address,
+                transfer,
+                pipe,
+            ) {
+                Ok(transfer) => transfer,
+                Err((transfer, error)) => return Err((transfer, error)),
+            };
+            let continue_stream = super::iso::continue_stream_for_tail(
+                self.pending_iso.back().map(Pending::is_complete),
+            );
+            let transfer = Idle::new(self.inner.clone(), transfer);
+            self.pending_iso
+                .push_back(self.inner.interface.submit_iso(transfer, continue_stream));
+            return Ok(());
+        }
+
+        #[cfg(target_vendor = "win7")]
+        Err((transfer, TransferError::InvalidArgument))
+    }
+
+    pub(crate) fn poll_next_complete_iso(&mut self, _cx: &mut Context) -> Poll<IsoCompletion> {
+        #[cfg(not(target_vendor = "win7"))]
+        {
+            self.inner.notify.subscribe(_cx);
+            return take_completed_from_queue(&mut self.pending_iso)
+                .map(|mut transfer| Poll::Ready(transfer.take_completion()))
+                .unwrap_or(Poll::Pending);
+        }
+
+        #[cfg(target_vendor = "win7")]
+        panic!("poll_next_complete_iso called without a supported pending transfer")
+    }
+
+    pub(crate) fn wait_next_complete_iso(&mut self, _timeout: Duration) -> Option<IsoCompletion> {
+        #[cfg(not(target_vendor = "win7"))]
+        {
+            return self.inner.notify.wait_timeout(_timeout, || {
+                take_completed_from_queue(&mut self.pending_iso)
+                    .map(|mut transfer| transfer.take_completion())
+            });
+        }
+
+        #[cfg(target_vendor = "win7")]
+        panic!("wait_next_complete_iso called without a supported pending transfer")
     }
 
     pub(crate) fn cancel_all(&mut self) {
@@ -852,6 +964,28 @@ impl WindowsEndpoint {
         // can't complete out of order while we're going through them.
         for transfer in self.pending.iter_mut().rev() {
             self.inner.interface.cancel(transfer);
+        }
+        #[cfg(not(target_vendor = "win7"))]
+        for transfer in self.pending_iso.iter_mut().rev() {
+            log::debug!("Cancelling WinUSB ISO transfer {:?}", transfer.as_ptr());
+            unsafe {
+                let result = CancelIoEx(
+                    self.inner.interface.handle as HANDLE,
+                    transfer
+                        .as_ptr()
+                        .cast::<TransferHeader>()
+                        .cast::<OVERLAPPED>(),
+                );
+                if result == 0 {
+                    let error = GetLastError();
+                    if error != ERROR_NOT_FOUND {
+                        log::error!(
+                            "CancelIoEx for WinUSB ISO failed: {}",
+                            io::Error::from_raw_os_error(error as i32)
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -919,11 +1053,11 @@ impl WindowsEndpoint {
 
 impl Drop for WindowsEndpoint {
     fn drop(&mut self) {
-        if !self.pending.is_empty() {
+        if self.pending() != 0 {
             debug!(
                 "Dropping endpoint {:02x} with {} pending transfers",
                 self.inner.address,
-                self.pending.len()
+                self.pending()
             );
             self.cancel_all();
         }
