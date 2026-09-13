@@ -77,6 +77,23 @@ jobs:
         cargo check ${{ matrix.build-std == 'yes' && '-Zbuild-std' || '' }} --target ${{ matrix.target }} --features smol
         cargo check ${{ matrix.build-std == 'yes' && '-Zbuild-std' || '' }} --target ${{ matrix.target }} --all-features
 
+  wasm-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+    - name: Install matching wasm-bindgen test runner
+      run: |
+        wasm_bindgen_version=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' | head -n 1)
+        cargo install wasm-bindgen-cli --version "$wasm_bindgen_version" --locked
+    - name: Run WebUSB tests
+      env:
+        CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+      run: cargo test --target wasm32-unknown-unknown --lib
+
   rustdoc:
     runs-on: ubuntu-latest
     steps:
