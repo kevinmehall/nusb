@@ -25,13 +25,15 @@ use crate::{
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_DEVICE,
     },
     transfer::{
-        Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient, TransferError,
+        Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, IsoCompletion,
+        IsoTransfer, Recipient, TransferError,
     },
     DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
 };
 
 use super::{
-    js_value_to_error, js_value_to_transfer_error, webusb_status_to_nusb_transfer_error, WebFuture,
+    iso::PendingIso, js_value_to_error, js_value_to_transfer_error,
+    webusb_status_to_nusb_transfer_error, WebFuture,
 };
 
 impl From<ControlType> for web_sys::UsbRequestType {
@@ -375,6 +377,7 @@ impl WebusbInterface {
             }),
             max_packet_size,
             pending: VecDeque::new(),
+            pending_iso: VecDeque::new(),
         })
     }
 
@@ -428,6 +431,9 @@ pub(crate) struct WebusbEndpoint {
 
     /// A queue of pending transfers, expected to complete in order.
     pending: VecDeque<Pending>,
+
+    /// A queue of pending isochronous transfers, expected to complete in order.
+    pending_iso: VecDeque<PendingIso>,
 }
 
 struct EndpointInner {
@@ -441,7 +447,30 @@ impl WebusbEndpoint {
     }
 
     pub(crate) fn pending(&self) -> usize {
-        self.pending.len()
+        self.pending.len() + self.pending_iso.len()
+    }
+
+    pub(crate) fn submit_iso(
+        &mut self,
+        transfer: IsoTransfer,
+    ) -> Result<(), (IsoTransfer, TransferError)> {
+        let pending = PendingIso::submit(
+            &self.inner.interface.device.device,
+            self.inner.address,
+            transfer,
+        )?;
+        self.pending_iso.push_back(pending);
+        Ok(())
+    }
+
+    pub(crate) fn poll_next_complete_iso(&mut self, cx: &mut Context) -> Poll<IsoCompletion> {
+        let result = ready!(self
+            .pending_iso
+            .front_mut()
+            .expect("poll_next_complete_iso called with no transfers pending")
+            .poll(cx));
+        let pending = self.pending_iso.pop_front().unwrap();
+        Poll::Ready(pending.complete(result))
     }
 
     /// Enqueue a transfer that fails immediately with the given error.

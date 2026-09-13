@@ -1,6 +1,7 @@
 mod device;
 mod enumeration;
 mod hotplug;
+mod iso;
 
 pub use enumeration::{list_devices, request_device};
 
