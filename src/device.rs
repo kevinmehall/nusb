@@ -904,6 +904,19 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clear_halt()
     }
+
+    /// Clear the host side of the endpoint's halt and reset the host-side data
+    /// toggle, without addressing the device.
+    ///
+    /// Pair it with a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer the
+    /// caller sends with its own timeout; [`Self::clear_halt`] sends that
+    /// request with none.
+    ///
+    /// This should not be called when transfers are pending on the endpoint.
+    #[cfg(target_os = "macos")]
+    pub fn clear_host_halt(&mut self) -> Result<(), Error> {
+        self.backend.clear_host_halt()
+    }
 }
 
 impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {

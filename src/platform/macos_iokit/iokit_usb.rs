@@ -359,6 +359,10 @@ impl IoKitInterface {
         }
     }
 
+    pub(crate) fn clear_pipe_stall(&self, pipe_ref: u8) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, ClearPipeStall(pipe_ref))) }
+    }
+
     pub(crate) fn clear_pipe_stall_both_ends(&self, pipe_ref: u8) -> Result<(), IOReturn> {
         unsafe {
             check_iokit_return(call_iokit_function!(
