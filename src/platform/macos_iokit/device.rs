@@ -824,6 +824,15 @@ impl MacEndpoint {
                 .map_err(|e| iokit_error(e, "failed to clear halt on endpoint"))
         })
     }
+
+    pub(crate) fn clear_host_halt(&mut self) -> Result<(), Error> {
+        debug!("Clear host-side halt, endpoint {:02x}", self.inner.address);
+        self.inner
+            .interface
+            .interface
+            .clear_pipe_stall(self.inner.pipe_ref)
+            .map_err(|e| iokit_error(e, "failed to clear the host side of the endpoint halt"))
+    }
 }
 
 impl Drop for MacEndpoint {
