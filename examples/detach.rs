@@ -1,4 +1,6 @@
 //! Detach the kernel driver for an FTDI device and then reattach it.
+//!
+//! On macOS, detaching captures the whole device and attaching releases the whole device.
 use std::{thread::sleep, time::Duration};
 
 use nusb::MaybeFuture;

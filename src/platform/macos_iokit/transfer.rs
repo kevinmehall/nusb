@@ -1,8 +1,13 @@
-use std::mem::{self, ManuallyDrop};
+use std::{
+    mem::{self, ManuallyDrop},
+    sync::Arc,
+};
 
 use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
 
 use crate::transfer::{Allocator, Buffer, Completion, Direction};
+
+use super::device::DeviceConnection;
 
 pub struct TransferData {
     pub(super) buf: *mut u8,
@@ -10,6 +15,9 @@ pub struct TransferData {
     pub(super) requested_len: u32,
     pub(super) actual_len: u32,
     pub(super) status: IOReturn,
+    /// Keeps the IOKit user client and its event source alive until a device transfer callback
+    /// has completed, even if the device refreshes its active connection in the meantime.
+    _device_connection: Option<Arc<DeviceConnection>>,
 }
 
 impl Drop for TransferData {
@@ -27,7 +35,13 @@ impl TransferData {
             requested_len: 0,
             actual_len: 0,
             status: kIOReturnSuccess,
+            _device_connection: None,
         }
+    }
+
+    pub(super) fn pin_device_connection(&mut self, connection: Arc<DeviceConnection>) {
+        debug_assert!(self._device_connection.is_none());
+        self._device_connection = Some(connection);
     }
 
     pub fn put_buffer(&mut self, buffer: Buffer, direction: Direction) {

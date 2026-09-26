@@ -98,8 +98,8 @@ impl Device {
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// the same effect as [`claim_interface`][`Device::claim_interface`].
+    /// Linux detaches the driver then claims. macOS opens the interface with seize (evicts a
+    /// matched kernel driver). Windows has no effect beyond [`claim_interface`][`Device::claim_interface`].
     pub fn detach_and_claim_interface(
         &self,
         interface: u8,
@@ -113,10 +113,12 @@ impl Device {
     /// Detach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// Linux detaches the given interface's driver. macOS captures the whole device, terminating
+    /// all its kernel drivers and removing mounted volumes without unmounting them; this requires
+    /// root or the `com.apple.vm.device-access` entitlement. macOS returns [`ErrorKind::Busy`]
+    /// while any interface is claimed. No effect on other platforms.
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.detach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -126,10 +128,13 @@ impl Device {
     /// Attach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// Linux attaches the driver for the given interface. On macOS, any interface number releases
+    /// the whole previously-captured device back to the operating system; it returns
+    /// [`ErrorKind::Busy`] if an interface remains claimed or the device was not captured. The
+    /// release re-enumerates the device, disconnecting this `Device`; open the new
+    /// [`DeviceInfo`]. No effect on other platforms.
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.backend.attach_kernel_driver(interface)?;
         let _ = interface;
 
@@ -898,6 +903,19 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
     /// This should not be called when transfers are pending on the endpoint.
     pub fn clear_halt(&mut self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clear_halt()
+    }
+
+    /// Clear the host side of the endpoint's halt and reset the host-side data
+    /// toggle, without addressing the device.
+    ///
+    /// Pair it with a `CLEAR_FEATURE` `ENDPOINT_HALT` control transfer the
+    /// caller sends with its own timeout; [`Self::clear_halt`] sends that
+    /// request with none.
+    ///
+    /// This should not be called when transfers are pending on the endpoint.
+    #[cfg(target_os = "macos")]
+    pub fn clear_host_halt(&mut self) -> Result<(), Error> {
+        self.backend.clear_host_halt()
     }
 }
 
