@@ -44,6 +44,8 @@ pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
                         subclass: alt.interface_subclass(),
                         protocol: alt.interface_protocol(),
                         interface_string: alt.interface_name(),
+                        // WebUSB does not expose the underlying OS driver.
+                        driver: None,
                     })
                 })
                 .collect()

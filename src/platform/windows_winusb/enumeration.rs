@@ -16,7 +16,7 @@ use crate::{
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
     maybe_future::{blocking::Blocking, MaybeFuture},
-    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, UsbControllerType,
+    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceDriver, InterfaceInfo, UsbControllerType,
 };
 
 use super::{
@@ -93,23 +93,28 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default();
 
     if driver.eq_ignore_ascii_case("usbccgp") {
-        // Populate interface descriptor strings when available from child device nodes.
-        devinst
-            .children()
-            .flat_map(|intf| {
-                let interface_number = get_interface_number(intf)?;
-                let interface_string =
-                    intf.get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)?;
-                Some((interface_number, interface_string))
-            })
-            .for_each(|(intf_num, interface_string)| {
-                if let Some(interface_info) = interfaces
-                    .iter_mut()
-                    .find(|i| i.interface_number == intf_num)
-                {
-                    interface_info.interface_string = interface_string.into_string().ok();
-                }
-            });
+        // Composite device: each interface is a child device node with its own
+        // driver (Service) and description. Populate both from the children.
+        for intf in devinst.children() {
+            let Some(intf_num) = get_interface_number(intf) else {
+                continue;
+            };
+            let Some(interface_info) = interfaces.iter_mut().find(|i| i.interface_number == intf_num)
+            else {
+                continue;
+            };
+            if let Some(s) = intf.get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc) {
+                interface_info.interface_string = s.into_string().ok();
+            }
+            interface_info.driver = Some(classify_driver(&get_driver_name(intf)));
+        }
+    } else {
+        // Non-composite: the whole device is bound to a single driver that
+        // covers its interface(s).
+        let d = classify_driver(&driver);
+        for interface_info in interfaces.iter_mut() {
+            interface_info.driver = Some(d.clone());
+        }
     }
 
     let location_paths = devinst
@@ -215,10 +220,24 @@ fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Ve
                     subclass: i_desc.subclass(),
                     protocol: i_desc.protocol(),
                     interface_string: None,
+                    // Filled in by `probe_device` from the device node(s).
+                    driver: None,
                 }
             })
             .collect(),
     )
+}
+
+/// Classify a Windows driver service name into an [`InterfaceDriver`]. WinUSB is
+/// the generic userspace-access driver; an empty name means no driver is bound.
+fn classify_driver(service: &str) -> InterfaceDriver {
+    if service.is_empty() {
+        InterfaceDriver::Unbound
+    } else if service.eq_ignore_ascii_case("winusb") {
+        InterfaceDriver::Userspace
+    } else {
+        InterfaceDriver::Kernel(service.to_string())
+    }
 }
 
 pub(crate) fn get_driver_name(dev: DevInst) -> String {

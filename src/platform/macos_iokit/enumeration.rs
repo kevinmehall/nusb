@@ -8,15 +8,16 @@ use core_foundation::{
 use io_kit_sys::{
     kIOMasterPortDefault, kIORegistryIterateParents, kIORegistryIterateRecursively,
     keys::kIOServicePlane, ret::kIOReturnSuccess, usb::lib::kIOUSBDeviceClassName,
-    IORegistryEntryGetChildIterator, IORegistryEntryGetRegistryEntryID,
-    IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
+    IOObjectRelease, IORegistryEntryGetChildEntry, IORegistryEntryGetChildIterator,
+    IORegistryEntryGetRegistryEntryID, IORegistryEntrySearchCFProperty,
+    IOServiceGetMatchingServices, IOServiceMatching,
 };
 use log::debug;
 
 use crate::{
     descriptors::DeviceDescriptor,
     maybe_future::{MaybeFuture, Ready},
-    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, Speed, UsbControllerType,
+    BusInfo, DeviceInfo, Error, ErrorKind, InterfaceDriver, InterfaceInfo, Speed, UsbControllerType,
 };
 
 use super::iokit::{IoService, IoServiceIterator};
@@ -150,6 +151,7 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
                     protocol: get_integer_property(&child, "bInterfaceProtocol")? as u8,
                     interface_string: get_string_property(&child, "kUSBString")
                         .or_else(|| get_string_property(&child, "USB Interface Name")),
+                    driver: Some(interface_driver(&child)),
                 })
             })
             .collect()
@@ -220,8 +222,39 @@ fn get_property<T: ConcreteCFType>(device: &IoService, property: &'static str) -
     }
 }
 
-fn get_string_property(device: &IoService, property: &'static str) -> Option<String> {
+pub(super) fn get_string_property(device: &IoService, property: &'static str) -> Option<String> {
     get_property::<CFString>(device, property).map(|s| s.to_string())
+}
+
+/// Determine the driver bound to a USB interface from its IOKit service.
+///
+/// A kernel driver attaches as a child of the interface in the service plane;
+/// its name is then also the interface's `UsbExclusiveOwner`. A *userspace*
+/// capture (`kUSBReEnumerateCaptureDeviceMask`) instead sets `UsbExclusiveOwner`
+/// to the owning process (e.g. `"pid 123, my_app"`) but creates no driver child
+/// -- so we key off the child, not the owner string, to avoid reporting a
+/// captured interface as kernel-driven. macOS has no `usbfs`-style generic
+/// userspace driver, so the result is only ever `Unbound` or `Kernel`.
+pub(super) fn interface_driver(interface: &IoService) -> InterfaceDriver {
+    let mut child = 0;
+    let has_kernel_driver = unsafe {
+        IORegistryEntryGetChildEntry(interface.get(), kIOServicePlane as *mut i8, &mut child);
+        if child != 0 {
+            IOObjectRelease(child);
+            true
+        } else {
+            false
+        }
+    };
+
+    if has_kernel_driver {
+        InterfaceDriver::Kernel(
+            get_string_property(interface, "UsbExclusiveOwner")
+                .unwrap_or_else(|| String::from("unknown")),
+        )
+    } else {
+        InterfaceDriver::Unbound
+    }
 }
 
 pub fn get_integer_property(device: &IoService, property: &'static str) -> Option<i64> {

@@ -1,3 +1,31 @@
+//! macOS (IOKit) device backend.
+//!
+//! # Testing the kernel-driver capture / detach paths
+//!
+//! The capture operations ([`MacDevice::set_configuration_captured`],
+//! [`MacDevice::reset_captured`], [`MacDevice::attach_kernel_driver`]) detach
+//! kernel drivers and are privileged. There are two ways to be allowed:
+//!
+//! * **Root** (e.g. under `sudo`): always works, no entitlement needed.
+//! * **The `com.apple.vm.device-access` entitlement**: the non-root path;
+//!   `IOServiceAuthorize` then grants the entitled process access.
+//!
+//! Two things trip up local testing of the *entitlement* path:
+//!
+//! 1. **Run from a code-signed `.app` bundle, not a bare CLI binary.** The
+//!    authorization is bound to an application identity; a plain executable has
+//!    none, so `IOServiceAuthorize` returns `kIOReturnAborted` with no prompt.
+//!    Wrapping the binary in a minimal `.app` (with a `CFBundleIdentifier`) and
+//!    code-signing that bundle with the entitlement resolves it.
+//!
+//! 2. **The entitlement has to actually be honored by the OS.** Apple only
+//!    grants `com.apple.vm.device-access` to approved developer accounts (it is
+//!    not self-serve). For local development you can instead relax AMFI's code
+//!    signing enforcement so an ad-hoc signature's embedded entitlement is
+//!    trusted: disable SIP (`csrutil disable`) and set the
+//!    `amfi_get_out_of_my_way=1` boot-arg, then reboot. This is a development-
+//!    only measure -- undo it (re-enable SIP, clear the boot-arg) afterward.
+
 use std::{
     collections::VecDeque,
     ffi::c_void,
@@ -9,26 +37,33 @@ use std::{
     time::Duration,
 };
 
-use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
+use io_kit_sys::{
+    kIOServiceInteractionAllowed,
+    ret::{kIOReturnSuccess, IOReturn},
+};
 use log::{debug, error};
 
 use crate::{
     bitset::EndpointBitSet,
     descriptors::{ConfigurationDescriptor, DeviceDescriptor, EndpointDescriptor},
     maybe_future::blocking::Blocking,
+    platform::macos_iokit::iokit_c::kUSBReEnumerateCaptureDeviceMask,
     transfer::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
         },
         Buffer, Completion, ControlIn, ControlOut, Direction, TransferError,
     },
-    DeviceInfo, Error, ErrorKind, MaybeFuture, Speed,
+    DeviceInfo, Error, ErrorKind, InterfaceDriver, MaybeFuture, Speed,
 };
 
 use super::{
-    enumeration::{device_descriptor_from_fields, get_integer_property, service_by_registry_id},
+    enumeration::{
+        device_descriptor_from_fields, get_integer_property, interface_driver,
+        service_by_registry_id,
+    },
     events::{add_event_source, EventRegistration},
-    iokit::call_iokit_function,
+    iokit::{call_iokit_function, ioservice_authorize, IoService},
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
     TransferData,
@@ -36,6 +71,9 @@ use super::{
 
 pub(crate) struct MacDevice {
     _event_registration: EventRegistration,
+    /// The IOKit service backing this device, retained for operations (such as
+    /// capturing the device) that require re-opening it after authorization.
+    service: IoService,
     pub(super) device: IoKitDevice,
     device_descriptor: DeviceDescriptor,
     config_descriptors: Vec<Vec<u8>>,
@@ -43,6 +81,18 @@ pub(crate) struct MacDevice {
     active_config: AtomicU8,
     is_open_exclusive: Mutex<bool>,
     claimed_interfaces: AtomicUsize,
+    /// A device interface that has been authorized for capture (via
+    /// `IOServiceAuthorize`), cached so repeated capture operations don't
+    /// re-authorize -- each `IOServiceAuthorize` prompts the user.
+    capture: Mutex<Option<CaptureHandle>>,
+}
+
+/// An `IOServiceAuthorize`-authorized device interface, held so the
+/// authorization carries across capture operations. Created fresh *after*
+/// authorizing so IOKit's `start()` picks up the refreshed authorization.
+struct CaptureHandle {
+    device: IoKitDevice,
+    opened: bool,
 }
 
 // `get_configuration` does IO, so avoid it in the common case that:
@@ -121,6 +171,7 @@ impl MacDevice {
 
             Ok(Arc::new(MacDevice {
                 _event_registration,
+                service,
                 device,
                 device_descriptor,
                 config_descriptors,
@@ -128,6 +179,7 @@ impl MacDevice {
                 active_config: AtomicU8::new(active_config),
                 is_open_exclusive: Mutex::new(opened),
                 claimed_interfaces: AtomicUsize::new(0),
+                capture: Mutex::new(None),
             }))
         })
     }
@@ -210,6 +262,182 @@ impl MacDevice {
                 }
                 _ => Error::new_os(ErrorKind::Other, "failed to reset device", e),
             })
+        })
+    }
+
+    /// Set the configuration, detaching any kernel drivers from the device's
+    /// interfaces ("capturing" the device) in the process.
+    pub(crate) fn set_configuration_captured(
+        self: Arc<Self>,
+        configuration: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            // `SetConfigurationV2` operates on an open device, so the captured
+            // handle must be opened first.
+            self.with_capture_authorization(CaptureAccess::Open, |device| {
+                // `startInterfaceMatching = false` detaches kernel drivers;
+                // `issueRemoteWakeup = true` matches the plain `SetConfiguration` behavior.
+                let r = unsafe {
+                    call_iokit_function!(device.raw, SetConfigurationV2(configuration, false, true))
+                };
+                check_capture_return(r, "failed to set configuration")?;
+
+                log::debug!("Set configuration {configuration} (captured)");
+                self.active_config.store(configuration, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+    }
+
+    /// Reset the device, detaching any kernel drivers from its interfaces
+    /// ("capturing" the device) as it re-enumerates.
+    pub(crate) fn reset_captured(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            // `USBDeviceReEnumerate` works on an unopened interface (this is how
+            // libusb captures), so the captured handle need not be opened.
+            self.with_capture_authorization(CaptureAccess::NoOpen, |device| {
+                let r = unsafe {
+                    call_iokit_function!(
+                        device.raw,
+                        USBDeviceReEnumerate(kUSBReEnumerateCaptureDeviceMask)
+                    )
+                };
+                check_capture_return(r, "failed to reset device")
+            })
+        })
+    }
+
+    /// Run `f` with a device handle authorized to capture (detach kernel
+    /// drivers from) the device. Capturing requires either running as root or
+    /// the `com.apple.vm.device-access` entitlement.
+    ///
+    /// Root is preferred when available: it needs no authorization (and so no
+    /// user prompt), even for a signed/entitled binary that would otherwise be
+    /// stopped at `IOServiceAuthorize`.
+    ///
+    /// The entitlement path mirrors libusb's `darwin_detach_kernel_driver`: call
+    /// `IOServiceAuthorize` *before* touching the device, then obtain a *fresh*
+    /// device interface so IOKit's `start()` re-runs with the refreshed
+    /// authorization. (Opening the device before authorizing would fail, so we
+    /// can't go through `require_open_exclusive` first here.) Each
+    /// `IOServiceAuthorize` prompts the user, so the authorized interface is
+    /// cached in `self.capture` and reused by later capture operations.
+    ///
+    /// `access` governs whether the authorized handle is opened before `f`:
+    /// `USBDeviceReEnumerate` works on an unopened interface, but
+    /// `SetConfigurationV2` requires an open device.
+    ///
+    /// # Which device interface is used
+    ///
+    /// Capture operates on one of two interfaces to the same device, chosen by
+    /// privilege, and the two are never used together:
+    ///
+    /// * **root** -> the existing `self.device` (already opened by
+    ///   `require_open_exclusive`). No second handle is created, so there is no
+    ///   risk of a conflicting second exclusive `USBDeviceOpen`.
+    /// * **entitled (non-root)** -> the cached `self.capture` handle. In this
+    ///   case `self.device` is not open (a non-root open of a driver-owned
+    ///   device fails during enumeration), so again there is no exclusive-open
+    ///   conflict.
+    ///
+    /// The handles do not invalidate one another. The one exception is
+    /// [`MacDevice::reset_captured`], whose `USBDeviceReEnumerate` re-enumerates
+    /// the device: that invalidates *every* handle we hold (`self.device`,
+    /// `self.service`, and the cached capture handle) at once. Per the public
+    /// `Device::reset*` contract the `Device` must then be dropped and re-opened;
+    /// a capture call made afterward operates on a stale handle and fails
+    /// cleanly with a disconnected error rather than misbehaving. Operations
+    /// that do not re-enumerate (`set_configuration_captured`,
+    /// `attach_kernel_driver`) leave the handles valid and are safe to repeat.
+    fn with_capture_authorization<F, R>(&self, access: CaptureAccess, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&IoKitDevice) -> Result<R, Error>,
+    {
+        // Capturing re-enumerates/reconfigures the whole device, so it can't be
+        // done while we hold interfaces claimed.
+        if self.claimed_interfaces.load(Ordering::Relaxed) != 0 {
+            return Err(Error::new(
+                ErrorKind::Busy,
+                "cannot capture the device while interfaces are claimed",
+            ));
+        }
+
+        // `geteuid` is declared directly rather than pulling in the `libc` crate
+        // for a single call; it's a stable libSystem symbol.
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+
+        if unsafe { geteuid() == 0 } {
+            // Root: no authorization needed. Operate on the existing interface,
+            // opened exclusively as usual.
+            self.require_open_exclusive()?;
+            f(&self.device)
+        } else if security::have_capture_entitlement() {
+            let mut guard = self.capture.lock().unwrap();
+            if guard.is_none() {
+                check_capture_return(
+                    ioservice_authorize(&self.service, kIOServiceInteractionAllowed),
+                    "failed to authorize device access",
+                )?;
+                // Fresh interface so the authorization takes effect.
+                *guard = Some(CaptureHandle {
+                    device: IoKitDevice::new(&self.service)?,
+                    opened: false,
+                });
+            }
+            let handle = guard.as_mut().unwrap();
+            if matches!(access, CaptureAccess::Open) && !handle.opened {
+                let r = unsafe { call_iokit_function!(handle.device.raw, USBDeviceOpen()) };
+                check_capture_return(r, "failed to open device for capture")?;
+                handle.opened = true;
+            }
+            f(&handle.device)
+        } else {
+            // Neither root nor entitled. We must fail up front rather than
+            // attempt the operation: unprivileged capture calls (e.g.
+            // `USBDeviceReEnumerate` with the capture mask) don't error -- IOKit
+            // returns `kIOReturnSuccess` but silently ignores the capture,
+            // leaving the kernel drivers attached.
+            Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "operation not permitted (requires root or com.apple.vm.device-access entitlement)",
+            ))
+        }
+    }
+
+    pub(crate) fn interface_driver(
+        self: Arc<Self>,
+        interface_number: u8,
+    ) -> Result<InterfaceDriver, Error> {
+        let intf_service = find_interface_service(&self.device, interface_number)?;
+        // Reads the registry live, so it reflects detach/attach done through
+        // this device (and reports a captured interface as `Unbound`, not the
+        // capturing process).
+        Ok(interface_driver(&intf_service))
+    }
+
+    /// Re-register the kernel driver for a single interface (`RegisterDriver`).
+    ///
+    /// Note this is *not* the same as fully releasing a device captured by
+    /// [`reset_captured`][Self::reset_captured]. `RegisterDriver` re-binds the
+    /// driver to the interface, but the device stays in the "captured" mode
+    /// that `USBDeviceReEnumerate(kUSBReEnumerateCaptureDeviceMask)` put it in
+    /// -- so it remains reserved for privileged/authorized access and an
+    /// unprivileged open keeps failing with `kIOReturnNoResources` until the
+    /// capture is cleared. To fully release a captured device (re-attach its
+    /// drivers *and* clear the capture, the way a physical re-plug would),
+    /// re-enumerate it without the capture bit via [`reset`][Self::reset]
+    /// (`USBDeviceReEnumerate(0)`), which is what libusb does on release.
+    pub(crate) fn attach_kernel_driver(self: &Arc<Self>, interface_number: u8) -> Result<(), Error> {
+        // `RegisterDriver` acts on the interface, and enumerating interfaces
+        // does not require the device to be open.
+        self.with_capture_authorization(CaptureAccess::NoOpen, |device| {
+            let intf_service = find_interface_service(device, interface_number)?;
+            let interface = IoKitInterface::new(intf_service)?;
+
+            let r = unsafe { call_iokit_function!(interface.raw, RegisterDriver()) };
+            check_capture_return(r, "failed to attach kernel driver")
         })
     }
 
@@ -684,5 +912,105 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
         (*transfer).actual_len = len;
         (*transfer).status = result;
         notify_completion::<TransferData>(transfer)
+    }
+}
+
+/// Whether a freshly authorized capture handle must be opened before use.
+enum CaptureAccess {
+    /// Open the device (required by `SetConfigurationV2`).
+    Open,
+    /// Leave the interface unopened (fine for `USBDeviceReEnumerate` and for
+    /// operations that act on an interface rather than the device).
+    NoOpen,
+}
+
+/// Find the IOKit service for the interface with the given `bInterfaceNumber`.
+fn find_interface_service(device: &IoKitDevice, interface_number: u8) -> Result<IoService, Error> {
+    device
+        .create_interface_iterator()
+        .map_err(|e| Error::new_os(ErrorKind::Other, "failed to create interface iterator", e))?
+        .find(|io_service| {
+            get_integer_property(io_service, "bInterfaceNumber") == Some(interface_number as i64)
+        })
+        .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))
+}
+
+/// Map an `IOReturn` from a capture/detach operation to an `Error`, using
+/// `message` for the fallback case.
+fn check_capture_return(r: IOReturn, message: &'static str) -> Result<(), Error> {
+    match r {
+        io_kit_sys::ret::kIOReturnSuccess => Ok(()),
+        io_kit_sys::ret::kIOReturnNotPermitted | io_kit_sys::ret::kIOReturnNotPrivileged => {
+            Err(Error::new_os(
+                ErrorKind::PermissionDenied,
+                "operation not permitted (requires root or com.apple.vm.device-access entitlement)",
+                r,
+            ))
+        }
+        io_kit_sys::ret::kIOReturnNoDevice => {
+            Err(Error::new_os(ErrorKind::Disconnected, "device disconnected", r))
+        }
+        io_kit_sys::ret::kIOReturnNotFound => {
+            Err(Error::new_os(ErrorKind::NotFound, "not found", r))
+        }
+        _ => Err(Error::new_os(ErrorKind::Other, message, r)),
+    }
+}
+
+pub(crate) mod security {
+    use core_foundation::{
+        base::{kCFAllocatorDefault, CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef, TCFType},
+        boolean::CFBoolean,
+        error::CFErrorRef,
+        number::CFBooleanGetValue,
+        string::{CFString, CFStringRef},
+    };
+
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone)]
+    pub struct __SecTask {
+        _unused: [u8; 0],
+    }
+    pub type SecTaskRef = *mut __SecTask;
+
+    #[link(name = "Security", kind = "framework")]
+    extern "C" {
+        pub fn SecTaskCreateFromSelf(allocator: CFAllocatorRef) -> SecTaskRef;
+        pub fn SecTaskCopyValueForEntitlement(
+            task: SecTaskRef,
+            entitlement: CFStringRef,
+            error: *mut CFErrorRef,
+        ) -> CFTypeRef;
+    }
+
+    pub(crate) fn have_capture_entitlement() -> bool {
+        have_entitlement("com.apple.vm.device-access")
+    }
+
+    pub fn have_entitlement(entitlement: &'static str) -> bool {
+        unsafe {
+            let task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+            if task.is_null() {
+                return false;
+            }
+
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                CFString::from_static_string(entitlement).as_concrete_TypeRef(),
+                std::ptr::null_mut(),
+            );
+
+            CFRelease(task.cast());
+
+            let entitled = !value.is_null()
+                && CFGetTypeID(value.cast()) == CFBoolean::type_id()
+                && CFBooleanGetValue(value.cast());
+
+            if !value.is_null() {
+                CFRelease(value.cast());
+            }
+
+            entitled
+        }
     }
 }

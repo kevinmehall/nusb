@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::enumeration::InterfaceInfo;
+use crate::enumeration::{InterfaceDriver, InterfaceInfo};
 use crate::maybe_future::{MaybeFuture, Ready};
 use crate::ErrorKind;
 use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
@@ -252,6 +252,14 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
                         subclass: i.read_attr_hex("bInterfaceSubClass").ok()?,
                         protocol: i.read_attr_hex("bInterfaceProtocol").ok()?,
                         interface_string: i.read_attr("interface").ok(),
+                        // The `driver` symlink names the bound driver; `usbfs`
+                        // is the generic userspace-access driver, absent means
+                        // unbound, anything else is a kernel driver.
+                        driver: Some(match i.readlink_attr_filename("driver").ok() {
+                            None => InterfaceDriver::Unbound,
+                            Some(name) if name == "usbfs" => InterfaceDriver::Userspace,
+                            Some(name) => InterfaceDriver::Kernel(name),
+                        }),
                     })
                 })
                 .collect();

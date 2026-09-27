@@ -48,7 +48,7 @@ use crate::{
         request_type, Buffer, Completion, ControlIn, ControlOut, ControlType, Direction, Recipient,
         TransferError,
     },
-    DeviceInfo, Error, ErrorKind, Speed,
+    DeviceInfo, Error, ErrorKind, InterfaceDriver, Speed,
 };
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -474,6 +474,24 @@ impl LinuxDevice {
             Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
             Errno::BUSY => Error::new_os(ErrorKind::Busy, "kernel driver already attached", e),
             _ => Error::new_os(ErrorKind::Other, "failed to attach kernel driver", e),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn interface_driver(
+        self: &Arc<Self>,
+        interface_number: u8,
+    ) -> Result<InterfaceDriver, Error> {
+        let name = usbfs::interface_driver(&self.fd, interface_number).map_err(|e| match e {
+            Errno::INVAL => Error::new_os(ErrorKind::NotFound, "interface not found", e),
+            Errno::NODEV => Error::new_os(ErrorKind::Disconnected, "device disconnected", e),
+            _ => Error::new_os(ErrorKind::Other, "failed to query kernel driver", e),
+        })?;
+        // `usbfs` is the generic userspace-access driver; no name means unbound.
+        Ok(match name {
+            None => InterfaceDriver::Unbound,
+            Some(n) if n == "usbfs" => InterfaceDriver::Userspace,
+            Some(n) => InterfaceDriver::Kernel(n),
         })
     }
 

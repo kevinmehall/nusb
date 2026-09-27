@@ -113,27 +113,38 @@ impl Device {
     /// Detach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only detach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// This function is only supported on Linux.
+    #[cfg(target_os = "linux")]
     pub fn detach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
-        self.backend.detach_kernel_driver(interface)?;
-        let _ = interface;
-
-        Ok(())
+        self.backend.detach_kernel_driver(interface)
     }
 
     /// Attach kernel drivers for the specified interface.
     ///
     /// ### Platform-specific details
-    /// This function can only attach kernel drivers on Linux. Calling on other platforms has
-    /// no effect.
+    /// This function is only supported on Linux and macOS.
+    /// * macOS: requires either root or com.apple.vm.device-access entitlement
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn attach_kernel_driver(&self, interface: u8) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
-        self.backend.attach_kernel_driver(interface)?;
-        let _ = interface;
+        self.backend.attach_kernel_driver(interface)
+    }
 
-        Ok(())
+    /// Get the driver currently bound to the specified interface.
+    ///
+    /// This queries the OS and reflects any `detach_kernel_driver` /
+    /// `attach_kernel_driver` performed through this `Device`. For a snapshot
+    /// taken during enumeration without opening the device, see
+    /// [`InterfaceInfo::driver`][crate::InterfaceInfo::driver].
+    ///
+    /// ### Platform-specific details
+    ///
+    /// * Only supported on Linux and macOS
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn interface_driver(
+        &self,
+        interface_number: u8,
+    ) -> Result<crate::InterfaceDriver, Error> {
+        self.backend.clone().interface_driver(interface_number)
     }
 
     /// Get the device descriptor.
@@ -185,6 +196,25 @@ impl Device {
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_configuration(configuration)
+    }
+
+    /// Set the device configuration, with kernel drivers detached.
+    ///
+    /// The argument is the desired configuration's `bConfigurationValue`
+    /// descriptor field from [`Configuration::configuration_value`] or `0` to
+    /// unconfigure the device.
+    ///
+    /// ### Platform-specific notes
+    /// * Only supported on macOS
+    /// * macOS: requires either root or com.apple.vm.device-access entitlement
+    #[cfg(target_os = "macos")]
+    pub fn set_configuration_captured(
+        &self,
+        configuration: u8,
+    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend
+            .clone()
+            .set_configuration_captured(configuration)
     }
 
     /// Request a descriptor from the device.
@@ -293,6 +323,19 @@ impl Device {
     /// * Not supported on Windows
     pub fn reset(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().reset()
+    }
+
+    /// Reset the device, forcing it to re-enumerate, with kernel drivers detached.
+    ///
+    /// This `Device` will no longer be usable, and you should drop it and call
+    /// [`list_devices`][`super::list_devices`] to find and re-open it again.
+    ///
+    /// ### Platform-specific details
+    /// * Only supported on macOS
+    /// * macOS: requires either root or com.apple.vm.device-access entitlement
+    #[cfg(target_os = "macos")]
+    pub fn reset_captured(&self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend.clone().reset_captured()
     }
 
     /// Submit a single **IN (device-to-host)** transfer on the default **control** endpoint.

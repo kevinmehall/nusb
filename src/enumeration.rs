@@ -454,6 +454,47 @@ impl Speed {
     }
 }
 
+/// The driver bound to a USB interface, as reported by the operating system.
+///
+/// This distinguishes a real kernel driver -- which must be detached before the
+/// interface can be claimed from userspace -- from the OS's generic
+/// userspace-access driver, so callers don't have to hard-code platform-specific
+/// driver names like `usbfs` or `winusb`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InterfaceDriver {
+    /// No driver is bound to the interface; it is free to claim.
+    Unbound,
+
+    /// The interface is bound to the operating system's generic
+    /// userspace-access driver (`usbfs` on Linux, WinUSB on Windows). The
+    /// interface is available to claim without detaching anything.
+    Userspace,
+
+    /// The interface is bound to the named kernel driver. It must be detached
+    /// (`Device::detach_kernel_driver`, Linux only) before the interface can be
+    /// claimed.
+    Kernel(String),
+}
+
+impl InterfaceDriver {
+    /// Whether the interface can be claimed for userspace access without first
+    /// detaching a kernel driver -- i.e. it is not bound to a
+    /// [`Kernel`][Self::Kernel] driver.
+    pub fn is_available(&self) -> bool {
+        !matches!(self, InterfaceDriver::Kernel(_))
+    }
+
+    /// The name of the bound kernel driver, if a [`Kernel`][Self::Kernel] driver
+    /// is bound.
+    pub fn kernel_driver(&self) -> Option<&str> {
+        match self {
+            InterfaceDriver::Kernel(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
 /// Summary information about a device's interface, available before opening a device.
 #[derive(Clone)]
 pub struct InterfaceInfo {
@@ -462,6 +503,9 @@ pub struct InterfaceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
     pub(crate) interface_string: Option<String>,
+    /// The driver bound to the interface at enumeration time, or `None` if the
+    /// platform does not report it.
+    pub(crate) driver: Option<InterfaceDriver>,
 }
 
 impl InterfaceInfo {
@@ -489,6 +533,16 @@ impl InterfaceInfo {
     pub fn interface_string(&self) -> Option<&str> {
         self.interface_string.as_deref()
     }
+
+    /// The driver bound to this interface, as reported by the OS during
+    /// enumeration, or `None` if the platform does not report it.
+    ///
+    /// This is a snapshot from enumeration and does not require opening the
+    /// device. To query it live on an open device (reflecting detach/attach),
+    /// use `Device::interface_driver`.
+    pub fn driver(&self) -> Option<&InterfaceDriver> {
+        self.driver.as_ref()
+    }
 }
 
 // Not derived so that we can format some fields in hex
@@ -500,6 +554,7 @@ impl std::fmt::Debug for InterfaceInfo {
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
             .field("interface_string", &self.interface_string)
+            .field("driver", &self.driver)
             .finish()
     }
 }

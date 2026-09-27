@@ -229,7 +229,7 @@ mod enumeration;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use enumeration::BusInfo;
 pub use enumeration::{
-    DeviceId, DeviceInfo, DeviceSelector, InterfaceInfo, Speed, UsbControllerType,
+    DeviceId, DeviceInfo, DeviceSelector, InterfaceDriver, InterfaceInfo, Speed, UsbControllerType,
 };
 
 mod device;

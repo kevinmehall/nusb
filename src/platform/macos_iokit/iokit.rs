@@ -4,7 +4,7 @@
 //! licensed under MIT OR Apache-2.0.
 
 use core_foundation_sys::uuid::CFUUIDBytes;
-use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
+use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease, IOServiceAuthorize};
 
 use super::iokit_c::{self, CFUUIDGetUUIDBytes, IOCFPlugInInterface};
 
@@ -99,7 +99,7 @@ impl Drop for PluginInterface {
     }
 }
 
-/// Alias to select the "version 650" version of UsbDevice, and and "version 700" of UsbInterface.
+/// Alias to select the "version 650" version of UsbDevice, and "version 700" of UsbInterface.
 /// These are supported on macOS versions back to 10.10, which is older than Rust's minimum supported version of 10.12.
 pub(crate) type UsbDevice = iokit_c::IOUSBDeviceStruct650;
 pub(crate) type UsbInterface = iokit_c::IOUSBInterfaceStruct700;
@@ -110,6 +110,10 @@ pub(crate) fn usb_device_type_id() -> CFUUIDBytes {
 
 pub(crate) fn usb_interface_type_id() -> CFUUIDBytes {
     unsafe { CFUUIDGetUUIDBytes(iokit_c::kIOUSBInterfaceInterfaceID700()) }
+}
+
+pub(crate) fn ioservice_authorize(service: &IoService, options: u32) -> IOReturn {
+    unsafe { IOServiceAuthorize(service.get(), options) }
 }
 
 pub(crate) fn check_iokit_return(r: IOReturn) -> Result<(), IOReturn> {
