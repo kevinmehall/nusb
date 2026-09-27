@@ -63,7 +63,7 @@ use super::{
         service_by_registry_id,
     },
     events::{add_event_source, EventRegistration},
-    iokit::{call_iokit_function, ioservice_authorize, IoService},
+    iokit::{call_iokit_function, check_iokit_return, ioservice_authorize, IoService},
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
     TransferData,
@@ -118,8 +118,7 @@ impl MacDevice {
             let service = service_by_registry_id(registry_id)?;
             let device = IoKitDevice::new(&service)?;
             let event_source = device.create_async_event_source().map_err(|e| {
-                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
-                    .log_error()
+                iokit_error(e, "failed to create async event source").log_error()
             })?;
             let _event_registration = add_event_source(event_source);
 
@@ -137,13 +136,9 @@ impl MacDevice {
                 )
             })?;
 
-            let num_configs = device.get_number_of_configurations().map_err(|e| {
-                Error::new_os(
-                    ErrorKind::Other,
-                    "failed to get number of configurations",
-                    e,
-                )
-            })?;
+            let num_configs = device
+                .get_number_of_configurations()
+                .map_err(|e| iokit_error(e, "failed to get number of configurations"))?;
 
             let config_descriptors: Vec<Vec<u8>> = (0..num_configs)
                 .flat_map(|i| {
@@ -207,16 +202,9 @@ impl MacDevice {
     fn require_open_exclusive(&self) -> Result<(), Error> {
         let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
         if !*is_open_exclusive {
-            self.device.open().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(
-                    ErrorKind::Other,
-                    "could not open device for exclusive access",
-                    e,
-                ),
-            })?;
+            self.device
+                .open()
+                .map_err(|e| iokit_error(e, "could not open device for exclusive access"))?;
             *is_open_exclusive = true;
         }
 
@@ -238,15 +226,7 @@ impl MacDevice {
             self.require_open_exclusive()?;
             self.device
                 .set_configuration(configuration)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    io_kit_sys::ret::kIOReturnNotFound => {
-                        Error::new_os(ErrorKind::NotFound, "configuration not found", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to set configuration", e),
-                })?;
+                .map_err(|e| iokit_error(e, "failed to set configuration"))?;
             log::debug!("Set configuration {configuration}");
             self.active_config.store(configuration, Ordering::SeqCst);
             Ok(())
@@ -256,12 +236,9 @@ impl MacDevice {
     pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
             self.require_open_exclusive()?;
-            self.device.reset().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(ErrorKind::Other, "failed to reset device", e),
-            })
+            self.device
+                .reset()
+                .map_err(|e| iokit_error(e, "failed to reset device"))
         })
     }
 
@@ -280,7 +257,7 @@ impl MacDevice {
                 let r = unsafe {
                     call_iokit_function!(device.raw, SetConfigurationV2(configuration, false, true))
                 };
-                check_capture_return(r, "failed to set configuration")?;
+                check_iokit_return(r).map_err(|e| iokit_error(e, "failed to set configuration"))?;
 
                 log::debug!("Set configuration {configuration} (captured)");
                 self.active_config.store(configuration, Ordering::SeqCst);
@@ -302,7 +279,7 @@ impl MacDevice {
                         USBDeviceReEnumerate(kUSBReEnumerateCaptureDeviceMask)
                     )
                 };
-                check_capture_return(r, "failed to reset device")
+                check_iokit_return(r).map_err(|e| iokit_error(e, "failed to reset device"))
             })
         })
     }
@@ -376,10 +353,8 @@ impl MacDevice {
         } else if security::have_capture_entitlement() {
             let mut guard = self.capture.lock().unwrap();
             if guard.is_none() {
-                check_capture_return(
-                    ioservice_authorize(&self.service, kIOServiceInteractionAllowed),
-                    "failed to authorize device access",
-                )?;
+                check_iokit_return(ioservice_authorize(&self.service, kIOServiceInteractionAllowed))
+                    .map_err(|e| iokit_error(e, "failed to authorize device access"))?;
                 // Fresh interface so the authorization takes effect.
                 *guard = Some(CaptureHandle {
                     device: IoKitDevice::new(&self.service)?,
@@ -389,7 +364,7 @@ impl MacDevice {
             let handle = guard.as_mut().unwrap();
             if matches!(access, CaptureAccess::Open) && !handle.opened {
                 let r = unsafe { call_iokit_function!(handle.device.raw, USBDeviceOpen()) };
-                check_capture_return(r, "failed to open device for capture")?;
+                check_iokit_return(r).map_err(|e| iokit_error(e, "failed to open device for capture"))?;
                 handle.opened = true;
             }
             f(&handle.device)
@@ -437,7 +412,7 @@ impl MacDevice {
             let interface = IoKitInterface::new(intf_service)?;
 
             let r = unsafe { call_iokit_function!(interface.raw, RegisterDriver()) };
-            check_capture_return(r, "failed to attach kernel driver")
+            check_iokit_return(r).map_err(|e| iokit_error(e, "failed to attach kernel driver"))
         })
     }
 
@@ -449,9 +424,7 @@ impl MacDevice {
             let intf_service = self
                 .device
                 .create_interface_iterator()
-                .map_err(|e| {
-                    Error::new_os(ErrorKind::Other, "failed to create interface iterator", e)
-                })?
+                .map_err(|e| iokit_error(e, "failed to create interface iterator"))?
                 .find(|io_service| {
                     get_integer_property(io_service, "bInterfaceNumber")
                         == Some(interface_number as i64)
@@ -459,23 +432,14 @@ impl MacDevice {
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
             let mut interface = IoKitInterface::new(intf_service)?;
-            let source = interface.create_async_event_source().map_err(|e| {
-                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
-                    .log_error()
-            })?;
+            let source = interface
+                .create_async_event_source()
+                .map_err(|e| iokit_error(e, "failed to create async event source").log_error())?;
             let _event_registration = add_event_source(source);
 
-            interface.open().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnExclusiveAccess => Error::new_os(
-                    ErrorKind::Busy,
-                    "could not open interface for exclusive access",
-                    e,
-                ),
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(ErrorKind::Other, "failed to open interface", e),
-            })?;
+            interface
+                .open()
+                .map_err(|e| iokit_error(e, "failed to open interface"))?;
             self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
 
             Ok(Arc::new(MacInterface {
@@ -630,12 +594,7 @@ impl MacInterface {
 
             self.interface
                 .set_alternate_interface(alt_setting)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to set alternate interface", e),
-                })?;
+                .map_err(|e| iokit_error(e, "failed to set alternate interface"))?;
 
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
@@ -867,12 +826,7 @@ impl MacEndpoint {
                 .interface
                 .interface
                 .clear_pipe_stall_both_ends(inner.pipe_ref)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to clear halt on endpoint", e),
-                })
+                .map_err(|e| iokit_error(e, "failed to clear halt on endpoint"))
         })
     }
 }
@@ -928,33 +882,30 @@ enum CaptureAccess {
 fn find_interface_service(device: &IoKitDevice, interface_number: u8) -> Result<IoService, Error> {
     device
         .create_interface_iterator()
-        .map_err(|e| Error::new_os(ErrorKind::Other, "failed to create interface iterator", e))?
+        .map_err(|e| iokit_error(e, "failed to create interface iterator"))?
         .find(|io_service| {
             get_integer_property(io_service, "bInterfaceNumber") == Some(interface_number as i64)
         })
         .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))
 }
 
-/// Map an `IOReturn` from a capture/detach operation to an `Error`, using
-/// `message` for the fallback case.
-fn check_capture_return(r: IOReturn, message: &'static str) -> Result<(), Error> {
-    match r {
-        io_kit_sys::ret::kIOReturnSuccess => Ok(()),
-        io_kit_sys::ret::kIOReturnNotPermitted | io_kit_sys::ret::kIOReturnNotPrivileged => {
-            Err(Error::new_os(
-                ErrorKind::PermissionDenied,
-                "operation not permitted (requires root or com.apple.vm.device-access entitlement)",
-                r,
-            ))
-        }
-        io_kit_sys::ret::kIOReturnNoDevice => {
-            Err(Error::new_os(ErrorKind::Disconnected, "device disconnected", r))
-        }
-        io_kit_sys::ret::kIOReturnNotFound => {
-            Err(Error::new_os(ErrorKind::NotFound, "not found", r))
-        }
-        _ => Err(Error::new_os(ErrorKind::Other, message, r)),
-    }
+/// Map an `IOReturn` to an [`Error`], deriving the [`ErrorKind`] from the code
+/// and using `message` (with the raw code attached) as the description.
+///
+/// Pair with [`check_iokit_return`] to convert a raw `IOReturn` into a
+/// `Result`: `check_iokit_return(r).map_err(|e| iokit_error(e, "..."))`.
+#[allow(non_upper_case_globals)]
+fn iokit_error(code: IOReturn, message: &'static str) -> Error {
+    use io_kit_sys::ret::*;
+    let kind = match code {
+        kIOReturnNoDevice | kIOReturnNotOpen => ErrorKind::Disconnected,
+        kIOReturnBusy | kIOReturnExclusiveAccess => ErrorKind::Busy,
+        kIOReturnNotPermitted | kIOReturnNotPrivileged => ErrorKind::PermissionDenied,
+        kIOReturnNotFound => ErrorKind::NotFound,
+        kIOReturnUnsupported => ErrorKind::Unsupported,
+        _ => ErrorKind::Other,
+    };
+    Error::new_os(kind, message, code)
 }
 
 pub(crate) mod security {

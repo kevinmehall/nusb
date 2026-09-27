@@ -8,9 +8,9 @@ use core_foundation::{
 use io_kit_sys::{
     kIOMasterPortDefault, kIORegistryIterateParents, kIORegistryIterateRecursively,
     keys::kIOServicePlane, ret::kIOReturnSuccess, usb::lib::kIOUSBDeviceClassName,
-    IOObjectRelease, IORegistryEntryGetChildEntry, IORegistryEntryGetChildIterator,
-    IORegistryEntryGetRegistryEntryID, IORegistryEntrySearchCFProperty,
-    IOServiceGetMatchingServices, IOServiceMatching,
+    IOObjectRelease, IORegistryEntryCreateCFProperty, IORegistryEntryGetChildEntry,
+    IORegistryEntryGetChildIterator, IORegistryEntryGetRegistryEntryID,
+    IORegistryEntrySearchCFProperty, IOServiceGetMatchingServices, IOServiceMatching,
 };
 use log::debug;
 
@@ -226,6 +226,30 @@ pub(super) fn get_string_property(device: &IoService, property: &'static str) ->
     get_property::<CFString>(device, property).map(|s| s.to_string())
 }
 
+/// Read a string property recorded on `entry` *itself*.
+///
+/// Unlike [`get_property`], which searches parents recursively
+/// (`kIORegistryIterateParents`), this reads only the entry -- so a property
+/// set on a device (e.g. a device-level `UsbExclusiveOwner`) is never
+/// misattributed to one of its interfaces.
+fn get_own_string_property(entry: &IoService, property: &'static str) -> Option<String> {
+    unsafe {
+        let cf_property = CFString::from_static_string(property);
+        let raw = IORegistryEntryCreateCFProperty(
+            entry.get(),
+            cf_property.as_CFTypeRef() as *const _,
+            std::ptr::null(),
+            0,
+        );
+        if raw.is_null() {
+            return None;
+        }
+        CFType::wrap_under_create_rule(raw)
+            .downcast_into::<CFString>()
+            .map(|s| s.to_string())
+    }
+}
+
 /// Determine the driver bound to a USB interface from its IOKit service.
 ///
 /// A kernel driver attaches as a child of the interface in the service plane;
@@ -249,7 +273,9 @@ pub(super) fn interface_driver(interface: &IoService) -> InterfaceDriver {
 
     if has_kernel_driver {
         InterfaceDriver::Kernel(
-            get_string_property(interface, "UsbExclusiveOwner")
+            // Read the owner on the interface itself, not via a parent-searching
+            // lookup that could return a device-level owner.
+            get_own_string_property(interface, "UsbExclusiveOwner")
                 .unwrap_or_else(|| String::from("unknown")),
         )
     } else {
