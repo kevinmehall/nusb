@@ -5,31 +5,45 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
-        ERROR_NO_SUCH_DEVICE, ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT,
-        ERROR_SUCCESS, ERROR_TIMEOUT, FALSE,
+        ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE, ERROR_NO_SUCH_DEVICE,
+        ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT, ERROR_SUCCESS,
+        ERROR_TIMEOUT,
     },
-    System::IO::{GetOverlappedResult, OVERLAPPED},
+    System::IO::OVERLAPPED,
 };
 
 use super::{threadpool::Timer, Interface};
 use crate::transfer::{Buffer, Completion, Direction, TransferError};
 
+pub(crate) fn transfer_error_from_win32(e: u32) -> Result<(), TransferError> {
+    match e {
+        ERROR_SUCCESS => Ok(()),
+        ERROR_GEN_FAILURE => Err(TransferError::Stall),
+        ERROR_REQUEST_ABORTED | ERROR_TIMEOUT | ERROR_SEM_TIMEOUT | ERROR_OPERATION_ABORTED => {
+            Err(TransferError::Cancelled)
+        }
+        ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
+            Err(TransferError::Disconnected)
+        }
+        e => Err(TransferError::Unknown(e)),
+    }
+}
+
 #[repr(C)]
 pub struct TransferData {
     // first member of repr(C) struct; can cast pointer between types
-    // overlapped.Internal contains the status
+    // overlapped.Internal contains the NT status
     // overlapped.InternalHigh contains the number of bytes transferred
     pub(crate) overlapped: OVERLAPPED,
 
     pub(crate) buf: *mut u8,
+    pub(crate) endpoint: u8,
     pub(crate) capacity: u32,
-    pub(crate) request_len: u32,
+    pub(crate) requested_len: u32,
+    pub(crate) actual_len: u32,
+    pub(crate) error: Result<(), TransferError>,
 
     pub(crate) intf: Arc<Interface>,
-    pub(crate) endpoint: u8,
-    pub(crate) error_from_submit: Result<(), TransferError>,
-
     pub(crate) timeout: Option<Timer>,
 }
 
@@ -44,11 +58,12 @@ impl TransferData {
             overlapped: unsafe { mem::zeroed() },
             buf: empty.as_mut_ptr(),
             capacity: 0,
-            request_len: 0,
+            requested_len: 0,
+            actual_len: 0,
             intf,
             endpoint,
             timeout: None,
-            error_from_submit: Ok(()),
+            error: Ok(()),
         }
     }
 
@@ -57,47 +72,25 @@ impl TransferData {
         let buf = ManuallyDrop::new(buf);
         self.capacity = buf.capacity;
         self.buf = buf.ptr;
-        self.overlapped.InternalHigh = 0;
-        self.request_len = match Direction::from_address(self.endpoint) {
+        self.actual_len = 0;
+        self.requested_len = match Direction::from_address(self.endpoint) {
             Direction::Out => buf.len,
             Direction::In => buf.requested_len,
         };
     }
 
-    pub fn take_completion(&mut self, intf: &Interface) -> Completion {
-        let mut actual_len: u32 = 0;
-
-        let status = self.error_from_submit.and_then(|()| {
-            let r =
-                unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
-
-            if r == FALSE {
-                match unsafe { GetLastError() } {
-                    ERROR_SUCCESS => Ok(()),
-                    ERROR_GEN_FAILURE => Err(TransferError::Stall),
-                    ERROR_REQUEST_ABORTED
-                    | ERROR_TIMEOUT
-                    | ERROR_SEM_TIMEOUT
-                    | ERROR_OPERATION_ABORTED => Err(TransferError::Cancelled),
-                    ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
-                        Err(TransferError::Disconnected)
-                    }
-                    e => Err(TransferError::Unknown(e)),
-                }
-            } else {
-                Ok(())
-            }
-        });
+    pub fn take_completion(&mut self) -> Completion {
+        let status = mem::replace(&mut self.error, Ok(()));
 
         let mut empty = ManuallyDrop::new(Vec::new());
         let ptr = mem::replace(&mut self.buf, empty.as_mut_ptr());
         let capacity = mem::replace(&mut self.capacity, 0);
+        let requested_len = mem::replace(&mut self.requested_len, 0);
+        let actual_len = mem::replace(&mut self.actual_len, 0);
         let len = match Direction::from_address(self.endpoint) {
-            Direction::Out => self.request_len,
+            Direction::Out => requested_len,
             Direction::In => actual_len,
         };
-        let requested_len = mem::replace(&mut self.request_len, 0);
-        self.overlapped.InternalHigh = 0;
 
         Completion {
             status,
