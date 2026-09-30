@@ -300,13 +300,13 @@ impl WinusbFileHandle {
         let winusb_handle = unsafe {
             let mut h = ptr::null_mut();
             if WinUsb_Initialize(raw_handle(&handle), &mut h) == FALSE {
-                CloseThreadpoolIo(threadpool_io);
-                return Err(Error::new_os(
+                let err = Error::new_os(
                     ErrorKind::Other,
                     "failed to initialize WinUSB",
                     GetLastError(),
-                )
-                .log_debug());
+                );
+                CloseThreadpoolIo(threadpool_io);
+                return Err(err.log_debug());
             }
             h
         };
@@ -760,7 +760,8 @@ impl WindowsInterface {
 
     fn post_submit(&self, r: i32, t: Pending<TransferData>) -> Pending<TransferData> {
         if r == TRUE {
-            error!("Transfer submit completed synchronously")
+            warn!("Transfer submit completed synchronously");
+            return t;
         }
 
         let err = unsafe { GetLastError() };
