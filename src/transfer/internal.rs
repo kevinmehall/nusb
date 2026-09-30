@@ -273,38 +273,55 @@ pub(crate) unsafe fn notify_completion<P>(transfer: *mut P) {
     }
 }
 
-pub(crate) struct TransferFuture<D> {
-    transfer: Option<Pending<D>>,
-    notify: Arc<Notify>,
+pub(crate) struct TransferFuture<C, T> {
+    transfer: Option<Pending<T>>,
+    inner: Arc<TransferFutureInner<C>>,
 }
 
-impl<D> TransferFuture<D> {
-    pub(crate) fn new(transfer: D, submit: impl FnOnce(Idle<D>) -> Pending<D>) -> Self {
-        let notify = Arc::new(Notify::new());
-        let transfer = submit(Idle::new(notify.clone(), transfer));
-        Self {
-            transfer: Some(transfer),
-            notify,
-        }
+struct TransferFutureInner<C> {
+    notify: Notify,
+
+    /// Context such as an Arc<Device> that is kept alive as long as the transfer is pending.
+    context: C,
+}
+
+impl<C> AsRef<Notify> for TransferFutureInner<C> {
+    fn as_ref(&self) -> &Notify {
+        &self.notify
     }
 }
 
-impl<D> Future for TransferFuture<D> {
-    type Output = Idle<D>;
+impl<C: Send + Sync + 'static, T> TransferFuture<C, T> {
+    pub(crate) fn new(
+        context: C,
+        transfer: T,
+        submit: impl FnOnce(&C, Idle<T>) -> Pending<T>,
+    ) -> Self {
+        let notify = Notify::new();
+        let inner = Arc::new(TransferFutureInner { notify, context });
+        let transfer = Some(submit(&inner.context, Idle::new(inner.clone(), transfer)));
+        Self { transfer, inner }
+    }
+}
+
+impl<C, T> Future for TransferFuture<C, T> {
+    type Output = Idle<T>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.notify.subscribe(cx);
+        self.inner.notify.subscribe(cx);
         take_completed_from_option(&mut self.transfer).map_or(Poll::Pending, Poll::Ready)
     }
 }
 
-impl<D> MaybeFuture for TransferFuture<D>
+impl<C, T> MaybeFuture for TransferFuture<C, T>
 where
-    D: Send,
+    C: Send + Sync + 'static,
+    T: Send,
 {
     #[cfg(not(target_arch = "wasm32"))]
     fn wait(mut self) -> Self::Output {
-        self.notify
+        self.inner
+            .notify
             .wait(|| take_completed_from_option(&mut self.transfer))
     }
 }

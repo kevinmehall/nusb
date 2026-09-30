@@ -530,7 +530,7 @@ impl Drop for WindowsInterface {
 
 impl WindowsInterface {
     pub fn control_in(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
@@ -545,7 +545,7 @@ impl WindowsInterface {
             Length: data.length,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
+        TransferFuture::new(self, t, |intf, t| intf.submit_control(t, pkt, timeout)).map(|mut t| {
             let c = t.take_completion();
             c.status?;
             Ok(c.buffer.into_vec())
@@ -553,7 +553,7 @@ impl WindowsInterface {
     }
 
     pub fn control_out(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
@@ -568,7 +568,7 @@ impl WindowsInterface {
             Length: data.data.len().try_into().expect("transfer too large"),
         };
 
-        TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
+        TransferFuture::new(self, t, |intf, t| intf.submit_control(t, pkt, timeout)).map(|mut t| {
             let c = t.take_completion();
             c.status
         })

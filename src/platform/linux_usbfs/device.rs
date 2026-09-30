@@ -382,8 +382,7 @@ impl LinuxDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         let t = TransferData::new_control_in(data);
-        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(move |t| {
-            drop(self); // ensure device stays alive
+        TransferFuture::new(self, t, |device, t| device.submit_timeout(t, timeout)).map(|t| {
             t.status()?;
             Ok(t.control_in_data().to_owned())
         })
@@ -395,8 +394,7 @@ impl LinuxDevice {
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         let t = TransferData::new_control_out(data);
-        TransferFuture::new(t, |t| self.submit_timeout(t, timeout)).map(move |t| {
-            drop(self); // ensure device stays alive
+        TransferFuture::new(self, t, |device, t| device.submit_timeout(t, timeout)).map(|t| {
             t.status()?;
             Ok(())
         })
