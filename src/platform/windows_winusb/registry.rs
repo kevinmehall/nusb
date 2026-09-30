@@ -8,7 +8,7 @@ use std::{
 use windows_sys::{
     core::GUID,
     Win32::{
-        Foundation::{GetLastError, ERROR_SUCCESS, S_OK},
+        Foundation::{ERROR_SUCCESS, S_OK},
         System::{
             Com::IIDFromString,
             Registry::{RegCloseKey, RegQueryValueExW, HKEY, REG_MULTI_SZ, REG_SZ},
@@ -47,15 +47,14 @@ impl RegKey {
                 return Err(Error::new_os(
                     crate::ErrorKind::Other,
                     "failed to read registry value",
-                    GetLastError(),
+                    r,
                 ));
             }
 
             if ty != REG_MULTI_SZ && ty != REG_SZ {
-                return Err(Error::new_os(
+                return Err(Error::new(
                     crate::ErrorKind::Other,
                     "failed to read registry value: expected string",
-                    GetLastError(),
                 ));
             }
 
@@ -70,7 +69,7 @@ impl RegKey {
                 return Err(Error::new_os(
                     crate::ErrorKind::Other,
                     "failed to read registry value data",
-                    GetLastError(),
+                    r,
                 ));
             }
 
