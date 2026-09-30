@@ -272,7 +272,12 @@ pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString,
         ));
     }
 
-    let reg_key = child.registry_key().unwrap();
+    let Some(reg_key) = child.registry_key() else {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "could not open registry key for interface",
+        ));
+    };
     let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
         Ok(s) => s,
         Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
