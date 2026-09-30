@@ -230,3 +230,63 @@ impl<F: Future, T: FnOnce(F::Output) -> R, R> Future for MapFut<F, T> {
         })
     }
 }
+
+pub(crate) enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
+
+pub(crate) enum EitherFut<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L, R> IntoFuture for Either<L, R>
+where
+    L: IntoFuture,
+    R: IntoFuture<Output = <L as IntoFuture>::Output>,
+{
+    type Output = L::Output;
+    type IntoFuture = EitherFut<L::IntoFuture, R::IntoFuture>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        match self {
+            Either::Left(l) => EitherFut::Left(l.into_future()),
+            Either::Right(r) => EitherFut::Right(r.into_future()),
+        }
+    }
+}
+
+impl<L, R> Future for EitherFut<L, R>
+where
+    L: Future,
+    R: Future<Output = L::Output>,
+{
+    type Output = L::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: structural pin projection: inner futures are always pinned.
+        unsafe {
+            match self.get_unchecked_mut() {
+                EitherFut::Left(l) => Future::poll(Pin::new_unchecked(l), cx),
+                EitherFut::Right(r) => Future::poll(Pin::new_unchecked(r), cx),
+            }
+        }
+    }
+}
+
+impl<L: NonWasmSend + Unpin, R: NonWasmSend + Unpin> MaybeFuture for Either<L, R>
+where
+    L: MaybeFuture,
+    L::IntoFuture: NonWasmSend,
+    R: MaybeFuture + IntoFuture<Output = <L as IntoFuture>::Output>,
+    R::IntoFuture: NonWasmSend,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait(self) -> Self::Output {
+        match self {
+            Either::Left(l) => l.wait(),
+            Either::Right(r) => r.wait(),
+        }
+    }
+}

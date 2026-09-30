@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::enumeration::InterfaceInfo;
+use crate::enumeration::{InterfaceInfo, StringDescriptor};
 use crate::maybe_future::{MaybeFuture, Ready};
 use crate::ErrorKind;
 use crate::{BusInfo, DeviceInfo, Error, Speed, UsbControllerType};
@@ -230,9 +230,18 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
             .ok()
             .as_deref()
             .and_then(Speed::from_str),
-        manufacturer_string: path.read_attr("manufacturer").ok(),
-        product_string: path.read_attr("product").ok(),
-        serial_number: path.read_attr("serial").ok(),
+        manufacturer_string: path
+            .read_attr("manufacturer")
+            .ok()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
+        product_string: path
+            .read_attr("product")
+            .ok()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
+        serial_number: path
+            .read_attr("serial")
+            .ok()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
         interfaces: {
             let mut interfaces: Vec<_> = path
                 .children()
@@ -251,7 +260,10 @@ pub fn probe_device(path: SysfsPath) -> Result<DeviceInfo, SysfsError> {
                         class: i.read_attr_hex("bInterfaceClass").ok()?,
                         subclass: i.read_attr_hex("bInterfaceSubClass").ok()?,
                         protocol: i.read_attr_hex("bInterfaceProtocol").ok()?,
-                        interface_string: i.read_attr("interface").ok(),
+                        interface_string: i
+                            .read_attr("interface")
+                            .ok()
+                            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
                     })
                 })
                 .collect();

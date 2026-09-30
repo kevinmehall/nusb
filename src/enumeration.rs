@@ -11,7 +11,10 @@ use crate::platform::DevInst;
 #[cfg(all(docsrs, not(target_os = "windows")))]
 struct DevInst();
 
-use crate::{Device, Error, MaybeFuture};
+use crate::{
+    maybe_future::{Either, Ready},
+    Device, Error, MaybeFuture,
+};
 
 /// Opaque device identifier
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -97,9 +100,9 @@ pub struct DeviceInfo {
     ))]
     pub(crate) speed: Option<Speed>,
 
-    pub(crate) manufacturer_string: Option<String>,
-    pub(crate) product_string: Option<String>,
-    pub(crate) serial_number: Option<String>,
+    pub(crate) manufacturer_string: StringDescriptor,
+    pub(crate) product_string: StringDescriptor,
+    pub(crate) serial_number: StringDescriptor,
 
     pub(crate) interfaces: Vec<InterfaceInfo>,
 
@@ -298,19 +301,46 @@ impl DeviceInfo {
     ///    this will return `None` regardless of whether a descriptor exists.
     #[doc(alias = "iManufacturer")]
     pub fn manufacturer_string(&self) -> Option<&str> {
-        self.manufacturer_string.as_deref()
+        self.manufacturer_string.cached()
+    }
+
+    /// Get the manufacturer string descriptor.
+    ///
+    /// This will return a cached value if available, otherwise it will fetch the descriptor from the device or return `Ok(None)` if there is no string descriptor.
+    #[doc(alias = "iManufacturer")]
+    pub fn get_manufacturer_string(
+        &self,
+    ) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
+        self.manufacturer_string.fetch()
     }
 
     /// Product string, if available without device IO.
     #[doc(alias = "iProduct")]
     pub fn product_string(&self) -> Option<&str> {
-        self.product_string.as_deref()
+        self.product_string.cached()
+    }
+
+    /// Get the product string descriptor.
+    ///
+    /// This will return a cached value if available, otherwise it will fetch the descriptor from the device or return `Ok(None)` if there is no string descriptor.
+    pub fn get_product_string(&self) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
+        self.product_string.fetch()
     }
 
     /// Serial number string, if available without device IO.
     #[doc(alias = "iSerial")]
     pub fn serial_number(&self) -> Option<&str> {
-        self.serial_number.as_deref()
+        self.serial_number.cached()
+    }
+
+    /// Get the serial number string descriptor.
+    ///
+    /// This will return a cached value if available, otherwise it will fetch the descriptor from the device or return `Ok(None)` if there is no string descriptor.
+    #[doc(alias = "iSerial")]
+    pub fn get_serial_number_string(
+        &self,
+    ) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
+        self.serial_number.fetch()
     }
 
     /// Iterator over the device's interfaces.
@@ -341,7 +371,7 @@ impl DeviceInfo {
             && s.product_id.is_none_or(|id| self.product_id == id)
             && s.serial_number
                 .as_ref()
-                .is_none_or(|s| self.serial_number.as_deref() == Some(s))
+                .is_none_or(|s| self.serial_number.cached() == Some(s))
             && ((s.class.is_none_or(|c| self.class == c)
                 && s.subclass.is_none_or(|s| self.subclass == s)
                 && s.protocol.is_none_or(|p| self.protocol == p))
@@ -461,7 +491,7 @@ pub struct InterfaceInfo {
     pub(crate) class: u8,
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
-    pub(crate) interface_string: Option<String>,
+    pub(crate) interface_string: StringDescriptor,
 }
 
 impl InterfaceInfo {
@@ -487,7 +517,15 @@ impl InterfaceInfo {
 
     /// Interface string descriptor value as cached by the OS.
     pub fn interface_string(&self) -> Option<&str> {
-        self.interface_string.as_deref()
+        self.interface_string.cached()
+    }
+
+    /// Get the interface string descriptor.
+    ///
+    /// This will return a cached value if available, otherwise it will fetch the descriptor from the device or return `Ok(None)` if there is no string descriptor.
+    #[doc(alias = "iInterface")]
+    pub fn get_interface_string(&self) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
+        self.interface_string.fetch()
     }
 }
 
@@ -501,6 +539,41 @@ impl std::fmt::Debug for InterfaceInfo {
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
             .field("interface_string", &self.interface_string)
             .finish()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum StringDescriptor {
+    NotPresent,
+    Cached(String),
+    #[allow(dead_code)]
+    Platform(crate::platform::StringDescriptorRef),
+}
+
+impl StringDescriptor {
+    pub fn cached(&self) -> Option<&str> {
+        match self {
+            StringDescriptor::Cached(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn fetch(&self) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
+        match self {
+            StringDescriptor::NotPresent => Either::Left(Ready(Ok(None))),
+            StringDescriptor::Cached(s) => Either::Left(Ready(Ok(Some(s.clone())))),
+            StringDescriptor::Platform(desc) => Either::Right(desc.fetch()),
+        }
+    }
+}
+
+impl Debug for StringDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StringDescriptor::NotPresent => write!(f, "<not present>"),
+            StringDescriptor::Cached(s) => write!(f, "{s:?}"),
+            StringDescriptor::Platform(_) => write!(f, "<not cached>"),
+        }
     }
 }
 
