@@ -1,22 +1,20 @@
 use std::{
-    alloc::{self, Layout},
     ffi::OsStr,
-    mem,
     ptr::{null, null_mut},
 };
 
 use windows_sys::{
     core::GUID,
     Win32::{
-        Foundation::{ERROR_SUCCESS, S_OK},
+        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS, S_OK},
         System::{
             Com::IIDFromString,
-            Registry::{RegCloseKey, RegQueryValueExW, HKEY, REG_MULTI_SZ, REG_SZ},
+            Registry::{RegCloseKey, RegGetValueW, HKEY, RRF_RT_REG_MULTI_SZ, RRF_RT_REG_SZ},
         },
     },
 };
 
-use crate::Error;
+use crate::{Error, ErrorKind};
 
 use super::util::WCString;
 
@@ -29,60 +27,49 @@ impl RegKey {
 
     pub fn query_value_guid(&self, value_name: &str) -> Result<GUID, Error> {
         unsafe {
-            let value_name: WCString = OsStr::new(value_name).into();
-            let mut ty = 0;
-            let mut size = 0;
+            let value_name = WCString::from(OsStr::new(value_name));
+            let mut r = 0;
 
-            // get size
-            let r = RegQueryValueExW(
-                self.0,
-                value_name.as_ptr(),
-                null_mut(),
-                &mut ty,
-                null_mut(),
-                &mut size,
-            );
+            // Start with expected size for one GUID string
+            let mut buf: Vec<u16> = Vec::with_capacity(40);
+            for can_resize in [true, false] {
+                let mut size = (buf.capacity() * 2) as u32;
+                r = RegGetValueW(
+                    self.0,
+                    null(),
+                    value_name.as_ptr(),
+                    RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ,
+                    null_mut(),
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                );
+
+                if r == ERROR_MORE_DATA && can_resize {
+                    log::debug!("Resizing GUID buffer to {size} bytes");
+                    buf = Vec::with_capacity(size.div_ceil(2) as usize + 1);
+                    continue;
+                } else {
+                    break;
+                }
+            }
 
             if r != ERROR_SUCCESS {
                 return Err(Error::new_os(
-                    crate::ErrorKind::Other,
-                    "failed to read registry value",
-                    r,
-                ));
-            }
-
-            if ty != REG_MULTI_SZ && ty != REG_SZ {
-                return Err(Error::new(
-                    crate::ErrorKind::Other,
-                    "failed to read registry value: expected string",
-                ));
-            }
-
-            let layout = Layout::from_size_align(size as usize, mem::align_of::<u16>()).unwrap();
-
-            let buf = alloc::alloc(layout);
-
-            let r = RegQueryValueExW(self.0, value_name.as_ptr(), null(), &mut ty, buf, &mut size);
-
-            if r != ERROR_SUCCESS {
-                alloc::dealloc(buf, layout);
-                return Err(Error::new_os(
-                    crate::ErrorKind::Other,
-                    "failed to read registry value data",
+                    ErrorKind::Other,
+                    match r {
+                        ERROR_FILE_NOT_FOUND => "registry value not found",
+                        _ => "failed to read registry value",
+                    },
                     r,
                 ));
             }
 
             let mut guid = GUID::from_u128(0);
-            let r = IIDFromString(buf as *mut u16, &mut guid);
-
-            alloc::dealloc(buf, layout);
-
-            if r == S_OK {
+            if IIDFromString(buf.as_mut_ptr(), &mut guid) == S_OK {
                 Ok(guid)
             } else {
                 Err(Error::new(
-                    crate::ErrorKind::Other,
+                    ErrorKind::Other,
                     "failed to parse GUID from registry value",
                 ))
             }
