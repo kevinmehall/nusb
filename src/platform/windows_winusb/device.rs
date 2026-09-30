@@ -450,16 +450,16 @@ unsafe extern "system" fn timer_callback(
     context: *mut c_void,
     _timer: PTP_TIMER,
 ) {
-    let transfer_data = &*(context as *const TransferData);
+    let transfer = &*(context as *const TransferData);
     debug!(
         "Transfer {context:?} timeout on endpoint 0x{:02X}",
-        transfer_data.endpoint
+        transfer.endpoint
     );
 
     // Wait until the transfer has been submitted before trying to cancel it
-    let lock = transfer_data.intf.timeout_mutex.lock().unwrap();
+    let lock = transfer.intf.timeout_mutex.lock().unwrap();
     unsafe {
-        CancelIoEx(transfer_data.intf.handle, &transfer_data.overlapped);
+        CancelIoEx(transfer.intf.handle, transfer.overlapped.get());
     }
     drop(lock);
 }

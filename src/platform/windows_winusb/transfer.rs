@@ -1,4 +1,5 @@
 use std::{
+    cell::UnsafeCell,
     mem::{self, ManuallyDrop},
     sync::Arc,
 };
@@ -32,9 +33,8 @@ pub(crate) fn transfer_error_from_win32(e: u32) -> Result<(), TransferError> {
 #[repr(C)]
 pub struct TransferData {
     // first member of repr(C) struct; can cast pointer between types
-    // overlapped.Internal contains the NT status
-    // overlapped.InternalHigh contains the number of bytes transferred
-    pub(crate) overlapped: OVERLAPPED,
+    // `UnsafeCell` because the OS can touch it while we have `&TransferData`
+    pub(crate) overlapped: UnsafeCell<OVERLAPPED>,
 
     pub(crate) buf: *mut u8,
     pub(crate) endpoint: u8,
