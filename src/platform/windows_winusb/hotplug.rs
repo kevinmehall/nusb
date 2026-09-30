@@ -78,6 +78,7 @@ impl WindowsHotplugWatch {
         };
 
         if cr != CR_SUCCESS {
+            drop(unsafe { Box::from_raw(inner) });
             return Err(Error::new_os(
                 crate::ErrorKind::Other,
                 "failed to initialize hotplug notifications",
