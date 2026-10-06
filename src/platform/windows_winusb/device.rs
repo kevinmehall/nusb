@@ -54,7 +54,7 @@ use super::{
     },
     hub::HubPort,
     threadpool::Timer,
-    transfer::TransferData,
+    transfer::{transfer_error_from_win32, TransferData},
     util::{create_file, raw_handle, WCStr},
     DevInst,
 };
@@ -422,6 +422,7 @@ unsafe extern "system" fn io_callback(
 ) {
     let t = overlapped as *mut TransferData;
     {
+        // SAFETY: OS is done with the transfer, but we may be sharing access with `timer callback`
         let transfer = unsafe { &*t };
 
         debug!(
@@ -435,6 +436,12 @@ unsafe extern "system" fn io_callback(
             timer.cancel_and_wait();
         }
     }
+    {
+        // SAFETY: Timeout is cancelled so we now have exclusive access before `notify_completion`.
+        let transfer = unsafe { &mut *t };
+        transfer.error = transfer_error_from_win32(result);
+        transfer.actual_len = bytes_transferred as u32;
+    }
     unsafe { notify_completion::<TransferData>(t) }
 }
 
@@ -443,16 +450,16 @@ unsafe extern "system" fn timer_callback(
     context: *mut c_void,
     _timer: PTP_TIMER,
 ) {
-    let transfer_data = &*(context as *const TransferData);
+    let transfer = &*(context as *const TransferData);
     debug!(
         "Transfer {context:?} timeout on endpoint 0x{:02X}",
-        transfer_data.endpoint
+        transfer.endpoint
     );
 
     // Wait until the transfer has been submitted before trying to cancel it
-    let lock = transfer_data.intf.timeout_mutex.lock().unwrap();
+    let lock = transfer.intf.timeout_mutex.lock().unwrap();
     unsafe {
-        CancelIoEx(transfer_data.intf.handle, &transfer_data.overlapped);
+        CancelIoEx(transfer.intf.handle, transfer.overlapped.get());
     }
     drop(lock);
 }
@@ -538,10 +545,8 @@ impl WindowsInterface {
             Length: data.length,
         };
 
-        let intf = self.clone();
-
         TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
-            let c = t.take_completion(&intf);
+            let c = t.take_completion();
             c.status?;
             Ok(c.buffer.into_vec())
         })
@@ -563,10 +568,8 @@ impl WindowsInterface {
             Length: data.data.len().try_into().expect("transfer too large"),
         };
 
-        let intf = self.clone();
-
         TransferFuture::new(t, |t| self.submit_control(t, pkt, timeout)).map(move |mut t| {
-            let c = t.take_completion(&intf);
+            let c = t.take_completion();
             c.status
         })
     }
@@ -655,10 +658,9 @@ impl WindowsInterface {
     fn submit(&self, mut t: Idle<TransferData>) -> Pending<TransferData> {
         let endpoint = t.endpoint;
         let dir = Direction::from_address(endpoint);
-        let len = t.request_len;
+        let len = t.requested_len;
         let buf = t.buf;
         t.overlapped = unsafe { mem::zeroed() };
-        t.error_from_submit = Ok(());
 
         let t = t.pre_submit();
         let ptr = t.as_ptr();
@@ -701,16 +703,15 @@ impl WindowsInterface {
     ) -> Pending<TransferData> {
         let endpoint = t.endpoint;
         let dir = Direction::from_address(endpoint);
-        let len = t.request_len;
+        let len = t.requested_len;
         let buf = t.buf;
         t.overlapped = unsafe { mem::zeroed() };
-        t.error_from_submit = Ok(());
 
         if pkt.RequestType & 0x1f == Recipient::Interface as u8
             && pkt.Index as u8 != self.interface_number
         {
             warn!("WinUSB requires control transfer with `Recipient::Interface` to pass the interface number in `index`");
-            t.error_from_submit = Err(TransferError::InvalidArgument);
+            t.error = Err(TransferError::InvalidArgument);
             return t.simulate_complete();
         }
 
@@ -779,7 +780,7 @@ impl WindowsInterface {
                 if let Some(ref timer) = (*t.as_ptr()).timeout {
                     timer.cancel_and_wait();
                 }
-                (*t.as_ptr()).error_from_submit = match err {
+                (*t.as_ptr()).error = match err {
                     ERROR_BAD_COMMAND
                     | ERROR_FILE_NOT_FOUND
                     | ERROR_DEVICE_NOT_CONNECTED
@@ -875,14 +876,14 @@ impl WindowsEndpoint {
 
     pub(crate) fn submit_err(&mut self, buffer: Buffer, err: TransferError) {
         let mut t = self.make_transfer(buffer);
-        t.error_from_submit = Err(err);
+        t.error = Err(err);
         self.pending.push_back(t.simulate_complete());
     }
 
     pub(crate) fn poll_next_complete(&mut self, cx: &mut Context) -> Poll<Completion> {
         self.inner.notify.subscribe(cx);
         if let Some(mut transfer) = take_completed_from_queue(&mut self.pending) {
-            let completion = transfer.take_completion(&self.inner.interface);
+            let completion = transfer.take_completion();
             self.idle_transfer = Some(transfer);
             Poll::Ready(completion)
         } else {
@@ -893,7 +894,7 @@ impl WindowsEndpoint {
     pub(crate) fn wait_next_complete(&mut self, timeout: Duration) -> Option<Completion> {
         self.inner.notify.wait_timeout(timeout, || {
             take_completed_from_queue(&mut self.pending).map(|mut transfer| {
-                let completion = transfer.take_completion(&self.inner.interface);
+                let completion = transfer.take_completion();
                 self.idle_transfer = Some(transfer);
                 completion
             })
