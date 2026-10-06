@@ -78,6 +78,7 @@ impl WindowsHotplugWatch {
         };
 
         if cr != CR_SUCCESS {
+            drop(unsafe { Box::from_raw(inner) });
             return Err(Error::new_os(
                 crate::ErrorKind::Other,
                 "failed to initialize hotplug notifications",
@@ -102,19 +103,20 @@ impl WindowsHotplugWatch {
             .lock()
             .unwrap()
             .replace(cx.waker().clone());
-        let event = self.inner().events.lock().unwrap().pop_front();
-        match event {
-            Some((Action::Connect, devinst)) => {
-                if let Some(dev) = probe_device(devinst) {
-                    return Poll::Ready(HotplugEvent::Connected(dev));
-                };
+        loop {
+            let event = self.inner().events.lock().unwrap().pop_front();
+            match event {
+                Some((Action::Connect, devinst)) => {
+                    if let Some(dev) = probe_device(devinst) {
+                        return Poll::Ready(HotplugEvent::Connected(dev));
+                    };
+                }
+                Some((Action::Disconnect, devinst)) => {
+                    return Poll::Ready(HotplugEvent::Disconnected(DeviceId(devinst)));
+                }
+                None => return Poll::Pending,
             }
-            Some((Action::Disconnect, devinst)) => {
-                return Poll::Ready(HotplugEvent::Disconnected(DeviceId(devinst)));
-            }
-            None => {}
         }
-        Poll::Pending
     }
 }
 

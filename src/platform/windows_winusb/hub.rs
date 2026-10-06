@@ -1,7 +1,6 @@
 use std::{
-    alloc::{self, Layout},
     ffi::c_void,
-    mem,
+    mem::{self, offset_of, MaybeUninit},
     os::windows::prelude::OwnedHandle,
     ptr::{addr_of, null_mut},
     slice,
@@ -149,63 +148,61 @@ impl HubHandle {
         // Experimentally determined on Windows 10 19045.3803 that this fails
         // with ERROR_INVALID_PARAMETER for non-cached descriptors when
         // requesting length greater than 4095.
-        let length = 4095;
+        const LENGTH: usize = 4095;
 
-        unsafe {
-            let layout = Layout::from_size_align(
-                mem::size_of::<USB_DESCRIPTOR_REQUEST>() + length,
-                mem::align_of::<USB_DESCRIPTOR_REQUEST>(),
-            )
-            .unwrap();
+        #[repr(C, packed)]
+        struct DescriptorRequest {
+            req: USB_DESCRIPTOR_REQUEST,
+            data: MaybeUninit<[u8; LENGTH]>,
+        }
 
-            let req = alloc::alloc(layout).cast::<USB_DESCRIPTOR_REQUEST>();
-
-            req.write(USB_DESCRIPTOR_REQUEST {
+        let mut buf = DescriptorRequest {
+            req: USB_DESCRIPTOR_REQUEST {
                 ConnectionIndex: port_number,
                 SetupPacket: USB_DESCRIPTOR_REQUEST_0 {
                     bmRequest: 0x80,
                     bRequest: 0x06,
                     wValue: ((descriptor_type as u16) << 8) | descriptor_index as u16,
                     wIndex: language_id,
-                    wLength: length as u16,
+                    wLength: LENGTH as u16,
                 },
                 Data: [0],
-            });
+            },
+            data: MaybeUninit::uninit(),
+        };
 
-            let mut bytes_returned: u32 = 0;
+        let mut bytes_returned: u32 = 0;
+
+        unsafe {
+            let ptr = &mut buf as *mut _;
             let r = DeviceIoControl(
                 raw_handle(&self.0),
                 IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
-                req as *const c_void,
-                layout.size() as u32,
-                req as *mut c_void,
-                layout.size() as u32,
+                ptr as *const c_void,
+                mem::size_of::<DescriptorRequest>() as u32,
+                ptr as *mut c_void,
+                mem::size_of::<DescriptorRequest>() as u32,
                 &mut bytes_returned,
                 null_mut(),
             );
 
-            let res = if r == TRUE {
-                let start = addr_of!((*req).Data[0]);
-                let end = (req as *mut u8).offset(bytes_returned as isize);
-                let len = end.offset_from(start) as usize;
-                let vec = slice::from_raw_parts(start, len).to_owned();
-                Ok(vec)
-            } else {
+            if r != TRUE {
                 let err = GetLastError();
                 debug!("IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION failed: type={descriptor_type} index={descriptor_index} error={err:?}");
-                Err(match err {
+                return Err(match err {
                     ERROR_GEN_FAILURE => Error::new_os(
                         ErrorKind::Other,
                         "descriptor request failed: device might be suspended.",
                         err,
                     ),
                     _ => Error::new_os(ErrorKind::Other, "descriptor request failed", err),
-                })
-            };
+                });
+            }
 
-            alloc::dealloc(req as *mut _, layout);
-
-            res
+            let start = addr_of!(buf.req.Data[0]);
+            let len = bytes_returned as usize - offset_of!(DescriptorRequest, req.Data);
+            let vec = slice::from_raw_parts(start, len).to_owned();
+            Ok(vec)
         }
     }
 }

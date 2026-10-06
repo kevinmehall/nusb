@@ -7,7 +7,7 @@ use windows_sys::Win32::{
     Foundation::{
         GetLastError, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
         ERROR_NO_SUCH_DEVICE, ERROR_OPERATION_ABORTED, ERROR_REQUEST_ABORTED, ERROR_SEM_TIMEOUT,
-        ERROR_SUCCESS, ERROR_TIMEOUT,
+        ERROR_SUCCESS, ERROR_TIMEOUT, FALSE,
     },
     System::IO::{GetOverlappedResult, OVERLAPPED},
 };
@@ -68,19 +68,24 @@ impl TransferData {
         let mut actual_len: u32 = 0;
 
         let status = self.error_from_submit.and_then(|()| {
-            unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
+            let r =
+                unsafe { GetOverlappedResult(intf.handle, &self.overlapped, &mut actual_len, 0) };
 
-            match unsafe { GetLastError() } {
-                ERROR_SUCCESS => Ok(()),
-                ERROR_GEN_FAILURE => Err(TransferError::Stall),
-                ERROR_REQUEST_ABORTED
-                | ERROR_TIMEOUT
-                | ERROR_SEM_TIMEOUT
-                | ERROR_OPERATION_ABORTED => Err(TransferError::Cancelled),
-                ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
-                    Err(TransferError::Disconnected)
+            if r == FALSE {
+                match unsafe { GetLastError() } {
+                    ERROR_SUCCESS => Ok(()),
+                    ERROR_GEN_FAILURE => Err(TransferError::Stall),
+                    ERROR_REQUEST_ABORTED
+                    | ERROR_TIMEOUT
+                    | ERROR_SEM_TIMEOUT
+                    | ERROR_OPERATION_ABORTED => Err(TransferError::Cancelled),
+                    ERROR_FILE_NOT_FOUND | ERROR_DEVICE_NOT_CONNECTED | ERROR_NO_SUCH_DEVICE => {
+                        Err(TransferError::Disconnected)
+                    }
+                    e => Err(TransferError::Unknown(e)),
                 }
-                e => Err(TransferError::Unknown(e)),
+            } else {
+                Ok(())
             }
         });
 

@@ -303,17 +303,18 @@ pub(crate) fn get_usbccgp_winusb_device_path(child: DevInst) -> Result<WCString,
         ));
     }
 
-    let reg_key = child.registry_key().unwrap();
+    let Some(reg_key) = child.registry_key() else {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "could not open registry key for interface",
+        ));
+    };
     let guid = match reg_key.query_value_guid("DeviceInterfaceGUIDs") {
         Ok(s) => s,
-        Err(e) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
+        Err(e1) => match reg_key.query_value_guid("DeviceInterfaceGUID") {
             Ok(s) => s,
-            Err(f) => {
-                if e.kind() == f.kind() {
-                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}");
-                } else {
-                    debug!("Failed to get DeviceInterfaceGUID or DeviceInterfaceGUIDs from registry: {e}, {f}");
-                }
+            Err(e2) => {
+                debug!("Failed to get DeviceInterfaceGUIDs ({e1}) or DeviceInterfaceGUID ({e2}) from registry");
                 return Err(Error::new(
                     ErrorKind::Unsupported,
                     "Could not find DeviceInterfaceGUIDs in registry. WinUSB driver may not be correctly installed for this interface."
