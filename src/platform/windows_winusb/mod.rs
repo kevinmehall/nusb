@@ -1,7 +1,7 @@
 mod enumeration;
 use std::num::NonZeroU32;
 
-pub use enumeration::{list_buses, list_devices};
+pub use enumeration::{list_buses, list_devices, StringDescriptorRef};
 
 mod device;
 pub(crate) use device::WindowsDevice as Device;

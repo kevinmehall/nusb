@@ -21,3 +21,18 @@ mod webusb;
 
 #[cfg(target_arch = "wasm32")]
 pub use webusb::*;
+
+/// String descriptors are always cached on these platforms
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Clone)]
+pub struct StringDescriptorRef(std::convert::Infallible);
+
+#[cfg(not(target_os = "windows"))]
+impl StringDescriptorRef {
+    pub fn fetch(
+        &self,
+    ) -> impl crate::MaybeFuture<Output = Result<Option<String>, crate::Error>> + Unpin {
+        #[expect(unreachable_code)]
+        crate::maybe_future::Ready(match self.0 {})
+    }
+}

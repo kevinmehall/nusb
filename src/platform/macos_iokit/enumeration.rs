@@ -15,6 +15,7 @@ use log::debug;
 
 use crate::{
     descriptors::DeviceDescriptor,
+    enumeration::StringDescriptor,
     maybe_future::{MaybeFuture, Ready},
     BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, Speed, UsbControllerType,
 };
@@ -136,11 +137,14 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
         protocol: get_integer_property(&device, "bDeviceProtocol")? as u8,
         speed: get_integer_property(&device, "Device Speed").and_then(map_speed),
         manufacturer_string: get_string_property(&device, "kUSBVendorString")
-            .or_else(|| get_string_property(&device, "USB Vendor Name")),
+            .or_else(|| get_string_property(&device, "USB Vendor Name"))
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
         product_string: get_string_property(&device, "kUSBProductString")
-            .or_else(|| get_string_property(&device, "USB Product Name")),
+            .or_else(|| get_string_property(&device, "USB Product Name"))
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
         serial_number: get_string_property(&device, "kUSBSerialNumberString")
-            .or_else(|| get_string_property(&device, "USB Serial Number")),
+            .or_else(|| get_string_property(&device, "USB Serial Number"))
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
         interfaces: get_children(&device).map_or(Vec::new(), |iter| {
             iter.flat_map(|child| {
                 Some(InterfaceInfo {
@@ -149,7 +153,8 @@ pub(crate) fn probe_device(device: IoService) -> Option<DeviceInfo> {
                     subclass: get_integer_property(&child, "bInterfaceSubClass")? as u8,
                     protocol: get_integer_property(&child, "bInterfaceProtocol")? as u8,
                     interface_string: get_string_property(&child, "kUSBString")
-                        .or_else(|| get_string_property(&child, "USB Interface Name")),
+                        .or_else(|| get_string_property(&child, "USB Interface Name"))
+                        .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
                 })
             })
             .collect()

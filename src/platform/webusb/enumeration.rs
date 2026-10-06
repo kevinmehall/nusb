@@ -1,7 +1,10 @@
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
 
-use crate::{enumeration::DeviceSelector, DeviceInfo, Error, InterfaceInfo, MaybeFuture};
+use crate::{
+    enumeration::{DeviceSelector, StringDescriptor},
+    DeviceInfo, Error, InterfaceInfo, MaybeFuture,
+};
 
 use super::{js_value_to_error, WebFuture};
 
@@ -29,9 +32,15 @@ pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
         class: device.device_class(),
         subclass: device.device_subclass(),
         protocol: device.device_protocol(),
-        manufacturer_string: device.manufacturer_name(),
-        product_string: device.product_name(),
-        serial_number: device.serial_number(),
+        manufacturer_string: device
+            .manufacturer_name()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
+        product_string: device
+            .product_name()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
+        serial_number: device
+            .serial_number()
+            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
         interfaces: if let Some(config) = device.configuration() {
             config
                 .interfaces()
@@ -43,7 +52,9 @@ pub(crate) fn device_to_info(device: UsbDevice) -> DeviceInfo {
                         class: alt.interface_class(),
                         subclass: alt.interface_subclass(),
                         protocol: alt.interface_protocol(),
-                        interface_string: alt.interface_name(),
+                        interface_string: alt
+                            .interface_name()
+                            .map_or(StringDescriptor::NotPresent, StringDescriptor::Cached),
                     })
                 })
                 .collect()

@@ -1,4 +1,8 @@
-use std::ffi::{OsStr, OsString};
+use std::{
+    ffi::{OsStr, OsString},
+    future::IntoFuture,
+    num::NonZeroU8,
+};
 
 use log::debug;
 use windows_sys::Win32::Devices::{
@@ -15,6 +19,7 @@ use crate::{
         decode_string_descriptor, language_id::US_ENGLISH, ConfigurationDescriptor,
         DESCRIPTOR_TYPE_CONFIGURATION, DESCRIPTOR_TYPE_STRING,
     },
+    enumeration::StringDescriptor,
     maybe_future::{blocking::Blocking, MaybeFuture},
     BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, UsbControllerType,
 };
@@ -66,40 +71,56 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
     let hub_port = HubPort::by_child_devinst(devinst).ok()?;
     let info = hub_port.get_info().ok()?;
 
-    let product_string = devinst
-        .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
-        .and_then(|s| s.into_string().ok());
-    // DEVPKEY_Device_Manufacturer exists but is often wrong and appears not to be read from the string descriptor but the .inf file
+    let product_string = if let Some(index) = NonZeroU8::new(info.device_desc.iProduct) {
+        if let Some(cached) = devinst
+            .get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)
+            .and_then(|s| s.into_string().ok())
+        {
+            StringDescriptor::Cached(cached)
+        } else {
+            StringDescriptor::Platform(StringDescriptorRef { devinst, index })
+        }
+    } else {
+        StringDescriptor::NotPresent
+    };
 
-    let serial_number = if info.device_desc.iSerialNumber != 0 {
+    // DEVPKEY_Device_Manufacturer exists but is often wrong and appears not to be read from the string descriptor but the .inf file
+    let manufacturer_string = if let Some(index) = NonZeroU8::new(info.device_desc.iManufacturer) {
+        StringDescriptor::Platform(StringDescriptorRef { devinst, index })
+    } else {
+        StringDescriptor::NotPresent
+    };
+
+    let serial_number = if let Some(index) = NonZeroU8::new(info.device_desc.iSerialNumber) {
         // Experimentally confirmed, the string descriptor is cached and this does
         // not perform IO. However, the language ID list is not cached, so we
         // have to assume 0x0409 (which will be right 99% of the time).
-        hub_port
-            .get_descriptor(
-                DESCRIPTOR_TYPE_STRING,
-                info.device_desc.iSerialNumber,
-                US_ENGLISH,
-            )
+        if let Some(desc) = hub_port
+            .get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)
             .ok()
             .and_then(|data| decode_string_descriptor(&data).ok())
+        {
+            StringDescriptor::Cached(desc)
+        } else {
+            StringDescriptor::Platform(StringDescriptorRef { devinst, index })
+        }
     } else {
-        None
+        StringDescriptor::NotPresent
     };
 
     let driver = get_driver_name(devinst);
 
     let mut interfaces =
-        list_interfaces_from_desc(&hub_port, info.active_config).unwrap_or_default();
+        list_interfaces_from_desc(devinst, &hub_port, info.active_config).unwrap_or_default();
 
     if driver.eq_ignore_ascii_case("usbccgp") {
         // Populate interface descriptor strings when available from child device nodes.
         devinst
             .children()
             .flat_map(|intf| {
+                let s = intf.get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)?;
+                let interface_string = s.into_string().ok()?;
                 let interface_number = get_interface_number(intf)?;
-                let interface_string =
-                    intf.get_property::<OsString>(DEVPKEY_Device_BusReportedDeviceDesc)?;
                 Some((interface_number, interface_string))
             })
             .for_each(|(intf_num, interface_string)| {
@@ -107,7 +128,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
                     .iter_mut()
                     .find(|i| i.interface_number == intf_num)
                 {
-                    interface_info.interface_string = interface_string.into_string().ok();
+                    interface_info.interface_string = StringDescriptor::Cached(interface_string);
                 }
             });
     }
@@ -139,7 +160,7 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         subclass: info.device_desc.bDeviceSubClass,
         protocol: info.device_desc.bDeviceProtocol,
         speed: info.speed,
-        manufacturer_string: None,
+        manufacturer_string,
         product_string,
         serial_number,
         interfaces,
@@ -190,7 +211,11 @@ pub fn probe_bus(devinst: DevInst) -> Option<BusInfo> {
     })
 }
 
-fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Vec<InterfaceInfo>> {
+fn list_interfaces_from_desc(
+    devinst: DevInst,
+    hub_port: &HubPort,
+    active_config: u8,
+) -> Option<Vec<InterfaceInfo>> {
     let buf = hub_port
         .get_descriptor(
             DESCRIPTOR_TYPE_CONFIGURATION,
@@ -209,12 +234,18 @@ fn list_interfaces_from_desc(hub_port: &HubPort, active_config: u8) -> Option<Ve
             .map(|i| {
                 let i_desc = i.first_alt_setting();
 
+                let interface_string = if let Some(index) = i_desc.string_index() {
+                    StringDescriptor::Platform(StringDescriptorRef { devinst, index })
+                } else {
+                    StringDescriptor::NotPresent
+                };
+
                 InterfaceInfo {
                     interface_number: i.interface_number(),
                     class: i_desc.class(),
                     subclass: i_desc.subclass(),
                     protocol: i_desc.protocol(),
-                    interface_string: None,
+                    interface_string,
                 }
             })
             .collect(),
@@ -321,6 +352,28 @@ fn parse_hardware_id(s: &OsStr) -> Option<u8> {
     let s = s.to_str()?;
     let s = s.rsplit_once("&MI_")?.1;
     u8::from_str_radix(s.get(0..2)?, 16).ok()
+}
+
+#[derive(Clone)]
+pub struct StringDescriptorRef {
+    devinst: DevInst,
+    index: NonZeroU8,
+}
+impl StringDescriptorRef {
+    pub fn fetch(
+        &self,
+    ) -> impl MaybeFuture<Output = Result<Option<String>, Error>> + IntoFuture<IntoFuture: Unpin>
+    {
+        let dev = self.devinst;
+        let index = self.index;
+        Blocking::new(move || {
+            let port = HubPort::by_child_devinst(dev)?;
+            let desc = port.get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)?;
+            decode_string_descriptor(&desc)
+                .map(Some)
+                .map_err(|()| Error::new(ErrorKind::Other, "invalid string descriptor"))
+        })
+    }
 }
 
 #[test]
