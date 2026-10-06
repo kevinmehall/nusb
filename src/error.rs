@@ -26,6 +26,7 @@ impl Error {
     }
 
     #[track_caller]
+    #[allow(unused)]
     pub(crate) fn log_debug(self) -> Self {
         log::debug!("{}", self);
         self

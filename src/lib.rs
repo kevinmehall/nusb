@@ -200,6 +200,22 @@
 //! [WebUSB]: https://wicg.github.io/webusb/
 //! [web_sys_unstable]: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
 //!
+//! ### Android
+//!
+//! `nusb` uses the Android `UsbManager` API via JNI for listing and opening
+//! devices. The Linux usbfs backend is then used once a device is opened.
+//!
+//! The Android application must have the `android.hardware.usb.host` feature.
+//! [Opening a device][DeviceInfo::open] requires user permission and may
+//! prompt the user if necessary.
+//!
+//! Please make sure the [ndk-context] is configured correctly, unless you have a
+//! native activity application based on [android-activity] or a similar glue crate.
+//! See <https://cjycode.com/flutter_rust_bridge/guides/how-to/ndk-init>.
+//!
+//! [android-activity]: https://docs.rs/android-activity
+//! [ndk-context]: https://docs.rs/ndk-context
+//!
 //! ## Async support
 //!
 //! Many methods in `nusb` return a [`MaybeFuture`] type, which can either be
@@ -242,7 +258,8 @@ pub mod transfer;
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    target_os = "android",
 ))]
 pub mod hotplug;
 
@@ -271,7 +288,8 @@ pub use error::{ActiveConfigurationError, Error, ErrorKind, GetDescriptorError};
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    target_os = "android"
 ))]
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
@@ -394,7 +412,8 @@ pub fn list_buses() -> impl MaybeFuture<Output = Result<impl Iterator<Item = Bus
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    target_os = "android",
 ))]
 pub fn watch_devices() -> Result<hotplug::HotplugWatch, Error> {
     Ok(hotplug::HotplugWatch(platform::HotplugWatch::new()?))
