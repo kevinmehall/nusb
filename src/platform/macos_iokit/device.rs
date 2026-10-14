@@ -289,12 +289,13 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::In, t, req)).map(move |mut t| {
-            drop(self); // ensure device stays alive
-            let c = unsafe { t.take_completion(Direction::In) };
-            c.status?;
-            Ok(c.buffer.into_vec())
-        })
+        TransferFuture::new(self, t, |dev, t| dev.submit_control(Direction::In, t, req)).map(
+            |mut t| {
+                let c = unsafe { t.take_completion(Direction::In) };
+                c.status?;
+                Ok(c.buffer.into_vec())
+            },
+        )
     }
 
     pub fn control_out(
@@ -319,11 +320,12 @@ impl MacDevice {
             noDataTimeout: timeout,
         };
 
-        TransferFuture::new(t, |t| self.submit_control(Direction::Out, t, req)).map(move |mut t| {
-            drop(self); // ensure device stays alive
-            let c = unsafe { t.take_completion(Direction::Out) };
-            c.status
-        })
+        TransferFuture::new(self, t, |dev, t| dev.submit_control(Direction::Out, t, req)).map(
+            |mut t| {
+                let c = unsafe { t.take_completion(Direction::Out) };
+                c.status
+            },
+        )
     }
 
     fn submit_control(
