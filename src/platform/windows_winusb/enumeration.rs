@@ -21,6 +21,7 @@ use crate::{
     },
     enumeration::StringDescriptor,
     maybe_future::{blocking::Blocking, MaybeFuture},
+    platform::windows_winusb::util::DEFAULT_TRANSFER_TIMEOUT,
     BusInfo, DeviceInfo, Error, ErrorKind, InterfaceInfo, UsbControllerType,
 };
 
@@ -96,7 +97,12 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         // not perform IO. However, the language ID list is not cached, so we
         // have to assume 0x0409 (which will be right 99% of the time).
         if let Some(desc) = hub_port
-            .get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)
+            .get_descriptor(
+                DESCRIPTOR_TYPE_STRING,
+                info.device_desc.iSerialNumber,
+                US_ENGLISH,
+                DEFAULT_TRANSFER_TIMEOUT,
+            )
             .ok()
             .and_then(|data| decode_string_descriptor(&data).ok())
         {
@@ -221,6 +227,7 @@ fn list_interfaces_from_desc(
             DESCRIPTOR_TYPE_CONFIGURATION,
             active_config.saturating_sub(1),
             0,
+            DEFAULT_TRANSFER_TIMEOUT,
         )
         .ok()?;
     let desc = ConfigurationDescriptor::new(&buf[..])?;
@@ -369,7 +376,12 @@ impl StringDescriptorRef {
         let index = self.index;
         Blocking::new(move || {
             let port = HubPort::by_child_devinst(dev)?;
-            let desc = port.get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)?;
+            let desc = port.get_descriptor(
+                DESCRIPTOR_TYPE_STRING,
+                index.get(),
+                US_ENGLISH,
+                DEFAULT_TRANSFER_TIMEOUT,
+            )?;
             decode_string_descriptor(&desc)
                 .map(Some)
                 .map_err(|()| Error::new(ErrorKind::Other, "invalid string descriptor"))
