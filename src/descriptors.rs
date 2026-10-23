@@ -736,7 +736,9 @@ pub(crate) fn decode_string_descriptor(data: &[u8]) -> Result<String, ()> {
 
 /// Make public when fuzzing
 #[cfg(fuzzing)]
-pub fn fuzz_parse_concatenated_config_descriptors(buf: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub fn fuzz_parse_concatenated_config_descriptors(
+    buf: &[u8],
+) -> impl Iterator<Item = ConfigurationDescriptor<'_>> {
     parse_concatenated_config_descriptors(buf)
 }
 
