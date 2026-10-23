@@ -262,9 +262,13 @@ impl<P> Drop for Pending<P> {
 pub(crate) unsafe fn notify_completion<P>(transfer: *mut P) {
     unsafe {
         let transfer = transfer as *mut TransferInner<P>;
-        let wake = (*transfer).notify.deref().as_ref().take_notify_state();
+        let notify = (*transfer).notify.clone();
         match (*transfer).state.swap(STATE_IDLE, Ordering::AcqRel) {
-            STATE_PENDING => wake.notify(),
+            STATE_PENDING => {
+                let wake = notify.deref().as_ref().take_notify_state();
+                drop(notify);
+                wake.notify();
+            }
             STATE_ABANDONED => {
                 drop(Box::from_raw(transfer));
             }
