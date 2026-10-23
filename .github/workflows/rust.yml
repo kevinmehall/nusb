@@ -79,6 +79,29 @@ jobs:
         cargo check ${{ matrix.build-std == 'yes' && '-Zbuild-std' || '' }} --target ${{ matrix.target }} --features smol
         cargo check ${{ matrix.build-std == 'yes' && '-Zbuild-std' || '' }} --target ${{ matrix.target }} --all-features
 
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_FUZZ_VERSION: 0.13.2
+      FUZZ_TIME: 15
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      uses: dtolnay/rust-toolchain@nightly
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-fuzz
+        key: cargo-fuzz-bin-${{ env.CARGO_FUZZ_VERSION }}
+    - run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> $GITHUB_PATH
+    - run: cargo install --root "${{ runner.tool_cache }}/cargo-fuzz" --version ${{ env.CARGO_FUZZ_VERSION }} cargo-fuzz --locked
+    - run: cp -rT fuzz/seed fuzz/corpus
+    - run: cargo fuzz run descriptors -- -max_total_time=${{ env.FUZZ_TIME }}
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: fuzzing-artifacts-${{ matrix.fuzz_target }}-${{ github.sha }}
+        path: fuzz/artifacts
+
   rustdoc:
     runs-on: ubuntu-latest
     steps:
