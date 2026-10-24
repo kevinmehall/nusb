@@ -1,4 +1,4 @@
-use std::{fmt::Display, io, num::NonZeroU32};
+use std::{borrow::Cow, fmt::Display, io, num::NonZeroU32};
 
 use crate::{platform::format_os_error_code, transfer::TransferError};
 
@@ -7,15 +7,15 @@ use crate::{platform::format_os_error_code, transfer::TransferError};
 pub struct Error {
     pub(crate) kind: ErrorKind,
     pub(crate) code: Option<NonZeroU32>,
-    pub(crate) message: &'static str,
+    pub(crate) message: Cow<'static, str>,
 }
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind, message: &'static str) -> Self {
+    pub(crate) fn new(kind: ErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             kind,
             code: None,
-            message,
+            message: message.into(),
         }
     }
 
