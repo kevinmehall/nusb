@@ -64,6 +64,12 @@ impl<'a> Descriptor<'a> {
     pub fn descriptor_type(&self) -> u8 {
         self.0[1]
     }
+
+    /// Get the bytes of this descriptor.
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
 }
 
 impl<'a> Deref for Descriptor<'a> {
