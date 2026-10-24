@@ -711,6 +711,20 @@ impl<EpType: EndpointType, Dir: EndpointDirection> Endpoint<EpType, Dir> {
         self.backend.pending()
     }
 
+    /// Prepare reusable request descriptors and queue storage for at least `count`
+    /// simultaneously pending transfers.
+    ///
+    /// Call this before repeated submissions to move descriptor allocation out of
+    /// the transfer path. Transfer buffers are allocated separately. The count
+    /// does not limit submissions: exceeding it may allocate more descriptors,
+    /// which are discarded after completion if the reserved cache is full.
+    /// Smaller subsequent reservations do not shrink the cache or affect pending
+    /// transfers. On WebUSB, only the Rust queue is reserved; browser requests
+    /// still allocate as required by the browser.
+    pub fn reserve_transfers(&mut self, count: usize) {
+        self.backend.reserve_transfers(count)
+    }
+
     /// Request cancellation of all pending transfers.
     ///
     /// The transfers are cancelled asynchronously. Once cancelled, they will be
