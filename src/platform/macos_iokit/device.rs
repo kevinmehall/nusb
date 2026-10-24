@@ -272,7 +272,7 @@ impl MacDevice {
         data: ControlIn,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
-        let timeout = timeout.as_millis().try_into().expect("timeout too long");
+        let timeout = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
 
         let mut t = TransferData::new();
         t.put_buffer(Buffer::new(data.length as usize), Direction::In);
@@ -303,7 +303,7 @@ impl MacDevice {
         data: ControlOut,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
-        let timeout = timeout.as_millis().try_into().expect("timeout too long");
+        let timeout = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
 
         let mut t = TransferData::new();
         t.put_buffer(Buffer::from(data.data), Direction::Out);

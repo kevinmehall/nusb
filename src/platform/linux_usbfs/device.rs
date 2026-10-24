@@ -507,8 +507,11 @@ impl LinuxDevice {
         timeout: Duration,
     ) -> Pending<TransferData> {
         let urb = transfer.urb_ptr();
+
+        // Clamp timeout to prevent overflow panic.
+        // Arbitrary value larger than any desirable timeout since there is no `saturating_add` or `Instant::MAX`.
         let now = Instant::now();
-        let deadline = now + timeout;
+        let deadline = now + timeout.min(Duration::from_secs(24 * 60 * 60));
         transfer.deadline = Some(deadline);
 
         // Hold the lock across `submit`, so that it can't complete before we
