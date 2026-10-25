@@ -134,7 +134,7 @@ impl<'a> DescriptorIter<'a> {
             let mut end = self.0[0] as usize;
 
             while self.0.len() >= end + 2
-                && self.0[end] > 2
+                && self.0[end] >= 2
                 && self.0[end + 1] != descriptor_type
                 && self.0.len() >= end + self.0[end] as usize
             {
@@ -1129,4 +1129,373 @@ fn test_dell_webcam() {
     assert!(endpoints.next().is_none());
     assert!(alts.next().is_none());
     assert!(interfaces.next().is_none());
+}
+
+#[cfg(test)]
+mod two_byte_grouping {
+    use super::{
+        ConfigurationDescriptor, DescriptorIter, EndpointDescriptor, InterfaceDescriptor,
+        TransferType,
+    };
+    use crate::transfer::Direction;
+
+    const U2: &[u8] = &[2, 48];
+    const V2: &[u8] = &[2, 49];
+    const U3: &[u8] = &[3, 48, 170];
+    const I0: &[u8] = &[9, 4, 0, 0, 0, 255, 0, 0, 0];
+    const I0A: &[u8] = &[9, 4, 0, 1, 0, 255, 0, 0, 0];
+    const I1: &[u8] = &[9, 4, 1, 0, 0, 255, 0, 0, 0];
+    const IEP: &[u8] = &[9, 4, 0, 0, 1, 255, 0, 0, 0];
+    const IEPS: &[u8] = &[9, 4, 0, 0, 2, 255, 0, 0, 0];
+    const I1EP: &[u8] = &[9, 4, 1, 0, 1, 255, 0, 0, 0];
+    const E1: &[u8] = &[7, 5, 129, 2, 64, 0, 1];
+    const E2: &[u8] = &[7, 5, 2, 3, 8, 0, 10];
+    const E3: &[u8] = &[7, 5, 131, 2, 32, 0, 4];
+    const M0: &[u8] = &[0, 48];
+    const M1: &[u8] = &[1, 48];
+    const MT: &[u8] = &[255, 48, 170];
+    const MH: &[u8] = &[2];
+
+    struct ExpectedInterface<'a> {
+        parts: &'a [&'a [u8]],
+        fields: (u8, u8, u8),
+        endpoints: Option<&'a [ExpectedEndpoint<'a>]>,
+    }
+    struct ExpectedEndpoint<'a> {
+        parts: &'a [&'a [u8]],
+        fields: (u8, Direction, TransferType, usize, u8, u8),
+    }
+
+    const ZERO: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[I0],
+        fields: (0, 0, 0),
+        endpoints: None,
+    };
+    const ONE: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[I1],
+        fields: (1, 0, 0),
+        endpoints: None,
+    };
+    const ZERO_THREE: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[I0, U3],
+        ..ZERO
+    };
+    const ONE_THREE: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[I1, U3],
+        ..ONE
+    };
+    const ALT_TWO: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[I0A, U2],
+        fields: (0, 1, 0),
+        endpoints: None,
+    };
+    const BULK1: ExpectedEndpoint<'_> = ExpectedEndpoint {
+        parts: &[E1],
+        fields: (129, Direction::In, TransferType::Bulk, 64, 1, 1),
+    };
+    const INTERRUPT2: ExpectedEndpoint<'_> = ExpectedEndpoint {
+        parts: &[E2],
+        fields: (2, Direction::Out, TransferType::Interrupt, 8, 10, 1),
+    };
+    const BULK3: ExpectedEndpoint<'_> = ExpectedEndpoint {
+        parts: &[E3],
+        fields: (131, Direction::In, TransferType::Bulk, 32, 4, 1),
+    };
+    const MALFORMED: ExpectedInterface<'_> = ExpectedInterface {
+        parts: &[IEP, E1, U3],
+        fields: (0, 0, 1),
+        endpoints: Some(&[ExpectedEndpoint {
+            parts: &[E1, U3],
+            ..BULK1
+        }]),
+    };
+
+    fn configuration_bytes(items: &[&[u8]], num_interfaces: u8, tail: &[u8]) -> Vec<u8> {
+        let mut body = items.concat();
+        body.extend_from_slice(tail);
+        let total = u16::try_from(9usize.checked_add(body.len()).unwrap()).unwrap();
+        let [lo, hi] = total.to_le_bytes();
+        let mut bytes = vec![9, 2, lo, hi, num_interfaces, 1, 0, 128, 50];
+        bytes.extend_from_slice(&body);
+        bytes
+    }
+
+    fn assert_raw_sequence(
+        mut actual: DescriptorIter<'_>,
+        expected: &[&[u8]],
+        remainder: &[u8],
+        configuration: Option<(&ConfigurationDescriptor<'_>, u8)>,
+    ) {
+        if let Some((config, number)) = configuration {
+            assert_eq!(
+                config.as_bytes(),
+                configuration_bytes(expected, number, remainder)
+            );
+            assert_eq!(config.num_interfaces(), number);
+            assert_eq!(config.configuration_value(), 1);
+            assert_eq!(config.string_index(), None);
+            assert_eq!(config.attributes(), 128);
+            assert_eq!(config.max_power(), 50);
+        }
+        let mut initial = expected.concat();
+        initial.extend_from_slice(remainder);
+        assert_eq!(actual.as_bytes(), initial);
+        for item in expected {
+            let before = actual.as_bytes();
+            let descriptor = actual.next().unwrap();
+            assert_eq!(descriptor.as_bytes(), *item);
+            assert_eq!(descriptor.descriptor_type(), item[1]);
+            assert_eq!(descriptor.descriptor_len(), item[0] as usize);
+            assert_eq!(before.len() - actual.as_bytes().len(), item.len());
+            assert!(actual.as_bytes().len() < before.len());
+            assert_eq!(actual.as_bytes(), &before[item.len()..]);
+        }
+        assert!(actual.next().is_none());
+        assert_eq!(actual.as_bytes(), remainder);
+        assert!(actual.next().is_none());
+        assert_eq!(actual.as_bytes(), remainder);
+    }
+
+    fn assert_interface_sequence<'a>(
+        mut actual: impl Iterator<Item = InterfaceDescriptor<'a>>,
+        expected: &[ExpectedInterface<'_>],
+    ) {
+        for item in expected {
+            let descriptor = actual.next().unwrap();
+            if let Some(endpoints) = item.endpoints {
+                assert_endpoint_sequence(descriptor.endpoints(), endpoints);
+            }
+            assert_eq!(descriptor.as_bytes(), item.parts.concat());
+            assert_eq!(descriptor.interface_number(), item.fields.0);
+            assert_eq!(descriptor.alternate_setting(), item.fields.1);
+            assert_eq!(descriptor.num_endpoints(), item.fields.2);
+            assert_eq!(descriptor.class(), 255);
+            assert_eq!(descriptor.subclass(), 0);
+            assert_eq!(descriptor.protocol(), 0);
+            assert_eq!(descriptor.string_index(), None);
+            let raw = descriptor.descriptors();
+            assert_eq!(raw.as_bytes(), &item.parts.concat()[9..]);
+            assert_raw_sequence(raw, &item.parts[1..], &[], None);
+        }
+        assert!(actual.next().is_none());
+        assert!(actual.next().is_none());
+    }
+
+    fn assert_endpoint_sequence<'a>(
+        mut actual: impl Iterator<Item = EndpointDescriptor<'a>>,
+        expected: &[ExpectedEndpoint<'_>],
+    ) {
+        for item in expected {
+            let descriptor = actual.next().unwrap();
+            assert_eq!(descriptor.as_bytes(), item.parts.concat());
+            assert_eq!(descriptor.address(), item.fields.0);
+            assert_eq!(descriptor.direction(), item.fields.1);
+            assert_eq!(descriptor.transfer_type(), item.fields.2);
+            assert_eq!(descriptor.max_packet_size(), item.fields.3);
+            assert_eq!(descriptor.interval(), item.fields.4);
+            assert_eq!(descriptor.packets_per_microframe(), item.fields.5);
+            let raw = descriptor.descriptors();
+            assert_eq!(raw.as_bytes(), &item.parts.concat()[7..]);
+            assert_raw_sequence(raw, &item.parts[1..], &[], None);
+        }
+        assert!(actual.next().is_none());
+        assert!(actual.next().is_none());
+    }
+
+    #[test]
+    fn public_interface_two_byte() {
+        let items = &[I0, U2];
+        let bytes = configuration_bytes(items, 1, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 1)));
+        assert_interface_sequence(
+            config.interface_alt_settings(),
+            &[ExpectedInterface {
+                parts: items,
+                ..ZERO
+            }],
+        );
+    }
+
+    #[test]
+    fn public_interface_successive_and_boundary() {
+        let items = &[I0, U2, V2, I1, U3];
+        let bytes = configuration_bytes(items, 2, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 2)));
+        assert_interface_sequence(
+            config.interface_alt_settings(),
+            &[
+                ExpectedInterface {
+                    parts: &[I0, U2, V2],
+                    ..ZERO
+                },
+                ONE_THREE,
+            ],
+        );
+    }
+
+    #[test]
+    fn public_endpoint_two_byte_and_boundaries() {
+        let items = &[IEPS, E1, U2, E2, U3, I1EP, E3, V2];
+        let bytes = configuration_bytes(items, 2, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 2)));
+        assert_interface_sequence(
+            config.interface_alt_settings(),
+            &[
+                ExpectedInterface {
+                    parts: &[IEPS, E1, U2, E2, U3],
+                    fields: (0, 0, 2),
+                    endpoints: Some(&[
+                        ExpectedEndpoint {
+                            parts: &[E1, U2],
+                            ..BULK1
+                        },
+                        ExpectedEndpoint {
+                            parts: &[E2, U3],
+                            ..INTERRUPT2
+                        },
+                    ]),
+                },
+                ExpectedInterface {
+                    parts: &[I1EP, E3, V2],
+                    fields: (1, 0, 1),
+                    endpoints: Some(&[ExpectedEndpoint {
+                        parts: &[E3, V2],
+                        ..BULK3
+                    }]),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn public_endpoint_successive() {
+        let items = &[IEPS, E1, U2, V2, E2, U3];
+        let bytes = configuration_bytes(items, 1, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 1)));
+        assert_interface_sequence(
+            config.interface_alt_settings(),
+            &[ExpectedInterface {
+                parts: items,
+                fields: (0, 0, 2),
+                endpoints: Some(&[
+                    ExpectedEndpoint {
+                        parts: &[E1, U2, V2],
+                        ..BULK1
+                    },
+                    ExpectedEndpoint {
+                        parts: &[E2, U3],
+                        ..INTERRUPT2
+                    },
+                ]),
+            }],
+        );
+    }
+
+    #[test]
+    fn public_length_three_controls() {
+        let rows: &[(&[&[u8]], u8, &[ExpectedInterface<'_>])] = &[
+            (&[I0, U3], 1, &[ZERO_THREE]),
+            (&[I0, I1], 2, &[ZERO, ONE]),
+            (
+                &[IEPS, E1, U3, E2, I1],
+                2,
+                &[
+                    ExpectedInterface {
+                        parts: &[IEPS, E1, U3, E2],
+                        fields: (0, 0, 2),
+                        endpoints: Some(&[
+                            ExpectedEndpoint {
+                                parts: &[E1, U3],
+                                ..BULK1
+                            },
+                            INTERRUPT2,
+                        ]),
+                    },
+                    ExpectedInterface {
+                        endpoints: Some(&[]),
+                        ..ONE
+                    },
+                ],
+            ),
+        ];
+        for &(items, number, interfaces) in rows {
+            let bytes = configuration_bytes(items, number, &[]);
+            let config = ConfigurationDescriptor::new(&bytes).unwrap();
+            assert_raw_sequence(config.descriptors(), items, &[], Some((&config, number)));
+            assert_interface_sequence(config.interface_alt_settings(), interfaces);
+        }
+    }
+
+    #[test]
+    fn public_configuration_leading_extras() {
+        let items = &[U2, V2, I0, U3];
+        let bytes = configuration_bytes(items, 1, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 1)));
+        assert_interface_sequence(config.interface_alt_settings(), &[ZERO_THREE]);
+    }
+
+    #[test]
+    fn public_interfaces_sorted_alternates() {
+        let items = &[I1, U3, I0, U3, I0A, U2];
+        let bytes = configuration_bytes(items, 2, &[]);
+        let config = ConfigurationDescriptor::new(&bytes).unwrap();
+        assert_raw_sequence(config.descriptors(), items, &[], Some((&config, 2)));
+        let mut interfaces = config.interfaces();
+        let zero = interfaces.next().unwrap();
+        let one = interfaces.next().unwrap();
+        assert_eq!(zero.interface_number(), 0);
+        assert_eq!(one.interface_number(), 1);
+        assert!(interfaces.next().is_none());
+        assert!(interfaces.next().is_none());
+        let mut wire = config.interface_alt_settings();
+        for pair in [(1, 0), (0, 0), (0, 1)] {
+            let alt = wire.next().unwrap();
+            assert_eq!((alt.interface_number(), alt.alternate_setting()), pair);
+        }
+        assert!(wire.next().is_none());
+        assert!(wire.next().is_none());
+        for (interface, pairs) in [(&zero, &[(0, 0), (0, 1)][..]), (&one, &[(1, 0)][..])] {
+            let mut alts = interface.alt_settings();
+            for pair in pairs {
+                let alt = alts.next().unwrap();
+                assert_eq!((alt.interface_number(), alt.alternate_setting()), *pair);
+            }
+            assert!(alts.next().is_none());
+            assert!(alts.next().is_none());
+        }
+        assert_eq!(zero.first_alt_setting().as_bytes(), [I0, U3].concat());
+        assert_interface_sequence(zero.alt_settings(), &[ZERO_THREE, ALT_TWO]);
+        assert_interface_sequence(one.alt_settings(), &[ONE_THREE]);
+        assert_interface_sequence(
+            config.interface_alt_settings(),
+            &[ONE_THREE, ZERO_THREE, ALT_TWO],
+        );
+    }
+
+    #[test]
+    fn public_malformed_tails() {
+        let items = &[IEP, E1, U3];
+        for tail in [
+            [M0, I1].concat(),
+            [M1, I1].concat(),
+            [MT, I1].concat(),
+            MH.to_vec(),
+        ] {
+            let bytes = configuration_bytes(items, 2, &tail);
+            let config = ConfigurationDescriptor::new(&bytes).unwrap();
+            assert_raw_sequence(config.descriptors(), items, &tail, Some((&config, 2)));
+            assert_interface_sequence(config.interface_alt_settings(), &[MALFORMED]);
+            let mut interfaces = config.interfaces();
+            let zero = interfaces.next().unwrap();
+            assert_eq!(zero.interface_number(), 0);
+            assert!(interfaces.next().is_none());
+            assert!(interfaces.next().is_none());
+            assert_interface_sequence(zero.alt_settings(), &[MALFORMED]);
+        }
+    }
 }
