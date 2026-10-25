@@ -915,6 +915,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType,
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn assert_send_sync() {
     use crate::transfer::{Bulk, In, Interrupt, Out};
 
