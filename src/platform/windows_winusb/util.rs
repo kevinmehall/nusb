@@ -8,6 +8,7 @@ use std::{
     },
     ptr::{self, null},
     slice,
+    time::Duration,
 };
 
 use windows_sys::Win32::{
@@ -17,7 +18,7 @@ use windows_sys::Win32::{
     },
 };
 
-pub const DEFAULT_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+pub const DEFAULT_TRANSFER_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Wrapper around `CreateFile`
 pub fn create_file(path: &WCStr) -> Result<OwnedHandle, WIN32_ERROR> {

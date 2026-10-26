@@ -193,7 +193,6 @@ impl Device {
     ///
     /// ### Platform-specific details
     ///
-    /// * On Windows, the timeout argument is ignored, and an OS-defined timeout is used.
     /// * On Windows, this does not wake suspended devices. Reading their
     ///   descriptors will return an error.
     pub fn get_descriptor(

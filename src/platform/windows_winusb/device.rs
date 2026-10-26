@@ -161,10 +161,12 @@ impl WindowsDevice {
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         Blocking::new(move || {
             fn to_transfer_error(e: Error) -> TransferError {
-                match e.kind() {
-                    ErrorKind::Disconnected => TransferError::Disconnected,
-                    _ => TransferError::Unknown(e.os_error().unwrap_or(0)),
+                if e.kind() == ErrorKind::Disconnected {
+                    return TransferError::Disconnected;
                 }
+                e.os_error()
+                    .map(|code| transfer_error_from_win32(code).unwrap_err())
+                    .unwrap_or(TransferError::Unknown(0))
             }
 
             HubPort::by_child_devinst(self.devinst)

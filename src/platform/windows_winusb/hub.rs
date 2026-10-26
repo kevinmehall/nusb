@@ -4,6 +4,7 @@ use std::{
     os::windows::prelude::OwnedHandle,
     ptr::{addr_of, null_mut},
     slice,
+    time::Duration,
 };
 
 use log::debug;
@@ -49,16 +50,23 @@ struct Overlapped(OVERLAPPED);
 
 impl Overlapped {
     #[inline]
-    fn new() -> Self {
+    fn new() -> Result<Self, Error> {
         let event =
             unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
-        assert!(!event.is_null());
-        Self(OVERLAPPED {
+        if event.is_null() {
+            let err = unsafe { GetLastError() };
+            return Err(Error::new_os(
+                ErrorKind::Other,
+                "CreateEventW returned null",
+                err,
+            ));
+        }
+        Ok(Self(OVERLAPPED {
             Internal: 0,
             InternalHigh: 0,
             Anonymous: unsafe { std::mem::zeroed() },
             hEvent: event,
-        })
+        }))
     }
 }
 
@@ -204,7 +212,7 @@ impl HubHandle {
 
         unsafe {
             let ptr = &mut buf as *mut DescriptorRequest;
-            let mut overlapped = Overlapped::new();
+            let mut overlapped = Overlapped::new()?;
             let r = DeviceIoControl(
                 raw_handle(&self.0),
                 IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
@@ -219,42 +227,35 @@ impl HubHandle {
             assert_eq!(r, FALSE);
 
             if GetLastError() == ERROR_IO_PENDING {
+                // Same as OS default timeout, will try to reset the device and errors out after 5s
+                const MAX_WAIT_TIME: Duration = Duration::from_secs(5);
+                let wait_time = timeout.min(MAX_WAIT_TIME);
                 let wait_result =
-                    WaitForSingleObject(overlapped.0.hEvent, timeout.as_millis() as u32) as u32;
+                    WaitForSingleObject(overlapped.0.hEvent, wait_time.as_millis() as u32) as u32;
+                if wait_result == WAIT_TIMEOUT {
+                    let _ = CancelIo(raw_handle(&self.0));
+                } else {
+                    assert_eq!(wait_result, WAIT_OBJECT_0);
+                }
                 let mut bytes_returned: u32 = 0;
-                match wait_result {
-                    WAIT_OBJECT_0 => {
-                        if GetOverlappedResult(
-                            raw_handle(&self.0),
-                            &overlapped.0,
-                            &mut bytes_returned,
-                            TRUE,
-                        ) == TRUE
-                        {
-                            let start = addr_of!(buf.req.Data[0]);
-                            let len =
-                                bytes_returned as usize - offset_of!(DescriptorRequest, req.Data);
-                            let vec = slice::from_raw_parts(start, len).to_owned();
-                            return Ok(vec);
-                        }
-                    }
-                    WAIT_TIMEOUT => {
-                        assert_eq!(CancelIo(raw_handle(&self.0)), TRUE);
-                        // still need to wait for the event to be signaled
-                        assert_eq!(
-                            GetOverlappedResult(
-                                raw_handle(&self.0),
-                                &overlapped.0,
-                                &mut bytes_returned,
-                                TRUE,
-                            ),
-                            FALSE
-                        );
-                        assert_eq!(bytes_returned, 0);
-                    }
-                    _ => {
-                        panic!("Unexpected result from WaitForSingleObject {wait_result}");
-                    }
+                if GetOverlappedResult(
+                    raw_handle(&self.0),
+                    &overlapped.0,
+                    &mut bytes_returned,
+                    TRUE,
+                ) == TRUE
+                {
+                    let start = addr_of!(buf.req.Data[0]);
+                    let len = bytes_returned as usize - offset_of!(DescriptorRequest, req.Data);
+                    let vec = slice::from_raw_parts(start, len).to_owned();
+                    return Ok(vec);
+                } else {
+                    return Err(Error::new_os(
+                        ErrorKind::Other,
+                        "descriptor request timed out",
+                        GetLastError(),
+                    )
+                    .log_debug());
                 }
             }
 
