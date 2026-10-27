@@ -249,7 +249,7 @@ impl HubHandle {
                     let len = bytes_returned as usize - offset_of!(DescriptorRequest, req.Data);
                     let vec = slice::from_raw_parts(start, len).to_owned();
                     return Ok(vec);
-                } else {
+                } else if wait_result == WAIT_TIMEOUT {
                     return Err(Error::new_os(
                         ErrorKind::Other,
                         "descriptor request timed out",
