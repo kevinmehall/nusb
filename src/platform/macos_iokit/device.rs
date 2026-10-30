@@ -3,13 +3,17 @@ use std::{
     ffi::c_void,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, PoisonError,
     },
     task::{Context, Poll},
     time::Duration,
 };
 
-use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
+use io_kit_sys::ret::{
+    kIOReturnBadArgument, kIOReturnBusy, kIOReturnExclusiveAccess, kIOReturnNoDevice,
+    kIOReturnNotFound, kIOReturnNotOpen, kIOReturnNotPermitted, kIOReturnNotPrivileged,
+    kIOReturnSuccess, kIOReturnUnsupported, IOReturn,
+};
 use log::{debug, error};
 
 use crate::{
@@ -28,20 +32,112 @@ use crate::{
 use super::{
     enumeration::{device_descriptor_from_fields, get_integer_property, service_by_registry_id},
     events::{add_event_source, EventRegistration},
-    iokit::call_iokit_function,
+    iokit::{call_iokit_function, IoService},
     iokit_c::IOUSBDevRequestTO,
     iokit_usb::{IoKitDevice, IoKitInterface},
     TransferData,
 };
 
-pub(crate) struct MacDevice {
+struct DeviceConnection {
     _event_registration: EventRegistration,
-    pub(super) device: IoKitDevice,
+    device: IoKitDevice,
+    is_open_exclusive: Mutex<bool>,
+    captured: bool,
+}
+
+impl DeviceConnection {
+    fn new(service: &IoService, capture: bool) -> Result<Self, Error> {
+        if capture && unsafe { libc::geteuid() } != 0 {
+            service.authorize().map_err(|e| {
+                let kind = if e == kIOReturnNoDevice {
+                    ErrorKind::Disconnected
+                } else {
+                    ErrorKind::PermissionDenied
+                };
+                Error::new_os(
+                    kind,
+                    "failed to authorize USB device; capture requires root or the com.apple.vm.device-access entitlement",
+                    e,
+                )
+            })?;
+        }
+
+        // IOKit caches authorization when the user client is created.
+        let device = IoKitDevice::new(service)?;
+        let event_source = device
+            .create_async_event_source()
+            .map_err(|e| iokit_error(e, "failed to create async event source").log_error())?;
+
+        let mut connection = Self {
+            _event_registration: add_event_source(event_source),
+            device,
+            is_open_exclusive: Mutex::new(false),
+            captured: false,
+        };
+        if capture {
+            connection
+                .device
+                .reenumerate_capture()
+                .map_err(|e| iokit_error(e, "failed to capture USB device"))?;
+            connection.captured = true;
+            connection
+                .open()
+                .map_err(|e| iokit_error(e, "failed to reopen USB device after capture"))?;
+        } else if let Err(err) = connection.open() {
+            log::debug!("Could not open device for exclusive access: 0x{err:08x}");
+        }
+        Ok(connection)
+    }
+
+    fn open(&self) -> Result<(), IOReturn> {
+        let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
+        if !*is_open_exclusive {
+            self.device.open()?;
+            *is_open_exclusive = true;
+        }
+        Ok(())
+    }
+
+    fn release_capture(&mut self) -> Result<(), Error> {
+        self.device
+            .reenumerate_release()
+            .map_err(|e| iokit_error(e, "failed to release captured USB device"))?;
+        self.captured = false;
+        *self
+            .is_open_exclusive
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = false;
+        Ok(())
+    }
+}
+
+impl Drop for DeviceConnection {
+    fn drop(&mut self) {
+        if self.captured {
+            if let Err(err) = self.release_capture() {
+                log::error!("Failed to release captured device: {err}");
+            }
+        }
+        if *self
+            .is_open_exclusive
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            if let Err(err) = self.device.close() {
+                // Harmless: releasing the user client when `device` drops closes the session.
+                log::debug!("Failed to close device: {err:x}");
+            }
+        }
+    }
+}
+
+pub(crate) struct MacDevice {
+    connection: DeviceConnection,
+    operation_lock: Mutex<()>,
     device_descriptor: DeviceDescriptor,
     config_descriptors: Vec<Vec<u8>>,
     speed: Option<Speed>,
     active_config: AtomicU8,
-    is_open_exclusive: Mutex<bool>,
     claimed_interfaces: AtomicUsize,
 }
 
@@ -57,28 +153,43 @@ fn guess_active_config(configs: &[Vec<u8>], dev: &IoKitDevice) -> Option<u8> {
     configs[0].get(5).copied() // get bConfigurationValue from descriptor
 }
 
+#[allow(non_upper_case_globals)]
+fn iokit_error(code: IOReturn, message: &'static str) -> Error {
+    let kind = match code {
+        kIOReturnNoDevice | kIOReturnNotOpen => ErrorKind::Disconnected,
+        kIOReturnBusy | kIOReturnExclusiveAccess => ErrorKind::Busy,
+        kIOReturnNotPermitted | kIOReturnNotPrivileged => ErrorKind::PermissionDenied,
+        kIOReturnNotFound => ErrorKind::NotFound,
+        kIOReturnUnsupported => ErrorKind::Unsupported,
+        _ => ErrorKind::Other,
+    };
+
+    Error::new_os(kind, message, code)
+}
+
 impl MacDevice {
     pub(crate) fn from_device_info(
         d: &DeviceInfo,
     ) -> impl MaybeFuture<Output = Result<Arc<MacDevice>, Error>> {
-        let registry_id = d.registry_id;
-        let speed = d.speed;
+        Self::open(d.registry_id, d.speed, false)
+    }
+
+    /// Capture the entire device before returning a handle; requires root or device-access rights.
+    pub(crate) fn from_device_info_captured(
+        d: &DeviceInfo,
+    ) -> impl MaybeFuture<Output = Result<Arc<MacDevice>, Error>> {
+        Self::open(d.registry_id, d.speed, true)
+    }
+
+    fn open(
+        registry_id: u64,
+        speed: Option<Speed>,
+        capture: bool,
+    ) -> impl MaybeFuture<Output = Result<Arc<MacDevice>, Error>> {
         Blocking::new(move || {
             log::info!("Opening device from registry id {}", registry_id);
             let service = service_by_registry_id(registry_id)?;
-            let device = IoKitDevice::new(&service)?;
-            let event_source = device.create_async_event_source().map_err(|e| {
-                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
-                    .log_error()
-            })?;
-            let _event_registration = add_event_source(event_source);
-
-            let opened = device
-                .open()
-                .inspect_err(|err| {
-                    log::debug!("Could not open device for exclusive access: 0x{err:08x}");
-                })
-                .is_ok();
+            let connection = DeviceConnection::new(&service, capture)?;
 
             let device_descriptor = device_descriptor_from_fields(&service).ok_or_else(|| {
                 Error::new(
@@ -87,17 +198,15 @@ impl MacDevice {
                 )
             })?;
 
-            let num_configs = device.get_number_of_configurations().map_err(|e| {
-                Error::new_os(
-                    ErrorKind::Other,
-                    "failed to get number of configurations",
-                    e,
-                )
-            })?;
+            let num_configs = connection
+                .device
+                .get_number_of_configurations()
+                .map_err(|e| iokit_error(e, "failed to get number of configurations"))?;
 
             let config_descriptors: Vec<Vec<u8>> = (0..num_configs)
                 .flat_map(|i| {
-                    let d = device
+                    let d = connection
+                        .device
                         .get_configuration_descriptor(i)
                         .inspect_err(|e| {
                             log::warn!("failed to get configuration descriptor {i}: {e}");
@@ -109,24 +218,24 @@ impl MacDevice {
                 .map(|desc| desc.to_owned())
                 .collect();
 
-            let active_config =
-                if let Some(active_config) = guess_active_config(&config_descriptors, &device) {
-                    log::debug!("Active config from single descriptor is {}", active_config);
-                    active_config
-                } else {
-                    let res = device.get_configuration();
-                    log::debug!("Active config from request is {:?}", res);
-                    res.unwrap_or(0)
-                };
+            let active_config = if let Some(active_config) =
+                guess_active_config(&config_descriptors, &connection.device)
+            {
+                log::debug!("Active config from single descriptor is {}", active_config);
+                active_config
+            } else {
+                let res = connection.device.get_configuration();
+                log::debug!("Active config from request is {:?}", res);
+                res.unwrap_or(0)
+            };
 
             Ok(Arc::new(MacDevice {
-                _event_registration,
-                device,
+                connection,
+                operation_lock: Mutex::new(()),
                 device_descriptor,
                 config_descriptors,
                 speed,
                 active_config: AtomicU8::new(active_config),
-                is_open_exclusive: Mutex::new(opened),
                 claimed_interfaces: AtomicUsize::new(0),
             }))
         })
@@ -152,30 +261,38 @@ impl MacDevice {
             .map(|d| ConfigurationDescriptor::new_unchecked(&d[..]))
     }
 
-    fn require_open_exclusive(&self) -> Result<(), Error> {
-        let mut is_open_exclusive = self.is_open_exclusive.lock().unwrap();
-        if !*is_open_exclusive {
-            self.device.open().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(
-                    ErrorKind::Other,
-                    "could not open device for exclusive access",
-                    e,
-                ),
+    /// Release capture only when no other device, interface, or transfer retains this handle.
+    pub(crate) fn release_capture(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
+        Blocking::new(move || {
+            if !self.connection.captured {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "device was not opened with capture",
+                ));
+            }
+            // Interfaces and pending control transfers retain this same Arc.
+            let mut device = Arc::try_unwrap(self).map_err(|_| {
+                Error::new(
+                    ErrorKind::Busy,
+                    "device still has live handles or transfers",
+                )
             })?;
-            *is_open_exclusive = true;
-        }
+            device.connection.release_capture()
+        })
+    }
 
-        if self.claimed_interfaces.load(Ordering::Relaxed) != 0 {
+    fn require_open_exclusive(&self) -> Result<MutexGuard<'_, ()>, Error> {
+        let guard = self.operation_lock.lock().unwrap();
+        if self.claimed_interfaces.load(Ordering::Acquire) != 0 {
             return Err(Error::new(
                 ErrorKind::Busy,
                 "cannot perform this operation while interfaces are claimed",
             ));
         }
-
-        Ok(())
+        self.connection
+            .open()
+            .map_err(|e| iokit_error(e, "could not open device for exclusive access"))?;
+        Ok(guard)
     }
 
     pub(crate) fn set_configuration(
@@ -183,18 +300,11 @@ impl MacDevice {
         configuration: u8,
     ) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
-            self.require_open_exclusive()?;
-            self.device
+            let _guard = self.require_open_exclusive()?;
+            self.connection
+                .device
                 .set_configuration(configuration)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    io_kit_sys::ret::kIOReturnNotFound => {
-                        Error::new_os(ErrorKind::NotFound, "configuration not found", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to set configuration", e),
-                })?;
+                .map_err(|e| iokit_error(e, "failed to set configuration"))?;
             log::debug!("Set configuration {configuration}");
             self.active_config.store(configuration, Ordering::SeqCst);
             Ok(())
@@ -203,13 +313,11 @@ impl MacDevice {
 
     pub(crate) fn reset(self: Arc<Self>) -> impl MaybeFuture<Output = Result<(), Error>> {
         Blocking::new(move || {
-            self.require_open_exclusive()?;
-            self.device.reset().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(ErrorKind::Other, "failed to reset device", e),
-            })
+            let _guard = self.require_open_exclusive()?;
+            self.connection
+                .device
+                .reset()
+                .map_err(|e| iokit_error(e, "failed to reset device"))
         })
     }
 
@@ -218,12 +326,12 @@ impl MacDevice {
         interface_number: u8,
     ) -> impl MaybeFuture<Output = Result<Arc<MacInterface>, Error>> {
         Blocking::new(move || {
+            let _guard = self.operation_lock.lock().unwrap();
             let intf_service = self
+                .connection
                 .device
                 .create_interface_iterator()
-                .map_err(|e| {
-                    Error::new_os(ErrorKind::Other, "failed to create interface iterator", e)
-                })?
+                .map_err(|e| iokit_error(e, "failed to create interface iterator"))?
                 .find(|io_service| {
                     get_integer_property(io_service, "bInterfaceNumber")
                         == Some(interface_number as i64)
@@ -231,24 +339,15 @@ impl MacDevice {
                 .ok_or(Error::new(ErrorKind::NotFound, "interface not found"))?;
 
             let mut interface = IoKitInterface::new(intf_service)?;
-            let source = interface.create_async_event_source().map_err(|e| {
-                Error::new_os(ErrorKind::Other, "failed to create async event source", e)
-                    .log_error()
-            })?;
+            let source = interface
+                .create_async_event_source()
+                .map_err(|e| iokit_error(e, "failed to create async event source").log_error())?;
             let _event_registration = add_event_source(source);
 
-            interface.open().map_err(|e| match e {
-                io_kit_sys::ret::kIOReturnExclusiveAccess => Error::new_os(
-                    ErrorKind::Busy,
-                    "could not open interface for exclusive access",
-                    e,
-                ),
-                io_kit_sys::ret::kIOReturnNoDevice => {
-                    Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                }
-                _ => Error::new_os(ErrorKind::Other, "failed to open interface", e),
-            })?;
-            self.claimed_interfaces.fetch_add(1, Ordering::Acquire);
+            interface
+                .open()
+                .map_err(|e| iokit_error(e, "failed to open interface"))?;
+            self.claimed_interfaces.fetch_add(1, Ordering::Release);
 
             Ok(Arc::new(MacInterface {
                 device: self.clone(),
@@ -342,7 +441,7 @@ impl MacDevice {
 
         let res = unsafe {
             call_iokit_function!(
-                self.device.raw,
+                self.connection.device.raw,
                 DeviceRequestAsyncTO(&mut req, Some(transfer_callback), ptr as *mut c_void)
             )
         };
@@ -359,17 +458,6 @@ impl MacDevice {
         }
 
         t
-    }
-}
-
-impl Drop for MacDevice {
-    fn drop(&mut self) {
-        if *self.is_open_exclusive.get_mut().unwrap() {
-            match unsafe { call_iokit_function!(self.device.raw, USBDeviceClose()) } {
-                io_kit_sys::ret::kIOReturnSuccess => {}
-                err => log::debug!("Failed to close device: {err:x}"),
-            };
-        }
     }
 }
 
@@ -404,12 +492,7 @@ impl MacInterface {
 
             self.interface
                 .set_alternate_interface(alt_setting)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to set alternate interface", e),
-                })?;
+                .map_err(|e| iokit_error(e, "failed to set alternate interface"))?;
 
             debug!(
                 "Set interface {} alt setting to {alt_setting}",
@@ -605,7 +688,7 @@ impl MacEndpoint {
     pub(crate) fn submit_err(&mut self, buffer: Buffer, err: TransferError) {
         assert_eq!(err, TransferError::InvalidArgument);
         let mut transfer = self.make_transfer(buffer);
-        transfer.status = io_kit_sys::ret::kIOReturnBadArgument;
+        transfer.status = kIOReturnBadArgument;
         self.pending.push_back(transfer.simulate_complete());
     }
 
@@ -641,12 +724,7 @@ impl MacEndpoint {
                 .interface
                 .interface
                 .clear_pipe_stall_both_ends(inner.pipe_ref)
-                .map_err(|e| match e {
-                    io_kit_sys::ret::kIOReturnNoDevice => {
-                        Error::new_os(ErrorKind::Disconnected, "device disconnected", e)
-                    }
-                    _ => Error::new_os(ErrorKind::Other, "failed to clear halt on endpoint", e),
-                })
+                .map_err(|e| iokit_error(e, "failed to clear halt on endpoint"))
         })
     }
 }
@@ -686,5 +764,29 @@ extern "C" fn transfer_callback(refcon: *mut c_void, result: IOReturn, len: *mut
         (*transfer).actual_len = len;
         (*transfer).status = result;
         notify_completion::<TransferData>(transfer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(feature = "smol")]
+    use futures_lite::future::block_on;
+
+    #[test]
+    fn test_capture_open_missing_device() {
+        let failure = MacDevice::open(u64::MAX, None, true)
+            .wait()
+            .err()
+            .expect("a missing registry entry must not open a device");
+        assert_eq!(failure.kind(), ErrorKind::NotFound);
+
+        #[cfg(feature = "smol")]
+        {
+            let failure = block_on(async { MacDevice::open(u64::MAX, None, true).await })
+                .err()
+                .expect("asynchronous capture must report the missing registry entry");
+            assert_eq!(failure.kind(), ErrorKind::NotFound);
+        }
     }
 }

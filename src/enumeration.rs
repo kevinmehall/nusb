@@ -2,6 +2,8 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 
+#[cfg(target_os = "macos")]
+use crate::platform;
 #[cfg(target_os = "linux")]
 use crate::platform::SysfsPath;
 
@@ -385,6 +387,19 @@ impl DeviceInfo {
     /// Open the device
     pub fn open(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
         Device::open(self)
+    }
+
+    /// Open and capture the whole device, detaching its kernel drivers on macOS.
+    ///
+    /// Requires root or the `com.apple.vm.device-access` entitlement. Capture removes mounted
+    /// volumes without unmounting them and can displace other applications using the device.
+    /// Capture completes before the returned device can be used to claim interfaces or transfer data.
+    ///
+    /// Use [`Device::release_capture`] to return the device to macOS. Dropping the last handle
+    /// also releases capture synchronously and may block the dropping thread.
+    #[cfg(target_os = "macos")]
+    pub fn open_captured(&self) -> impl MaybeFuture<Output = Result<Device, Error>> {
+        platform::Device::from_device_info_captured(self).map_ok(Device::wrap)
     }
 }
 
