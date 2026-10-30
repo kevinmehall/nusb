@@ -62,6 +62,19 @@ impl Device {
         platform::Device::from_device_info(d).map_ok(Device::wrap)
     }
 
+    /// Release a whole-device macOS capture and return the device to the operating system.
+    ///
+    /// This consumes this handle, including on failure. Returns [`ErrorKind::Busy`] if device
+    /// clones, interfaces, or pending control transfers still hold the device, and
+    /// [`ErrorKind::Unsupported`] if it was not opened with [`DeviceInfo::open_captured`].
+    /// Drop those other handles before calling this method. A successful release re-enumerates
+    /// the device; enumerate again to reopen it. Await this operation to run release on a blocking
+    /// worker. Dropping the last captured handle instead also releases it, but does so synchronously.
+    #[cfg(target_os = "macos")]
+    pub fn release_capture(self) -> impl MaybeFuture<Output = Result<(), Error>> {
+        self.backend.release_capture()
+    }
+
     /// Wrap a usbdevfs file descriptor that is already open.
     ///
     /// This opens a device from a file descriptor for a `/dev/bus/usb/*` device
@@ -100,6 +113,8 @@ impl Device {
     /// ### Platform-specific details
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// the same effect as [`claim_interface`][`Device::claim_interface`].
+    ///
+    /// On macOS, use `DeviceInfo::open_captured` if whole-device capture is required.
     pub fn detach_and_claim_interface(
         &self,
         interface: u8,
