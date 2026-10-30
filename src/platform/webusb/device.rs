@@ -444,6 +444,12 @@ impl WebusbEndpoint {
         self.pending.len()
     }
 
+    /// Reserves Rust queue storage; browser request allocation remains external.
+    pub(crate) fn reserve_transfers(&mut self, count: usize) {
+        self.pending
+            .reserve(count.saturating_sub(self.pending.len()));
+    }
+
     /// Enqueue a transfer that fails immediately with the given error.
     ///
     /// Used by the public `Endpoint::submit` to surface validation errors
