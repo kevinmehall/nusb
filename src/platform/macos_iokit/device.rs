@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use io_kit_sys::ret::{kIOReturnSuccess, IOReturn};
+use io_kit_sys::ret::{kIOReturnNoDevice, kIOReturnSuccess, IOReturn};
 use log::{debug, error};
 
 use crate::{
@@ -648,6 +648,27 @@ impl MacEndpoint {
                     _ => Error::new_os(ErrorKind::Other, "failed to clear halt on endpoint", e),
                 })
         })
+    }
+
+    /// Clear host state on an idle endpoint; the caller clears the device's halt separately.
+    pub(crate) fn clear_host_halt(&mut self) -> Result<(), Error> {
+        debug!("Clear host-side halt, endpoint {:02x}", self.inner.address);
+        self.inner
+            .interface
+            .interface
+            .clear_pipe_stall(self.inner.pipe_ref)
+            .map_err(|e| {
+                let kind = if e == kIOReturnNoDevice {
+                    ErrorKind::Disconnected
+                } else {
+                    ErrorKind::Other
+                };
+                Error::new_os(
+                    kind,
+                    "failed to clear the host side of the endpoint halt",
+                    e,
+                )
+            })
     }
 }
 
