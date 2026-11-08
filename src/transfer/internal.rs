@@ -119,6 +119,57 @@ pub(crate) struct Idle<P> {
     ptr: NonNull<TransferInner<P>>,
 }
 
+/// Reusable native descriptors, bounded by the caller's reserved concurrency.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct IdlePool<P> {
+    transfers: Vec<Idle<P>>,
+    limit: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<P> IdlePool<P> {
+    /// Retains one completed descriptor unless a larger window is reserved.
+    pub(crate) fn new() -> Self {
+        Self {
+            transfers: Vec::with_capacity(1),
+            limit: 1,
+        }
+    }
+
+    /// Prepares a total descriptor window without replacing pending native owners.
+    pub(crate) fn reserve(
+        &mut self,
+        count: usize,
+        pending: usize,
+        mut create: impl FnMut() -> Idle<P>,
+    ) {
+        if count == 0 {
+            return;
+        }
+        self.limit = self.limit.max(count);
+        self.transfers.reserve(self.limit - self.transfers.len());
+        let additional = self
+            .limit
+            .saturating_sub(pending)
+            .saturating_sub(self.transfers.len());
+        for _ in 0..additional {
+            self.transfers.push(create());
+        }
+    }
+
+    /// Reuses an idle descriptor; exceeding the prepared window may allocate.
+    pub(crate) fn take_or_create(&mut self, create: impl FnOnce() -> Idle<P>) -> Idle<P> {
+        self.transfers.pop().unwrap_or_else(create)
+    }
+
+    /// Retains a terminal descriptor only while reserved cache capacity remains.
+    pub(crate) fn recycle(&mut self, transfer: Idle<P>) {
+        if self.transfers.len() < self.limit {
+            self.transfers.push(transfer);
+        }
+    }
+}
+
 impl<P> Idle<P> {
     /// Create a new transfer and get a handle.
     pub(crate) fn new(notify: Arc<dyn AsRef<Notify> + Send + Sync>, inner: P) -> Idle<P> {
@@ -327,5 +378,92 @@ where
         self.inner
             .notify
             .wait(|| take_completed_from_option(&mut self.transfer))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Counts {
+        created: AtomicUsize,
+        dropped: AtomicUsize,
+    }
+
+    struct Descriptor(Arc<Counts>);
+
+    impl Drop for Descriptor {
+        fn drop(&mut self) {
+            self.0.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn descriptor(notify: &Arc<Notify>, counts: &Arc<Counts>) -> Idle<Descriptor> {
+        counts.created.fetch_add(1, Ordering::Relaxed);
+        Idle::new(notify.clone(), Descriptor(counts.clone()))
+    }
+
+    #[test]
+    fn prepared_descriptors_survive_bursts_without_reallocation() {
+        let notify = Arc::new(Notify::new());
+        let counts = Arc::new(Counts::default());
+        let mut pool = IdlePool::new();
+        pool.reserve(8, 0, || descriptor(&notify, &counts));
+        for (concurrent, created, dropped) in [(8, 8, 0), (8, 8, 0), (10, 10, 2), (8, 10, 2)] {
+            let mut pending = VecDeque::with_capacity(concurrent);
+            for _ in 0..concurrent {
+                pending.push_back(
+                    pool.take_or_create(|| descriptor(&notify, &counts))
+                        .pre_submit(),
+                );
+            }
+            assert!(take_completed_from_queue(&mut pending).is_none());
+            assert_eq!(counts.created.load(Ordering::Relaxed), created);
+            for transfer in pending.iter().rev() {
+                // SAFETY: the scripted native completion owns this pending descriptor and ends
+                // all native access before publishing terminal completion.
+                unsafe { notify_completion(transfer.as_ptr()) };
+            }
+            while !pending.is_empty() {
+                pool.recycle(
+                    take_completed_from_queue(&mut pending).expect("terminal native descriptor"),
+                );
+            }
+            assert_eq!(counts.dropped.load(Ordering::Relaxed), dropped);
+        }
+        drop(pool);
+        assert_eq!(counts.dropped.load(Ordering::Relaxed), 10);
+    }
+
+    #[test]
+    fn reservation_counts_pending_owners_and_abandonment_waits_for_completion() {
+        let notify = Arc::new(Notify::new());
+        let counts = Arc::new(Counts::default());
+        let mut pool = IdlePool::new();
+        let first = pool
+            .take_or_create(|| descriptor(&notify, &counts))
+            .pre_submit();
+        let second = pool
+            .take_or_create(|| descriptor(&notify, &counts))
+            .pre_submit();
+        pool.reserve(8, 2, || descriptor(&notify, &counts));
+        assert_eq!(counts.created.load(Ordering::Relaxed), 8);
+        drop(pool);
+        assert_eq!(counts.dropped.load(Ordering::Relaxed), 6);
+        let first_pointer = first.as_ptr();
+        drop(first);
+        assert_eq!(counts.dropped.load(Ordering::Relaxed), 6);
+        // SAFETY: this callback is the final native access to the abandoned descriptor.
+        unsafe { notify_completion(first_pointer) };
+        assert_eq!(counts.dropped.load(Ordering::Relaxed), 7);
+        // SAFETY: the scripted native owner has completed its second transfer.
+        unsafe { notify_completion(second.as_ptr()) };
+        // SAFETY: notify_completion published terminal completion above.
+        let completed = unsafe { second.into_idle() };
+        drop(completed);
+        assert_eq!(counts.dropped.load(Ordering::Relaxed), 8);
     }
 }
