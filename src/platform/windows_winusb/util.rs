@@ -8,7 +8,6 @@ use std::{
     },
     ptr::{self, null},
     slice,
-    time::Duration,
 };
 
 use windows_sys::Win32::{
@@ -17,8 +16,6 @@ use windows_sys::Win32::{
         CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     },
 };
-
-pub const DEFAULT_TRANSFER_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Wrapper around `CreateFile`
 pub fn create_file(path: &WCStr) -> Result<OwnedHandle, WIN32_ERROR> {

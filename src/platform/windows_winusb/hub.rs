@@ -55,11 +55,7 @@ impl Overlapped {
             unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
         if event.is_null() {
             let err = unsafe { GetLastError() };
-            return Err(Error::new_os(
-                ErrorKind::Other,
-                "CreateEventW returned null",
-                err,
-            ));
+            return Err(Error::new_os(ErrorKind::Other, "CreateEventW failed", err));
         }
         Ok(Self(OVERLAPPED {
             Internal: 0,
@@ -227,15 +223,14 @@ impl HubHandle {
             assert_eq!(r, FALSE);
 
             if GetLastError() == ERROR_IO_PENDING {
-                // Same as OS default timeout, will try to reset the device and errors out after 5s
-                const MAX_WAIT_TIME: Duration = Duration::from_secs(5);
-                let wait_time = timeout.min(MAX_WAIT_TIME);
-                let wait_result =
-                    WaitForSingleObject(overlapped.0.hEvent, wait_time.as_millis() as u32) as u32;
-                if wait_result == WAIT_TIMEOUT {
+                // Clamp the timeout to avoid overflow. The ioctl itself times out after 5 seconds, so pick something arbitrarily higher.
+                let wait_time_ms = timeout.min(Duration::from_secs(10)).as_millis() as u32;
+                let wait_result = WaitForSingleObject(overlapped.0.hEvent, wait_time_ms) as u32;
+                if wait_result != WAIT_OBJECT_0 {
+                    if wait_result != WAIT_TIMEOUT {
+                        log::warn!("WaitForSingleObject failed: {}", GetLastError());
+                    }
                     let _ = CancelIo(raw_handle(&self.0));
-                } else {
-                    assert_eq!(wait_result, WAIT_OBJECT_0);
                 }
                 let mut bytes_returned: u32 = 0;
                 if GetOverlappedResult(

@@ -39,7 +39,6 @@ use crate::{
         DESCRIPTOR_TYPE_CONFIGURATION,
     },
     maybe_future::{blocking::Blocking, Ready},
-    platform::windows_winusb::util::DEFAULT_TRANSFER_TIMEOUT,
     transfer::{
         internal::{
             notify_completion, take_completed_from_queue, Idle, Notify, Pending, TransferFuture,
@@ -98,12 +97,7 @@ impl WindowsDevice {
             let config_descriptors = (0..num_configurations)
                 .flat_map(|i| {
                     let d = hub_port
-                        .get_descriptor(
-                            DESCRIPTOR_TYPE_CONFIGURATION,
-                            i,
-                            0,
-                            DEFAULT_TRANSFER_TIMEOUT,
-                        )
+                        .get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0, Duration::MAX)
                         .inspect_err(|e| error!("Failed to read config descriptor {}: {}", i, e))
                         .ok()?;
 
