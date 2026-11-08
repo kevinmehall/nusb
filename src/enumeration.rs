@@ -492,6 +492,9 @@ pub struct InterfaceInfo {
     pub(crate) subclass: u8,
     pub(crate) protocol: u8,
     pub(crate) interface_string: StringDescriptor,
+
+    #[cfg(target_os = "macos")]
+    pub(crate) exclusive_owner: Option<String>,
 }
 
 impl InterfaceInfo {
@@ -527,18 +530,33 @@ impl InterfaceInfo {
     pub fn get_interface_string(&self) -> impl MaybeFuture<Output = Result<Option<String>, Error>> {
         self.interface_string.fetch()
     }
+
+    /// *(macOS-only)* The process or driver holding this interface open for exclusive access, as
+    /// IOKit records it on the interface itself (`UsbExclusiveOwner`, e.g. `"pid 412, RPCServer"`
+    /// or `"IOUSBMassStorageInterfaceNub"`).
+    ///
+    /// The owner is recorded per interface: the device reports none while its interfaces are held.
+    /// This is a snapshot from enumeration; ownership can change afterward.
+    #[cfg(target_os = "macos")]
+    pub fn exclusive_owner(&self) -> Option<&str> {
+        self.exclusive_owner.as_deref()
+    }
 }
 
 // Not derived so that we can format some fields in hex
 impl std::fmt::Debug for InterfaceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InterfaceInfo")
-            .field("interface_number", &self.interface_number)
+        let mut s = f.debug_struct("InterfaceInfo");
+        s.field("interface_number", &self.interface_number)
             .field("class", &format_args!("0x{:02X}", self.class))
             .field("subclass", &format_args!("0x{:02X}", self.subclass))
             .field("protocol", &format_args!("0x{:02X}", self.protocol))
-            .field("interface_string", &self.interface_string)
-            .finish()
+            .field("interface_string", &self.interface_string);
+
+        #[cfg(target_os = "macos")]
+        s.field("exclusive_owner", &self.exclusive_owner);
+
+        s.finish()
     }
 }
 
