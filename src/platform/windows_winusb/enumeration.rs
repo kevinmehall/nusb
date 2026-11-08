@@ -2,6 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     future::IntoFuture,
     num::NonZeroU8,
+    time::Duration,
 };
 
 use log::debug;
@@ -29,6 +30,9 @@ use super::{
     hub::HubPort,
     util::WCString,
 };
+
+/// Timeout for requesting descriptors that are expected to be cached.
+pub const CACHED_DESCRIPTOR_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub fn list_devices() -> impl MaybeFuture<Output = Result<impl Iterator<Item = DeviceInfo>, Error>>
 {
@@ -96,7 +100,12 @@ pub fn probe_device(devinst: DevInst) -> Option<DeviceInfo> {
         // not perform IO. However, the language ID list is not cached, so we
         // have to assume 0x0409 (which will be right 99% of the time).
         if let Some(desc) = hub_port
-            .get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)
+            .get_descriptor(
+                DESCRIPTOR_TYPE_STRING,
+                info.device_desc.iSerialNumber,
+                US_ENGLISH,
+                CACHED_DESCRIPTOR_TIMEOUT,
+            )
             .ok()
             .and_then(|data| decode_string_descriptor(&data).ok())
         {
@@ -221,6 +230,7 @@ fn list_interfaces_from_desc(
             DESCRIPTOR_TYPE_CONFIGURATION,
             active_config.saturating_sub(1),
             0,
+            CACHED_DESCRIPTOR_TIMEOUT,
         )
         .ok()?;
     let desc = ConfigurationDescriptor::new(&buf[..])?;
@@ -369,7 +379,12 @@ impl StringDescriptorRef {
         let index = self.index;
         Blocking::new(move || {
             let port = HubPort::by_child_devinst(dev)?;
-            let desc = port.get_descriptor(DESCRIPTOR_TYPE_STRING, index.get(), US_ENGLISH)?;
+            let desc = port.get_descriptor(
+                DESCRIPTOR_TYPE_STRING,
+                index.get(),
+                US_ENGLISH,
+                Duration::MAX,
+            )?;
             decode_string_descriptor(&desc)
                 .map(Some)
                 .map_err(|()| Error::new(ErrorKind::Other, "invalid string descriptor"))

@@ -97,7 +97,7 @@ impl WindowsDevice {
             let config_descriptors = (0..num_configurations)
                 .flat_map(|i| {
                     let d = hub_port
-                        .get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0)
+                        .get_descriptor(DESCRIPTOR_TYPE_CONFIGURATION, i, 0, Duration::MAX)
                         .inspect_err(|e| error!("Failed to read config descriptor {}: {}", i, e))
                         .ok()?;
 
@@ -151,18 +151,21 @@ impl WindowsDevice {
         desc_type: u8,
         desc_index: u8,
         language_id: u16,
+        timeout: std::time::Duration,
     ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         Blocking::new(move || {
             fn to_transfer_error(e: Error) -> TransferError {
-                match e.kind() {
-                    ErrorKind::Disconnected => TransferError::Disconnected,
-                    _ => TransferError::Unknown(e.os_error().unwrap_or(0)),
+                if e.kind() == ErrorKind::Disconnected {
+                    return TransferError::Disconnected;
                 }
+                e.os_error()
+                    .map(|code| transfer_error_from_win32(code).unwrap_err())
+                    .unwrap_or(TransferError::Unknown(0))
             }
 
             HubPort::by_child_devinst(self.devinst)
                 .map_err(to_transfer_error)?
-                .get_descriptor(desc_type, desc_index, language_id)
+                .get_descriptor(desc_type, desc_index, language_id, timeout)
                 .map_err(to_transfer_error)
         })
     }
