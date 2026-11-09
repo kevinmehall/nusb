@@ -32,6 +32,9 @@ use super::{
     },
 };
 
+const CAPTURE_MASK: u32 = 1 << 30;
+const RELEASE_MASK: u32 = 1 << 29;
+
 /// Wrapper around an IOKit UsbDevice
 pub(crate) struct IoKitDevice {
     pub(crate) raw: *mut *mut iokit::UsbDevice,
@@ -121,6 +124,11 @@ impl IoKitDevice {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceOpen())) }
     }
 
+    /// Close exclusive device access after all interfaces and transfers have been released.
+    pub(crate) fn close(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceClose())) }
+    }
+
     pub(crate) fn set_configuration(&self, configuration: u8) -> Result<(), IOReturn> {
         unsafe {
             check_iokit_return(call_iokit_function!(
@@ -132,6 +140,27 @@ impl IoKitDevice {
 
     pub(crate) fn reset(&self) -> Result<(), IOReturn> {
         unsafe { check_iokit_return(call_iokit_function!(self.raw, USBDeviceReEnumerate(0))) }
+    }
+
+    /// Re-enumerate with `kUSBReEnumerateCaptureDeviceMask`: terminate every kernel driver on the
+    /// device and its interfaces so a claim can succeed. Needs root or an entitlement; re-open after.
+    pub(crate) fn reenumerate_capture(&self) -> Result<(), IOReturn> {
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                USBDeviceReEnumerate(CAPTURE_MASK)
+            ))
+        }
+    }
+
+    /// Release a device captured with `reenumerate_capture` back to the operating system.
+    pub(crate) fn reenumerate_release(&self) -> Result<(), IOReturn> {
+        unsafe {
+            check_iokit_return(call_iokit_function!(
+                self.raw,
+                USBDeviceReEnumerate(RELEASE_MASK)
+            ))
+        }
     }
 
     pub(crate) fn create_async_event_source(&self) -> Result<CFRunLoopSource, IOReturn> {

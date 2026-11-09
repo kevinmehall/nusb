@@ -4,7 +4,10 @@
 //! licensed under MIT OR Apache-2.0.
 
 use core_foundation_sys::uuid::CFUUIDBytes;
-use io_kit_sys::{ret::IOReturn, IOIteratorNext, IOObjectRelease};
+use io_kit_sys::{
+    kIOServiceInteractionAllowed, ret::IOReturn, IOIteratorNext, IOObjectRelease,
+    IOServiceAuthorize,
+};
 
 use super::iokit_c::{self, CFUUIDGetUUIDBytes, IOCFPlugInInterface};
 
@@ -37,6 +40,11 @@ impl IoService {
     }
     pub fn get(&self) -> u32 {
         self.0 .0
+    }
+
+    /// Ask IOKit to authorize this process to open the service.
+    pub(crate) fn authorize(&self) -> Result<(), IOReturn> {
+        unsafe { check_iokit_return(IOServiceAuthorize(self.get(), kIOServiceInteractionAllowed)) }
     }
 }
 
