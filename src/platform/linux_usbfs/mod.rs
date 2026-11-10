@@ -56,7 +56,7 @@ impl crate::error::Error {
         Self {
             kind,
             code: NonZeroU32::new(code.raw_os_error() as u32),
-            message,
+            message: message.into(),
         }
     }
 
@@ -64,7 +64,7 @@ impl crate::error::Error {
         Self {
             kind,
             code: err.raw_os_error().and_then(|i| NonZeroU32::new(i as u32)),
-            message,
+            message: message.into(),
         }
     }
 }
