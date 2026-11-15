@@ -23,11 +23,11 @@ mod webusb;
 pub use webusb::*;
 
 /// String descriptors are always cached on these platforms
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 #[derive(Debug, Clone)]
 pub struct StringDescriptorRef(std::convert::Infallible);
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 impl StringDescriptorRef {
     pub fn fetch(
         &self,
